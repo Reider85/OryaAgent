@@ -26,7 +26,7 @@ from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 
-from app.core.llm import settings as llm_settings
+from app.core import config as app_config
 from app.core.llm.registry import (
     ProviderSpec,
     load_models,
@@ -66,10 +66,10 @@ def _resolve_provider_name(provider: str | None) -> str:
     """Resolve provider: arg -> env -> user config -> alias hint -> default."""
     if provider:
         return provider
-    settings = llm_settings.get_settings()
-    if settings.llm_provider:
+    settings = app_config.get_settings()
+    if "llm_provider" in settings.model_fields_set:
         return settings.llm_provider
-    block = llm_settings.llm_block()
+    block = app_config.llm_block()
     if block.get("default_provider"):
         return str(block["default_provider"])
     return DEFAULT_PROVIDER
@@ -79,10 +79,12 @@ def _resolve_model_name(provider: str, model: str | None) -> str:
     """Resolve model: arg -> env -> user config -> provider default_model."""
     if model:
         return model
-    settings = llm_settings.get_settings()
-    if settings.llm_model:
+    settings = app_config.get_settings()
+    # Only an explicitly configured model (env / .env / config.yaml) wins;
+    # the Settings class default must not shadow the provider default_model.
+    if "llm_model" in settings.model_fields_set:
         return settings.llm_model
-    block = llm_settings.llm_block()
+    block = app_config.llm_block()
     if block.get("default_model"):
         return str(block["default_model"])
     providers = load_providers()
@@ -102,10 +104,10 @@ def _resolve_base_url(
     """base_url: arg -> ORYA_LLM_BASE_URL -> user config -> providers.yaml."""
     if base_url:
         return base_url
-    settings = llm_settings.get_settings()
+    settings = app_config.get_settings()
     if settings.llm_base_url:
         return settings.llm_base_url
-    entry = llm_settings.provider_block(spec.name, user_config)
+    entry = app_config.provider_block(spec.name, user_config)
     if entry.get("base_url"):
         return str(entry["base_url"])
     return spec.base_url
@@ -121,7 +123,7 @@ def _resolve_api_key(
     if api_key:
         return api_key
 
-    settings = llm_settings.get_settings()
+    settings = app_config.get_settings()
     if settings.llm_api_key is not None:
         return settings.llm_api_key.get_secret_value()
 
@@ -132,9 +134,9 @@ def _resolve_api_key(
             return value
         candidates.append(spec.env_var)
 
-    entry = llm_settings.provider_block(spec.name, user_config)
+    entry = app_config.provider_block(spec.name, user_config)
     configured = entry.get("api_key")
-    if isinstance(configured, str) and not llm_settings.is_unresolved(configured):
+    if isinstance(configured, str) and not app_config.is_unresolved(configured):
         return configured
 
     if spec.api_key_placeholder:
@@ -227,7 +229,7 @@ def get_llm(
         require_tools=require_tools,
     )
 
-    user_config = llm_settings.load_expanded_user_config()
+    user_config = app_config.load_expanded_user_config()
     key = _resolve_api_key(spec, api_key, user_config)
     url = _resolve_base_url(spec, base_url, user_config)
 
@@ -236,7 +238,7 @@ def get_llm(
 
     if spec.adapter in ("openai", "openai_compat"):
         extra = dict(spec.extra_headers)
-        entry = llm_settings.provider_block(spec.name, user_config)
+        entry = app_config.provider_block(spec.name, user_config)
         if isinstance(entry.get("extra_headers"), dict):
             extra.update(entry["extra_headers"])
         return builder(
@@ -256,11 +258,11 @@ def get_llm(
 
 def list_providers() -> list[dict[str, Any]]:
     """Serializable provider registry (for /llm/providers and UI pickers)."""
-    settings = llm_settings.get_settings()
-    user_config = llm_settings.load_expanded_user_config()
+    settings = app_config.get_settings()
+    user_config = app_config.load_expanded_user_config()
     result = []
     for name, spec in sorted(load_providers().items()):
-        entry = llm_settings.provider_block(name, user_config)
+        entry = app_config.provider_block(name, user_config)
         has_key = bool(api_key_available(spec, settings, entry))
         result.append(
             {
@@ -284,7 +286,7 @@ def api_key_available(spec: ProviderSpec, settings: Any, entry: dict) -> bool:
     if spec.env_var and os.environ.get(spec.env_var):
         return True
     configured = entry.get("api_key")
-    if isinstance(configured, str) and not llm_settings.is_unresolved(configured):
+    if isinstance(configured, str) and not app_config.is_unresolved(configured):
         return True
     if spec.api_key_placeholder:
         return True

@@ -21,8 +21,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
+from app.core.config import user_config_path
 from app.core.llm.registry import load_providers
-from app.core.llm.settings import user_config_path
 
 # Foreign-agent provider names -> OryaAgent provider keys.
 # Unknown names are kept as-is when they exist in providers.yaml.

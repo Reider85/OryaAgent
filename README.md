@@ -4,7 +4,7 @@ Senior Python coding agent with UI and long-term memory.
 
 ## Phase: MVP
 
-Tickets M-00 (bootstrap) and M-01 (LLM-provider-seam) are implemented.
+Tickets M-00 (bootstrap), M-01 (LLM-provider-seam) and M-02 (configuration) are implemented.
 
 ## Quick Start
 
@@ -56,11 +56,30 @@ Tickets M-00 (bootstrap) and M-01 (LLM-provider-seam) are implemented.
 
 ### Configuration
 
-Copy `.env.example` to `.env` and configure your LLM provider API keys:
+Settings are typed in `app/core/config.py` (pydantic-settings, M-02). Sources by priority:
 
-```bash
-cp .env.example .env
-# Edit .env with your API keys
+1. **Environment variables / `.env`** — copy `.env.example` to `.env`:
+   ```bash
+   cp .env.example .env
+   # Edit .env with your API keys
+   ```
+2. **`~/.orya/config.yaml`** — multi-provider config (used only for fields not set via env). API keys go through `${ENV_VAR}` substitution, never plaintext:
+   ```yaml
+   llm:
+     default_provider: anthropic
+     default_model: claude-sonnet-3.5
+     providers:
+       deepseek:
+         api_key: ${DEEPSEEK_API_KEY}
+         base_url: https://api.deepseek.com/v1
+         default_model: deepseek-chat
+   ```
+3. **Defaults** in `Settings` (provider `anthropic`, model `claude-sonnet-3.5`, permission policy `strict`, ...).
+
+```python
+from app.core.config import get_settings
+
+settings = get_settings()
 ```
 
 ## Project Structure
@@ -87,7 +106,7 @@ tests/                  # Test suites
 
 - ✅ **M-00** - Bootstrap project structure
 - ✅ **M-01** - LLM-provider-seam: `get_llm()`, 34 providers (YAML registries), importers, `/llm/*` endpoints
-- 📋 **M-02** - pydantic-settings configuration (next)
+- ✅ **M-02** - pydantic-settings configuration: `Settings`, `~/.orya/config.yaml` merge, env/.env priority
 - 📋 **M-03** - PostgreSQL schema
 - ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for full 28 tickets)
 
@@ -98,9 +117,9 @@ The agent is provider-agnostic: all models are constructed through a single seam
 ```python
 from app.core.llm import get_llm
 
-llm = get_llm("deepseek", "deepseek-chat")        # Chinese provider (OpenAI-compat)
-llm = get_llm("anthropic", "claude-sonnet-3.5")   # Western provider (native)
-llm = get_llm("ollama", "ollama-coder")           # Local server
+llm = get_llm("deepseek", "deepseek-chat")  # Chinese provider (OpenAI-compat)
+llm = get_llm("anthropic", "claude-sonnet-3.5")  # Western provider (native)
+llm = get_llm("ollama", "ollama-coder")  # Local server
 ```
 
 - **Registry:** `app/core/llm/providers.yaml` (34 providers) + `models.yaml` (41 aliases) — to add a provider, add a YAML entry; no code changes needed for OpenAI-compatible endpoints.
