@@ -78,6 +78,7 @@ def test_defaults():
     assert s.database_max_overflow == 10
     assert s.redis_url == "redis://localhost:6379"
     assert s.permission_policy == "strict"
+    assert s.recursion_limit == 25
     assert s.log_level == "INFO"
     assert s.memory_dir == Path.home() / ".orya" / "memory"
     # Future-phase placeholders
@@ -106,6 +107,7 @@ def test_env_overrides(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ORYA_LLM_MODEL", "deepseek-chat")
     monkeypatch.setenv("DATABASE_URL", "postgresql://db:5432/x")
     monkeypatch.setenv("ORYA_PERMISSION_POLICY", "permissive")
+    monkeypatch.setenv("ORYA_RECURSION_LIMIT", "50")
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
     clear_settings_cache()
     s = get_settings()
@@ -113,6 +115,7 @@ def test_env_overrides(monkeypatch: pytest.MonkeyPatch):
     assert s.llm_model == "deepseek-chat"
     assert s.database_url == "postgresql://db:5432/x"
     assert s.permission_policy == "permissive"
+    assert s.recursion_limit == 50
     assert s.log_level == "DEBUG"
 
 
@@ -159,6 +162,7 @@ def test_yaml_top_level_fallbacks(tmp_path: Path):
             "permission_policy": "permissive",
             "log_level": "WARNING",
             "redis_url": "redis://yaml-host:6379/1",
+            "recursion_limit": 40,
             "memory_dir": str(Path("~/.orya/custom-memory").expanduser()),
         },
         tmp_path,
@@ -168,6 +172,7 @@ def test_yaml_top_level_fallbacks(tmp_path: Path):
     assert s.permission_policy == "permissive"
     assert s.log_level == "WARNING"
     assert s.redis_url == "redis://yaml-host:6379/1"
+    assert s.recursion_limit == 40
     assert s.memory_dir == Path.home() / ".orya" / "custom-memory"
 
 

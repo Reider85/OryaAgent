@@ -55,6 +55,10 @@ _YAML_FALLBACKS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
         ("ORYA_PERMISSION_POLICY", "PERMISSION_POLICY"),
         ("permission_policy",),
     ),
+    "recursion_limit": (
+        ("ORYA_RECURSION_LIMIT", "RECURSION_LIMIT"),
+        ("recursion_limit",),
+    ),
     "log_level": (("LOG_LEVEL", "ORYA_LOG_LEVEL"), ("log_level",)),
 }
 
@@ -128,6 +132,13 @@ class Settings(BaseSettings):
     permission_policy: Literal["strict", "permissive"] = Field(
         default="strict",
         validation_alias=AliasChoices("ORYA_PERMISSION_POLICY", "PERMISSION_POLICY"),
+    )
+
+    # --- Agent loop (M-04) ------------------------------------------------
+    recursion_limit: int = Field(
+        default=25,
+        validation_alias=AliasChoices("ORYA_RECURSION_LIMIT", "RECURSION_LIMIT"),
+        description="Max agent-loop iterations (LangGraph recursion_limit)",
     )
 
     # --- Logging ---------------------------------------------------------
