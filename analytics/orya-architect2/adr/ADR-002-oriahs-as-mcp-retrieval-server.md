@@ -217,7 +217,10 @@ from .config import OriaHSConfig
 
 app = Server("oriahs-mcp")
 cfg = OriaHSConfig.from_env()
-client = httpx.AsyncClient(base_url=cfg.base_url, headers={"Authorization": f"Bearer {cfg.token}"})
+client = httpx.AsyncClient(
+    base_url=cfg.base_url, headers={"Authorization": f"Bearer {cfg.token}"}
+)
+
 
 @app.list_tools()
 async def list_tools() -> list[Tool]:
@@ -228,36 +231,57 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Natural-language query"},
-                    "top_k": {"type": "integer", "default": 10, "minimum": 1, "maximum": 50},
-                    "mode": {"type": "string", "enum": ["hybrid", "lexical", "vector"], "default": "hybrid"},
-                    "filters": {"type": "object", "description": "Facet filters, e.g. {\"source\": \"session_log\"}"},
-                    "rerank": {"type": "boolean", "default": True}
+                    "query": {
+                        "type": "string",
+                        "description": "Natural-language query",
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "default": 10,
+                        "minimum": 1,
+                        "maximum": 50,
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["hybrid", "lexical", "vector"],
+                        "default": "hybrid",
+                    },
+                    "filters": {
+                        "type": "object",
+                        "description": 'Facet filters, e.g. {"source": "session_log"}',
+                    },
+                    "rerank": {"type": "boolean", "default": True},
                 },
-                "required": ["query"]
-            }
+                "required": ["query"],
+            },
         ),
         # ... other tools
     ]
 
+
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "hybrid_search":
-        r = await client.post("/search", json={"query": arguments["query"], **arguments})
+        r = await client.post(
+            "/search", json={"query": arguments["query"], **arguments}
+        )
         r.raise_for_status()
         results = r.json()["results"]
         return [TextContent(type="text", text=format_results(results))]
     # ... other tools
 
+
 def format_results(results: list[dict]) -> str:
     return "\n\n".join(
-        f"[{i+1}] (score={r['score']:.3f}) {r['content'][:500]}"
+        f"[{i + 1}] (score={r['score']:.3f}) {r['content'][:500]}"
         for i, r in enumerate(results)
     )
+
 
 if __name__ == "__main__":
     import asyncio
     from mcp.server.stdio import stdio_server  # or HTTP transport
+
     asyncio.run(stdio_server(app))
 ```
 

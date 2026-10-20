@@ -661,7 +661,9 @@ async def tool_node_with_fuzzy(state, original_tool_node):
     if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
         for call in last_msg.tool_calls:
             if call["name"] not in registered_tool_names:
-                suggestion = difflib.get_close_matches(call["name"], registered_tool_names, n=1, cutoff=0.6)
+                suggestion = difflib.get_close_matches(
+                    call["name"], registered_tool_names, n=1, cutoff=0.6
+                )
                 if suggestion:
                     call["name"] = suggestion[0]
                     call["args"]["_corrected_from"] = call["name"]
@@ -874,15 +876,22 @@ TRIZ #15 Dynamicity: user хочет попробовать 2 подхода п�
 class BranchManager:
     async def fork(self, parent_thread_id: UUID, checkpoint_id: str) -> UUID:
         new_thread_id = str(uuid4())
-        state = await graph.aget_state({"configurable": {
-            "thread_id": parent_thread_id, "checkpoint_id": checkpoint_id
-        }})
+        state = await graph.aget_state(
+            {
+                "configurable": {
+                    "thread_id": parent_thread_id,
+                    "checkpoint_id": checkpoint_id,
+                }
+            }
+        )
         await graph.aupdate_state(
             {"configurable": {"thread_id": new_thread_id}}, state.values
         )
         await self.db.execute(
             "INSERT INTO session_branches (branch_thread_id, parent_thread_id, forked_at_checkpoint) VALUES ($1, $2, $3)",
-            new_thread_id, parent_thread_id, checkpoint_id
+            new_thread_id,
+            parent_thread_id,
+            checkpoint_id,
         )
         return new_thread_id
 ```
@@ -934,11 +943,9 @@ async def grep_and_edit(pattern: str, new_string: str, glob: str = None) -> str:
         return "No matches found"
     results = []
     for match in parse_matches(matches):
-        result = await edit.ainvoke({
-            "path": match.file,
-            "old_string": match.content,
-            "new_string": new_string
-        })
+        result = await edit.ainvoke(
+            {"path": match.file, "old_string": match.content, "new_string": new_string}
+        )
         results.append({"file": match.file, "line": match.line, "status": "ok"})
     return json.dumps({"edited_files": len(results), "details": results})
 ```

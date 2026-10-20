@@ -263,7 +263,9 @@ async def tool_node_with_fuzzy(state):
     last_msg = state["messages"][-1]
     for call in last_msg.tool_calls:
         if call["name"] not in registered_tools:
-            suggestion = difflib.get_close_matches(call["name"], registered_tools, n=1, cutoff=0.6)
+            suggestion = difflib.get_close_matches(
+                call["name"], registered_tools, n=1, cutoff=0.6
+            )
             if suggestion:
                 # Auto-correct + inform LLM
                 call["name"] = suggestion[0]
@@ -320,7 +322,9 @@ async def grep_and_edit(pattern: str, new_string: str, glob: str = None) -> str:
     if not matches:
         return "No matches found"
     for match in parse_matches(matches):
-        await edit.ainvoke({"path": match.path, "old_string": match.content, "new_string": new_string})
+        await edit.ainvoke(
+            {"path": match.path, "old_string": match.content, "new_string": new_string}
+        )
     return f"Edited {len(matches)} files"
 ```
 
@@ -348,8 +352,12 @@ async def rewind(thread_id: str, body: RewindRequest):
     target_checkpoint = body.checkpoint_id
     new_thread_id = str(uuid4())
     # Copy state from old thread to new
-    state = await graph.aget_state({"configurable": {"thread_id": thread_id, "checkpoint_id": target_checkpoint}})
-    await graph.aupdate_state({"configurable": {"thread_id": new_thread_id}}, state.values)
+    state = await graph.aget_state(
+        {"configurable": {"thread_id": thread_id, "checkpoint_id": target_checkpoint}}
+    )
+    await graph.aupdate_state(
+        {"configurable": {"thread_id": new_thread_id}}, state.values
+    )
     return {"new_thread_id": new_thread_id}
 ```
 
@@ -680,12 +688,16 @@ class BranchManager:
     async def fork(self, parent_thread_id: UUID, checkpoint_id: str) -> UUID:
         """Create a new thread_id from a checkpoint of parent thread."""
         new_thread_id = str(uuid4())
-        state = await graph.aget_state({
-            "configurable": {"thread_id": parent_thread_id, "checkpoint_id": checkpoint_id}
-        })
+        state = await graph.aget_state(
+            {
+                "configurable": {
+                    "thread_id": parent_thread_id,
+                    "checkpoint_id": checkpoint_id,
+                }
+            }
+        )
         await graph.aupdate_state(
-            {"configurable": {"thread_id": new_thread_id}},
-            state.values
+            {"configurable": {"thread_id": new_thread_id}}, state.values
         )
         return new_thread_id
 
@@ -721,6 +733,7 @@ def should_compact(state) -> CompactionType:
 ```python
 # app/ui/chainlit_app.py (v5)
 import httpx
+
 
 @cl.on_message
 async def on_message(message: cl.Message):
@@ -905,6 +918,7 @@ INJECTION_PATTERNS = [
     r"forget (everything|all)",
     r"new instructions:",
 ]
+
 
 def detect_injection(content: str) -> bool:
     return any(re.search(p, content, re.IGNORECASE) for p in INJECTION_PATTERNS)

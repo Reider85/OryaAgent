@@ -219,13 +219,15 @@ from dataclasses import dataclass
 from typing import Any
 from collections import OrderedDict
 
+
 @dataclass
 class DFC:
     """Dynamic Fast Context: 4 layers, only HOT in model window."""
-    hot: OrderedDict[str, Any]    # current turn context (4-8K tok, in-window)
-    warm: OrderedDict[str, Any]    # recently used (16-32K tok, LRU)
-    cold: list[Any]                # compacts from previous turns (32-64K tok)
-    ice: "UKBRouter"               # unlimited, retrieval via UKB
+
+    hot: OrderedDict[str, Any]  # current turn context (4-8K tok, in-window)
+    warm: OrderedDict[str, Any]  # recently used (16-32K tok, LRU)
+    cold: list[Any]  # compacts from previous turns (32-64K tok)
+    ice: "UKBRouter"  # unlimited, retrieval via UKB
 
     def assemble_hot(self, planner_hints: list[str]) -> str:
         """Called by planner-фаза; returns string for system-prompt section."""
@@ -380,8 +382,10 @@ import asyncio
 from typing import Any
 from pathlib import Path
 
+
 class LSPBus:
     """Per-language LSP-server manager (stdio)."""
+
     SERVERS = {
         "python": ("pyright-langserver", ["--stdio"]),
         "typescript": ("typescript-language-server", ["--stdio"]),
@@ -403,10 +407,16 @@ class LSPBus:
         return self._servers[language]
 
     async def hover(self, language: str, uri: str, position: dict) -> dict | None: ...
-    async def definition(self, language: str, uri: str, position: dict) -> list[dict]: ...
-    async def references(self, language: str, uri: str, position: dict) -> list[dict]: ...
+    async def definition(
+        self, language: str, uri: str, position: dict
+    ) -> list[dict]: ...
+    async def references(
+        self, language: str, uri: str, position: dict
+    ) -> list[dict]: ...
     async def workspace_symbol(self, language: str, query: str) -> list[dict]: ...
-    async def rename(self, language: str, uri: str, position: dict, new_name: str) -> dict: ...
+    async def rename(
+        self, language: str, uri: str, position: dict, new_name: str
+    ) -> dict: ...
     async def diagnostics(self, language: str, uri: str) -> list[dict]: ...
     async def code_action(self, language: str, uri: str, range: dict) -> list[dict]: ...
 ```
@@ -415,33 +425,42 @@ class LSPBus:
 # app/tools/lsp.py (новое в v7, BETA)
 from langchain_core.tools import tool
 
+
 @tool
 async def lsp_hover(file: str, line: int, col: int) -> str:
     """Get signature + type + docstring for symbol at (file, line, col)."""
     language = detect_language(file)
     client = await lsp_bus.ensure_server(language, workspace_root())
-    hover = await client.hover(language, f"file://{file}", {"line": line, "character": col})
+    hover = await client.hover(
+        language, f"file://{file}", {"line": line, "character": col}
+    )
     return format_hover(hover)
+
 
 @tool
 async def lsp_definition(file: str, line: int, col: int) -> str:
     """Get location where symbol at (file, line, col) is defined."""
 
+
 @tool
 async def lsp_references(file: str, line: int, col: int) -> str:
     """Get all call-sites of symbol at (file, line, col)."""
+
 
 @tool
 async def lsp_symbol_search(query: str) -> str:
     """Search workspace symbols by name (sub-ms, returns top-K)."""
 
+
 @tool
 async def lsp_rename(file: str, line: int, col: int, new_name: str) -> str:
     """Atomically rename symbol across all references (safe refactoring)."""
 
+
 @tool
 async def lsp_diagnostics(file: str) -> str:
     """Get LSP diagnostics (errors/warnings) for file — мгновенно вместо lint."""
+
 
 @tool
 async def lsp_code_action(file: str, line: int, col: int) -> str:
@@ -501,21 +520,27 @@ import json
 from pathlib import Path
 import yaml
 
+
 class BatchRunner:
     """prompts.yml → tri-model pipeline → results.jsonl."""
+
     def __init__(self, tri_model: TriModelPipeline, dfc: DFC, ukb: UKBRouter):
         self.tri_model = tri_model
         self.dfc = dfc
         self.ukb = ukb
 
-    async def run(self, prompts_path: Path, output_path: Path, parallel: int = 4) -> None:
+    async def run(
+        self, prompts_path: Path, output_path: Path, parallel: int = 4
+    ) -> None:
         with open(prompts_path) as f:
             tasks = yaml.safe_load(f)
         semaphore = asyncio.Semaphore(parallel)
         results = []
+
         async def run_one(task):
             async with semaphore:
                 return await self._run_task(task)
+
         for coro in asyncio.as_completed([run_one(t) for t in tasks]):
             result = await coro
             results.append(result)
@@ -563,8 +588,10 @@ orya batch compare --current results.jsonl --baseline main/results.jsonl
 # app/core/ukb/router.py (новое в v7, PROD)
 from typing import Any
 
+
 class UKBRouter:
     """Unified Knowledge Bus: routes ukb.lookup to appropriate MCP-server."""
+
     def __init__(self, mcp_client: "MCPClient"):
         self.mcp = mcp_client
         self.rules = [
@@ -579,21 +606,32 @@ class UKBRouter:
             (lambda q, c: c is None, "all", "_parallel_lookup_all"),
         ]
 
-    async def lookup(self, query: str, capability: str = None, filters: dict = None, top_k: int = 5) -> list[dict]:
+    async def lookup(
+        self, query: str, capability: str = None, filters: dict = None, top_k: int = 5
+    ) -> list[dict]:
         """Single retrieval interface. Agent doesn't distinguish local vs remote."""
         for matcher, namespace, tool_name in self.rules:
             if matcher(query, capability):
                 if tool_name == "_parallel_lookup_all":
                     return await self._parallel_lookup_all(query, filters, top_k)
-                return await self.mcp.call_tool(tool_name, {"query": query, "filters": filters or {}, "top_k": top_k})
+                return await self.mcp.call_tool(
+                    tool_name,
+                    {"query": query, "filters": filters or {}, "top_k": top_k},
+                )
         return []
 
-    async def _parallel_lookup_all(self, query: str, filters: dict, top_k: int) -> list[dict]:
+    async def _parallel_lookup_all(
+        self, query: str, filters: dict, top_k: int
+    ) -> list[dict]:
         """Default: parallel lookup across all UKB namespaces, dedupe by content hash."""
         results = await asyncio.gather(
             self.mcp.call_tool("lsp.symbol_search", {"query": query, "top_k": top_k}),
-            self.mcp.call_tool("memory.search", {"query": query, "top_k": top_k, "filters": filters}),
-            self.mcp.call_tool("hybrid_search", {"query": query, "top_k": top_k, "filters": filters}),
+            self.mcp.call_tool(
+                "memory.search", {"query": query, "top_k": top_k, "filters": filters}
+            ),
+            self.mcp.call_tool(
+                "hybrid_search", {"query": query, "top_k": top_k, "filters": filters}
+            ),
             return_exceptions=True,
         )
         merged = self._merge_and_dedupe(results, top_k)
@@ -679,8 +717,10 @@ class SymbolicClassifier:
 # app/core/workflow/predictive_planner.py (новое в v7, PROD)
 import asyncio
 
+
 class PredictivePlanner:
     """Background model that forecasts next user prompt and warms Heat Cache."""
+
     def __init__(self, model: BaseChatModel, prefetcher: "Prefetcher", dfc: DFC):
         self.model = model  # Qwen-3B / Llama-3.2-1B / Haiku-3.5
         self.prefetcher = prefetcher
@@ -720,7 +760,11 @@ class PredictivePlanner:
         if predicted_prompt and actual_prompt == predicted_prompt:
             self._last_feedback = {"hit": True, "predicted": predicted_prompt}
         else:
-            self._last_feedback = {"hit": False, "predicted": predicted_prompt, "actual": actual_prompt}
+            self._last_feedback = {
+                "hit": False,
+                "predicted": predicted_prompt,
+                "actual": actual_prompt,
+            }
         self._recent_prompts.append(actual_prompt)
 ```
 
@@ -762,23 +806,28 @@ class PredictivePlanner:
 # app/core/workflow/tournament.py (новое в v7, PROD)
 import asyncio
 
+
 class TournamentExecutor:
     """N parallel executors + judge selects best by criteria."""
+
     def __init__(self, executors: list[BaseChatModel], judge: BaseChatModel, dfc: DFC):
         self.executors = executors  # [Sonnet, GPT-5, DeepSeek-V3] или [Sonnet@0.3, Sonnet@0.7, Sonnet@1.0]
         self.judge = judge
         self.dfc = dfc
 
-    async def run(self, plan: "Plan", criteria: list[str], budget_usd: float = 0.10) -> "TournamentResult":
+    async def run(
+        self, plan: "Plan", criteria: list[str], budget_usd: float = 0.10
+    ) -> "TournamentResult":
         estimated_cost = self._estimate_cost(plan, N=len(self.executors))
         if estimated_cost > budget_usd:
             # Degrade to single executor
             return await self._run_single(plan, criteria)
 
         # Parallel N executors
-        results = await asyncio.gather(*[
-            self._run_one(executor, plan) for executor in self.executors
-        ], return_exceptions=True)
+        results = await asyncio.gather(
+            *[self._run_one(executor, plan) for executor in self.executors],
+            return_exceptions=True,
+        )
 
         # Filter out exceptions
         candidates = [r for r in results if not isinstance(r, Exception)]
@@ -787,7 +836,9 @@ class TournamentExecutor:
 
         # Judge selects best
         judge_prompt = JUDGE_PROMPT.format(
-            plan=plan, criteria=criteria, candidates=[c.diff for c in candidates],
+            plan=plan,
+            criteria=criteria,
+            candidates=[c.diff for c in candidates],
         )
         judge_decision = await self.judge.ainvoke(judge_prompt)
         winner_idx = parse_winner(judge_decision)
@@ -846,7 +897,16 @@ class TournamentExecutor:
 # app/core/retrieval/orchestrator.py (новое в v7, BETA)
 class RetrievalOrchestrator:
     """Decides when and how to retrieve from UKB."""
-    STRATEGIES = ("none", "standard", "topic_continuation", "speculative_prefetch", "explicit_recall", "code_lookup", "degraded")
+
+    STRATEGIES = (
+        "none",
+        "standard",
+        "topic_continuation",
+        "speculative_prefetch",
+        "explicit_recall",
+        "code_lookup",
+        "degraded",
+    )
 
     async def decide(self, session_state: "SessionState") -> str:
         """Returns strategy name."""
@@ -862,7 +922,9 @@ class RetrievalOrchestrator:
             return "standard"
         return "none"
 
-    async def execute(self, strategy: str, session_state: "SessionState") -> list["RetrievedChunk"]:
+    async def execute(
+        self, strategy: str, session_state: "SessionState"
+    ) -> list["RetrievedChunk"]:
         if strategy == "none":
             return []
         query = await self._build_query(strategy, session_state)
@@ -870,7 +932,7 @@ class RetrievalOrchestrator:
         results = await self.ukb.lookup(query, top_k=rerank_policy.top_k_pre)
         if rerank_policy.apply_rerank:
             results = await self._rerank(results, query)
-        return results[:rerank_policy.top_k_post]
+        return results[: rerank_policy.top_k_post]
 
     def _detect_topic_continuation(self, state) -> bool:
         # Эвристики: referential marker ("помнишь, мы обсуждали..."), similar tokens
@@ -905,6 +967,7 @@ class RetrievalOrchestrator:
 # app/core/tools/capability_registry.py (новое в v7, BETA)
 class CapabilityRegistry:
     """Dynamic tool-filter per turn based on file/content triggers."""
+
     TRIGGERS = {
         "lsp.hover": lambda ctx: ctx.language in LSP_LANGUAGES,
         "lsp.def": lambda ctx: ctx.has_symbol_at_cursor,
@@ -983,6 +1046,7 @@ class RerankPolicy:
 # app/core/llm/tiered_router.py (новое в v7, ALPHA — расширение CostAwareRouter из v6)
 class TieredModelRouter:
     """Tier-based model router + cost-aware fallback."""
+
     def __init__(self, cost_aware: "CostAwareRouter"):
         self.cost_aware = cost_aware  # из v6
         self.models = {
@@ -1028,18 +1092,44 @@ class TieredModelRouter:
 # app/core/llm/prompt_cache.py (новое в v7, ALPHA)
 class PromptCacheLayout:
     """Discipline: cacheable prefix + dynamic suffix."""
-    def assemble(self, system: str, tools: list, project_summary: str, l0_memory: str, dynamic: str) -> list:
+
+    def assemble(
+        self,
+        system: str,
+        tools: list,
+        project_summary: str,
+        l0_memory: str,
+        dynamic: str,
+    ) -> list:
         """Returns LangChain messages with proper cache_control markers."""
         # Anthropic format
         return [
-            SystemMessage(content=[
-                {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}},
-                {"type": "text", "text": tools, "cache_control": {"type": "ephemeral"}},
-                {"type": "text", "text": project_summary, "cache_control": {"type": "ephemeral"}},
-                {"type": "text", "text": l0_memory, "cache_control": {"type": "ephemeral"}},
-                # Dynamic suffix — no cache_control
-                {"type": "text", "text": dynamic},
-            ])
+            SystemMessage(
+                content=[
+                    {
+                        "type": "text",
+                        "text": system,
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                    {
+                        "type": "text",
+                        "text": tools,
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                    {
+                        "type": "text",
+                        "text": project_summary,
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                    {
+                        "type": "text",
+                        "text": l0_memory,
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                    # Dynamic suffix — no cache_control
+                    {"type": "text", "text": dynamic},
+                ]
+            )
         ]
 ```
 
@@ -1285,7 +1375,10 @@ __all__ = ["DFC", "DFCLayer", "HeatCache", "ContextAssembler", "BackgroundCompac
 # app/core/dfc/dfc.py
 class DFC:
     """Dynamic Fast Context: 5 layers (HEAT/HOT/WARM/COLD/ICE)."""
-    def __init__(self, ukb: "UKBRouter", lsp_bus: "LSPBus", memory: "MDStore|SQLiteStore"):
+
+    def __init__(
+        self, ukb: "UKBRouter", lsp_bus: "LSPBus", memory: "MDStore|SQLiteStore"
+    ):
         self.heat = HeatCache(max_bytes=8192)
         self.hot: OrderedDict[str, Any] = OrderedDict(max_bytes=8192)
         self.warm: OrderedDict[str, Any] = OrderedDict(max_bytes=32768)
@@ -1320,6 +1413,7 @@ class DFC:
 # app/core/dfc/heat_cache.py
 class HeatCache:
     """Predicted HOT for next turn (predictive planner #24)."""
+
     def __init__(self, max_bytes: int = 8192):
         self._cache: OrderedDict[str, Any] = OrderedDict(max_bytes=max_bytes)
         self._confidence: dict[str, float] = {}
@@ -1345,6 +1439,7 @@ class HeatCache:
 # app/core/lsp/client.py
 class LSPClient:
     """Per-language LSP-server client (stdio JSON-RPC)."""
+
     async def initialize(self) -> None: ...
     async def did_open(self, uri: str, text: str) -> None: ...
     async def did_change(self, uri: str, changes: list) -> None: ...
@@ -1403,10 +1498,16 @@ def build_system_prompt(state, tools, dfc: DFC) -> list[BaseMessage]:
     # 🆕 v7: mark cacheable prefix with cache_control for provider
     dynamic_suffix = dfc.assemble_hot(state.plan)  # активные символы + diff + plan
     return [
-        SystemMessage(content=[
-            {"type": "text", "text": cacheable_prefix, "cache_control": {"type": "ephemeral"}},
-            {"type": "text", "text": dynamic_suffix},
-        ])
+        SystemMessage(
+            content=[
+                {
+                    "type": "text",
+                    "text": cacheable_prefix,
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {"type": "text", "text": dynamic_suffix},
+            ]
+        )
     ]
 ```
 
@@ -1442,10 +1543,10 @@ async def ukb_lookup(query: str, capability: str = None, top_k: int = 5) -> str:
 ```python
 # In-process state, не persisted (восстанавливается из session-log + LSP + UKB при старте)
 DFCState = {
-    "heat": dict,        # Heat Cache (predicted)
+    "heat": dict,  # Heat Cache (predicted)
     "hot": OrderedDict,  # current turn context
     "warm": OrderedDict,  # recently used (LRU)
-    "cold": list,         # compacts from previous turns
+    "cold": list,  # compacts from previous turns
     # ICE = UKB (external)
 }
 ```

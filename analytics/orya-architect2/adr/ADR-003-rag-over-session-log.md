@@ -199,6 +199,7 @@ from mcp_client import MCPClient  # стандартный MCP-клиент
 from .chunkers import chunk_session, chunk_markdown, chunk_code
 from .detectors import detect_secrets
 
+
 class IngestWorker:
     def __init__(self, mcp: MCPClient, kb_root: Path, code_root: Path):
         self.mcp = mcp
@@ -207,13 +208,17 @@ class IngestWorker:
 
     async def ingest_session_event(self, event: dict):
         if detect_secrets(json.dumps(event)):
-            await self.audit_log("secret_detected", event); return
+            await self.audit_log("secret_detected", event)
+            return
         for chunk in chunk_session(event):
-            await self.mcp.call_tool("index_document", {
-                "content": chunk.content,
-                "metadata": {**chunk.metadata, "source": "session_log"},
-                "collection": "agent_context"
-            })
+            await self.mcp.call_tool(
+                "index_document",
+                {
+                    "content": chunk.content,
+                    "metadata": {**chunk.metadata, "source": "session_log"},
+                    "collection": "agent_context",
+                },
+            )
 
     async def watch_kb(self):
         async for changes in awatch(self.kb_root):

@@ -407,34 +407,45 @@ import asyncio, json
 from datasets import load_dataset
 from mcp_client import MCPClient
 
+
 async def run_agent_eval():
     mcp = MCPClient(...)
     await mcp.start(...)
 
     results = {}
-    for dataset_name in ['agent_session_recall', 'agent_kb_recall',
-                         'agent_code_recall', 'agent_memory_recall']:
-        ds = load_dataset(f'eval/datasets/{dataset_name}.jsonl')
-        metrics = {'recall_at_10': [], 'ndcg_at_10': []}
+    for dataset_name in [
+        "agent_session_recall",
+        "agent_kb_recall",
+        "agent_code_recall",
+        "agent_memory_recall",
+    ]:
+        ds = load_dataset(f"eval/datasets/{dataset_name}.jsonl")
+        metrics = {"recall_at_10": [], "ndcg_at_10": []}
 
         for item in ds:
-            res = await mcp.call_tool('hybrid_search', {
-                'query': item['query'],
-                'top_k': 10,
-                'rerank': True,
-                'mode': item.get('mode_hint', 'hybrid'),
-            })
+            res = await mcp.call_tool(
+                "hybrid_search",
+                {
+                    "query": item["query"],
+                    "top_k": 10,
+                    "rerank": True,
+                    "mode": item.get("mode_hint", "hybrid"),
+                },
+            )
             score = score_result(res, item)
-            metrics['recall_at_10'].append(score.recall)
-            metrics['ndcg_at_10'].append(score.ndcg)
+            metrics["recall_at_10"].append(score.recall)
+            metrics["ndcg_at_10"].append(score.ndcg)
 
         results[dataset_name] = {
-            'recall_at_10_avg': sum(metrics['recall_at_10']) / len(metrics['recall_at_10']),
-            'ndcg_at_10_avg': sum(metrics['ndcg_at_10']) / len(metrics['ndcg_at_10']),
+            "recall_at_10_avg": sum(metrics["recall_at_10"])
+            / len(metrics["recall_at_10"]),
+            "ndcg_at_10_avg": sum(metrics["ndcg_at_10"]) / len(metrics["ndcg_at_10"]),
         }
 
     # write to Prometheus pushgateway
-    push_to_gateway('prometheus-pushgateway:9091', job='nightly-agent-eval', registry=registry)
+    push_to_gateway(
+        "prometheus-pushgateway:9091", job="nightly-agent-eval", registry=registry
+    )
 
     return results
 ```

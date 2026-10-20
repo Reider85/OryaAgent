@@ -295,10 +295,14 @@ async def memory_search(query: str, types: list[str] = None, top_k: int = 5) -> 
     lexical = await sqlite_store.search(query, types=types, top_k=top_k)
     # 2. L2 Qdrant via OriaHS MCP — semantic
     if oriahs_available:
-        semantic = await mcp.call_tool("hybrid_search", {
-            "query": query, "top_k": top_k,
-            "filters": {"collection": "agent_memory", "project": current_project()}
-        })
+        semantic = await mcp.call_tool(
+            "hybrid_search",
+            {
+                "query": query,
+                "top_k": top_k,
+                "filters": {"collection": "agent_memory", "project": current_project()},
+            },
+        )
     else:
         semantic = []
     # 3. Merge + dedup by memory_id
@@ -378,6 +382,7 @@ async def memory_search(query: str, types: list[str] = None, top_k: int = 5) -> 
 import os
 from pathlib import Path
 from typing import TextIO
+
 
 class MDStore:
     def __init__(self, memory_dir: Path):
@@ -463,15 +468,18 @@ from pydantic import BaseModel
 
 router = APIRouter(prefix="/sessions/{thread_id}", tags=["learn"])
 
+
 class LearnRequest(BaseModel):
     pattern_name: str | None = None  # если None — auto-name
     description: str | None = None
     scope: str = "session"  # "session" | "project" | "global"
 
+
 class LearnResponse(BaseModel):
     learned_id: str
     file: str  # "LEARNED.md"
     compacted: bool  # была ли запущена compaction
+
 
 @router.post("/learn", response_model=LearnResponse)
 async def learn(
@@ -549,7 +557,9 @@ async def self_learn(pattern_name: str, description: str) -> str:
     """Capture the current successful tool-call sequence as a learned skill.
     Use only after a sequence that solved a non-trivial sub-task."""
     sequence = await get_current_sequence()
-    entry = format_learned_entry(sequence, pattern_name, description, source="auto-learn")
+    entry = format_learned_entry(
+        sequence, pattern_name, description, source="auto-learn"
+    )
     md_store.append("LEARNED.md", entry)
     await md_store.compact_if_needed("LEARNED.md")
     return f"Learned: {entry.id}"
@@ -733,6 +743,7 @@ flowchart TB
 ```python
 class MDStore:
     """L0 storage: 4 MD-файла, atomic-append, periodic compaction."""
+
     FILES = ("PREFERENCES.md", "LEARNED.md", "FACTS.md", "DECISIONS.md")
     MAX_BYTES = 4096  # per file
 
@@ -748,9 +759,12 @@ class MDStore:
 ```python
 class SQLiteStore:
     """L1 storage: SQLite FTS5 + SQLCipher, per-project."""
+
     def __init__(self, db_path: Path, key: str): ...
     async def insert(self, item: MemoryItem) -> str: ...
-    async def search(self, query: str, types: list[str] = None, top_k: int = 5) -> list[MemoryItem]: ...
+    async def search(
+        self, query: str, types: list[str] = None, top_k: int = 5
+    ) -> list[MemoryItem]: ...
     async def forget(self, pattern: str) -> int: ...  # soft-delete, returns count
     async def supersede(self, old_id: str, new_id: str) -> None: ...
     async def export(self) -> list[dict]: ...
@@ -762,6 +776,7 @@ class SQLiteStore:
 ```python
 class MemoryOutbox:
     """Outbox-pattern: SQLite → Qdrant (L2) sync."""
+
     async def enqueue(self, memory_id: str, op: str, payload: dict) -> None: ...
     async def drain_batch(self, batch_size: int = 50) -> list[OutboxItem]: ...
     async def mark_done(self, item_id: str) -> None: ...
@@ -774,6 +789,7 @@ Outbox-drain-воркер (async background task) читает outbox, дела�
 ```python
 class Compactor:
     """Periodic compaction: L0 → L1 when files exceed MAX_BYTES."""
+
     STRATEGIES = {
         "PREFERENCES.md": "keep-user-explicit",
         "LEARNED.md": "keep-recent-and-high-confidence",
@@ -904,6 +920,7 @@ from agent_obs.exporters import LangfuseExporter
 from agent_obs.guardrail import GuardrailEngine
 from agent_obs.cost import compute_cost, PriceBook
 
+
 class OryaObservability:
     def __init__(self, settings):
         self.sdk = ObservabilitySDK(
@@ -925,15 +942,19 @@ class OryaObservability:
         """Decorate agent.loop, llm.call, tool.call spans."""
         self.sdk.instrument_langgraph(graph)
 
-    def emit_memory_write(self, memory_id: str, file: str, source: str, compacted: bool):
+    def emit_memory_write(
+        self, memory_id: str, file: str, source: str, compacted: bool
+    ):
         """Emit memory.write span — для /learn, /remember, auto-learn."""
         with self.sdk.start_span("memory.write") as span:
-            span.set_attributes({
-                "memory.id": memory_id,
-                "memory.file": file,
-                "memory.source": source,
-                "memory.compacted": compacted,
-            })
+            span.set_attributes(
+                {
+                    "memory.id": memory_id,
+                    "memory.file": file,
+                    "memory.source": source,
+                    "memory.compacted": compacted,
+                }
+            )
 ```
 
 ### 9.3. Sampler-proxy mode: зачем и как

@@ -325,8 +325,9 @@ async function retrieveMemory(query: string, opts: MemoryQueryOpts): Promise<Mem
 ```python
 # memory-ingest-worker opens SQLite with SQLCipher
 import sqlcipher3
+
 conn = sqlcipher3.connect(memory_db_path)
-conn.execute(f"PRAGMA key = \"{key_from_keychain()}\";")
+conn.execute(f'PRAGMA key = "{key_from_keychain()}";')
 ```
 
 ---

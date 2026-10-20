@@ -346,14 +346,15 @@ from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
 from app.config import settings
 
+
 def get_chat_model() -> BaseChatModel:
     return init_chat_model(
-        model=settings.llm_model,              # "anthropic:claude-3-5-sonnet-latest"
+        model=settings.llm_model,  # "anthropic:claude-3-5-sonnet-latest"
         temperature=settings.llm_temperature,
         max_tokens=settings.llm_max_tokens,
         streaming=True,
         timeout=settings.llm_timeout_s,
-    ).bind_tools(get_registered_tools())       # автоматическая генерация tool-spec
+    ).bind_tools(get_registered_tools())  # автоматическая генерация tool-spec
 ```
 
 **Ключевые свойства:**
@@ -451,10 +452,13 @@ Git status:
 4. If uncertain: ask the user.
 """
 
-prompt = ChatPromptTemplate.from_messages([
-    ("system", SYSTEM_TEMPLATE),
-    MessagesPlaceholder("messages"),
-])
+prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", SYSTEM_TEMPLATE),
+        MessagesPlaceholder("messages"),
+    ]
+)
+
 
 def build_system_prompt(state, tools):
     return prompt.format_messages(
@@ -485,10 +489,12 @@ def build_system_prompt(state, tools):
 from langchain_core.tools import tool, ToolException
 from pydantic import BaseModel, Field
 
+
 class ReadInput(BaseModel):
     path: str = Field(description="Absolute or project-relative file path")
     start: int | None = Field(default=None, description="Start line (1-indexed)")
     limit: int | None = Field(default=None, description="Max lines to read")
+
 
 @tool(args_schema=ReadInput)
 async def read(path: str, start: int | None = None, limit: int | None = None) -> str:
@@ -496,20 +502,24 @@ async def read(path: str, start: int | None = None, limit: int | None = None) ->
     # реализация с rich-рендером, обработкой binary, …
     ...
 
+
 @tool
 async def write(path: str, content: str) -> str:
     """Atomically write content to file (temp file + rename)."""
     ...
+
 
 @tool
 async def edit(path: str, old_string: str, new_string: str) -> str:
     """Exact string replacement. Fails if old_string is not unique."""
     ...
 
+
 @tool
 async def bash(command: str, timeout: int = 30) -> str:
     """Execute shell command via PTY. Returns stdout+stderr."""
     ...
+
 
 @tool
 async def grep(pattern: str, glob: str | None = None, path: str = ".") -> str:
@@ -545,10 +555,12 @@ async def grep(pattern: str, glob: str | None = None, path: str = ".") -> str:
 # app/core/session.py (фрагмент)
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
+
 async def get_checkpointer():
     saver = AsyncPostgresSaver.from_conn_string(settings.database_url)
     await saver.setup()  # создаёт таблицы checkpoints, writes, migrations
     return saver
+
 
 # JSONL projection — отдельный воркер, читает новые checkpoint-записи
 # и дописывает в ~/.orya/sessions/{thread_id}.jsonl
@@ -576,23 +588,29 @@ async def project_to_jsonl(thread_id: str):
 # app/core/context.py (фрагмент)
 from langchain_core.messages import trim_messages, SystemMessage
 
+
 def trim_state(state, max_tokens=128_000):
     return trim_messages(
         state["messages"],
         token_counter=lambda msgs: count_tokens(msgs),
         max_tokens=max_tokens,
-        strategy="last",                  # оставляем последние N
-        start_on="human",                 # не разрывать посередине turn'а
+        strategy="last",  # оставляем последние N
+        start_on="human",  # не разрывать посередине turn'а
         allow_partial=False,
-        include_system=True,              # system-prompt всегда в начале
+        include_system=True,  # system-prompt всегда в начале
     )
+
 
 # BETA+: compaction — отдельный узел графа, запускается по триггеру
 async def compact_node(state):
-    summary = await model.ainvoke([
-        SystemMessage("Summarize the conversation, preserve key decisions and file states."),
-        *state["messages"][:50],  # первые 50 сообщений
-    ])
+    summary = await model.ainvoke(
+        [
+            SystemMessage(
+                "Summarize the conversation, preserve key decisions and file states."
+            ),
+            *state["messages"][:50],  # первые 50 сообщений
+        ]
+    )
     return {
         "messages": [summary, *state["messages"][50:]],
         "compacted": True,
@@ -621,12 +639,14 @@ import chainlit as cl
 from app.core.graph import build_graph
 from app.core.session import get_checkpointer
 
+
 @cl.on_chat_start
 async def on_start():
     checkpointer = await get_checkpointer()
     graph = build_graph(tools, model, checkpointer, policy)
     cl.user_session.set("graph", graph)
     cl.user_session.set("thread_id", str(uuid4()))
+
 
 @cl.on_message
 async def on_message(message: cl.Message):
@@ -643,7 +663,8 @@ async def on_message(message: cl.Message):
 
     async for event in graph.astream_events(
         {"messages": [HumanMessage(message.content)]},
-        config, version="v2",
+        config,
+        version="v2",
     ):
         if event["event"] == "on_chat_model_stream":
             token = event["data"]["chunk"].content
@@ -677,6 +698,7 @@ async def send_message(thread_id: str, body: MessageCreate):
     async def event_stream():
         async for event in graph.astream_events(...):
             yield format_sse(event)
+
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 ```
 
@@ -692,10 +714,12 @@ async def send_message(thread_id: str, body: MessageCreate):
 # app/core/policy.py (фрагмент)
 from enum import Enum
 
+
 class Decision(str, Enum):
     ALLOW = "allow"
     DENY = "deny"
     ASK = "ask"
+
 
 class PermissionPolicy:
     def __init__(self, mode: str = "ask", allow_rules: list[dict] = None):
@@ -708,7 +732,11 @@ class PermissionPolicy:
         decisions = [self._check_one(tc) for tc in tool_calls]
         if any(d == Decision.ASK for d in decisions):
             return Decision.ASK  # LangGraph прервётся, UI спросит
-        return Decision.ALLOW if all(d == Decision.ALLOW for d in decisions) else Decision.DENY
+        return (
+            Decision.ALLOW
+            if all(d == Decision.ALLOW for d in decisions)
+            else Decision.DENY
+        )
 
     def _check_one(self, tc: dict) -> Decision:
         for rule in self.allow_rules:
@@ -940,16 +968,25 @@ import httpx
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
+
 class OriasSearchInput(BaseModel):
     query: str = Field(description="Natural language query or code snippet")
     top_k: int = Field(default=20, ge=1, le=100)
-    filters: dict | None = Field(default=None, description="tenant_id, language, tags, attributes")
+    filters: dict | None = Field(
+        default=None, description="tenant_id, language, tags, attributes"
+    )
     rerank: bool = Field(default=True, description="Enable cross-encoder rerank")
     fusion: str = Field(default="rrf", pattern="^(rrf|weighted)$")
 
+
 @tool(args_schema=OriasSearchInput)
-async def oriahs_search(query: str, top_k: int = 20, filters: dict = None,
-                        rerank: bool = True, fusion: str = "rrf") -> str:
+async def oriahs_search(
+    query: str,
+    top_k: int = 20,
+    filters: dict = None,
+    rerank: bool = True,
+    fusion: str = "rrf",
+) -> str:
     """Semantic codebase search via OriaHS hybrid search (Postgres + Qdrant + reranker).
     Use for fuzzy intent queries like 'where do we handle retries' or natural language
     lookups. For exact string matches, prefer `grep` tool."""
@@ -957,8 +994,12 @@ async def oriahs_search(query: str, top_k: int = 20, filters: dict = None,
         resp = await client.post(
             f"{settings.oriahs_url}/search",
             json={
-                "query": query, "top_k": top_k, "filters": filters or {},
-                "rerank": rerank, "fusion": fusion, "explain": False,
+                "query": query,
+                "top_k": top_k,
+                "filters": filters or {},
+                "rerank": rerank,
+                "fusion": fusion,
+                "explain": False,
                 "timeout_ms": 5000,
             },
         )
