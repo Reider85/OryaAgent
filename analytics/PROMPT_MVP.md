@@ -3,7 +3,7 @@
 > **Версия промпта:** 7.0
 > **Дата:** 20 октября 2026
 > **Источники:** `ARCHITECT7.md` v7.0 (§0, §18), `ROADMAP7.md` v7.0 (§3), `BACKLOG7.md` v7.0 (§2), `BACKLOG6.md` v6.0 (§2 — M-00..M-27), `ARCHITECT6.md` v6.0 (§3.1, §4, §6.1.1, §6.1.4)
-> **Стек:** Python 3.11+, LangChain 0.3+, LangGraph 0.2+, FastAPI, PostgreSQL 16, Redis 7, Chainlit
+> **Стек:** Python 3.11+, LangChain 0.3+, LangGraph 0.2+, FastAPI, PostgreSQL 16, Redis 7, Chainlit, **мультипровайдерный LLM-seam** (Anthropic, OpenAI, Google Gemini, 6+ китайских провайдеров, OpenRouter, Ollama, LM Studio, vLLM, llama.cpp)
 > **Длительность:** 3.5 недели (один разработчик)
 > **Объём кода:** ~2700 LOC
 > **Статус в v7:** MVP полностью унаследован от v6 без изменений — v7 не добавляет тикетов в MVP, чтобы не нарушать «время до первого работающего агента»
@@ -48,10 +48,98 @@
 | Кэш/память | Redis | 7 | CacheWrapper, ephemeral state |
 | UI | Chainlit | latest | chat-интерфейс, slash-commands, sidebar |
 | Настройки | pydantic-settings | latest | конфиг из env + ~/.orya/config.yaml |
-| LLM-провайдеры | Anthropic Claude (Sonnet 3.5 по умолчанию), OpenAI, Ollama (local) | — | init_chat_model provider-seam |
+| LLM-провайдеры | **Западные:** Anthropic Claude, OpenAI GPT, Google Gemini, xAI Grok · **Китайские:** DeepSeek, Qwen (Alibaba), GLM/Zhipu, Xiaomi MiMo, Moonshot/Kimi, Baichuan, Minimax, StepFun, 01.AI (Yi), iFlyTek Spark, SenseTime, ByteDance Doubao · **Агрегаторы:** OpenRouter, Together AI, Groq, Fireworks AI, SiliconFlow, Higress · **Локальные:** Ollama, LM Studio, vLLM, llama.cpp, TGI, LocalAI | — | init_chat_model + OpenAI-compatible adapters |
 | Тесты | pytest + pytest-asyncio | latest | smoke-тесты, unit-тесты |
 
 **Принцип 20/80 (Парето) на уровне библиотек:** LangGraph + LangChain + Chainlit + PostgresSaver + Redis покрывают 80% потребностей. Не вводи новых библиотек без явной необходимости.
+
+---
+
+## 2.1. Реестр поддерживаемых LLM-провайдеров (полный)
+
+MVP проектируется как **провайдерно-агностичная платформа**: ни одна бизнес-логика не должна зависеть от конкретного вендора. Все провайдеры подключаются через единый шов `get_llm(provider, model)` (см. M-01) и должны поддерживать: streaming, tool-calling (function-calling), system-prompt, температуру, max_tokens. Ниже — полный реестр провайдеров, обязательных к поддержке в MVP.
+
+### 2.1.1. Западные провайдеры (Tier-1, production-grade)
+
+| Provider | Класс LangChain | Base URL | Модели (примеры) | Tool-calling | Streaming | Notes |
+|---|---|---|---|---|---|---|
+| **Anthropic** | `ChatAnthropic` | `api.anthropic.com` | `claude-sonnet-3.5`, `claude-opus-4`, `claude-haiku-3.5` | ✅ native | ✅ | default provider в MVP |
+| **OpenAI** | `ChatOpenAI` | `api.openai.com/v1` | `gpt-4o`, `gpt-4-turbo`, `gpt-4o-mini`, `o1`, `o3-mini` | ✅ native | ✅ | reference-implementation |
+| **Google Gemini** | `ChatVertexAI` / `ChatGoogleGenerativeAI` | `generativelanguage.googleapis.com` | `gemini-2.0-flash`, `gemini-1.5-pro`, `gemini-1.5-flash` | ✅ native | ✅ | context-caching в ALPHA |
+| **xAI Grok** | `ChatOpenAI` (OpenAI-compat) | `api.x.ai/v1` | `grok-2`, `grok-beta`, `grok-vision` | ✅ | ✅ | reasoning-модели |
+
+### 2.1.2. Китайские провайдеры (обязательны в MVP — целевая аудитория OryaAgent)
+
+> **Важно:** все китайские провайдеры (кроме Qwen и GLM через native SDK) реализуются через **OpenAI-compatible API** (LangChain `ChatOpenAI` с кастомным `base_url`). Это унифицирует integration-слой и позволяет переиспользовать code-path: tool-calling, streaming, system-prompt работают идентично.
+
+| Provider | Base URL (OpenAI-compat) | API Key env-var | Модели (примеры) | Tool-calling | Streaming | Notes |
+|---|---|---|---|---|---|---|
+| **DeepSeek** | `https://api.deepseek.com/v1` | `DEEPSEEK_API_KEY` | `deepseek-chat` (V3), `deepseek-reasoner` (R1), `deepseek-coder` | ✅ | ✅ | best cost/quality для code; R1 — reasoning (Chain-of-Thought) |
+| **Qwen (Alibaba)** | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `DASHSCOPE_API_KEY` (или `QWEN_API_KEY`) | `qwen-max`, `qwen-plus`, `qwen-turbo`, `qwen2.5-72b-instruct`, `qwen3-235b-a22b`, `qwen3-coder-plus` | ✅ | ✅ | Qwen3-Coder — сильнейший code-модель 2025; DashScope OpenAI-compat |
+| **GLM / Zhipu AI** | `https://open.bigmodel.cn/api/paas/v4` | `ZHIPUAI_API_KEY` (или `GLM_API_KEY`) | `glm-4-plus`, `glm-4.5`, `glm-4-air`, `glm-4-flash`, `glm-4-airx`, `glm-zero-preview` | ✅ | ✅ | GLM-4.5 — reasoning model; free-tier через `glm-4-flash` |
+| **Xiaomi MiMo** | `https://api.mimo.xiaomi.com/v1` (OpenAI-compat) | `MIMO_API_KEY` | `mimo-7b-rl`, `mimo-7b-base`, `mimo-vl-7b-instruct` | ⚠️ partial | ✅ | Xiaomi MiMo-7B-RL — reasoning для code/agent tasks |
+| **Moonshot / Kimi** | `https://api.moonshot.cn/v1` | `MOONSHOT_API_KEY` | `moonshot-v1-8k`, `moonshot-v1-32k`, `moonshot-v1-128k`, `kimi-k2`, `kimi-k1.5` | ✅ | ✅ | Kimi K2 — long-context (200K+), agent-optimized |
+| **Baichuan AI** | `https://api.baichuan-ai.com/v1` | `BAICHUAN_API_KEY` | `baichuan4-turbo`, `baichuan4-air`, `baichuan3-turbo` | ✅ | ✅ | Chinese-specific optimizations |
+| **Minimax** | `https://api.minimax.chat/v1` | `MINIMAX_API_KEY` | `abab6.5-chat`, `abab6.5s-chat`, `MiniMax-Text-01` | ✅ | ✅ | MiniMax-Text-01 — 1M context window |
+| **StepFun** | `https://api.stepfun.com/v1` | `STEPFUN_API_KEY` | `step-1-8k`, `step-1-32k`, `step-1-128k`, `step-1-flash`, `step-2-16k` | ✅ | ✅ | step-2 — reasoning model |
+| **01.AI (Yi)** | `https://api.lingyiwanwu.com/v1` | `YI_API_KEY` (или `LINGYI_API_KEY`) | `yi-large`, `yi-medium`, `yi-large-turbo`, `yi-lightning` | ✅ | ✅ | yi-large — strong code/reasoning |
+| **iFlyTek Spark** | `https://spark-api-open.xf-yun.com/v1` | `IFLYTEK_API_KEY` (+ `IFLYTEK_API_SECRET`) | `generalv3.5`, `general`, `spark-v4` | ✅ | ✅ | WS / HTTP OpenAI-compat; требует `APISecret` |
+| **SenseTime SenseNova** | `https://api.sensenova.cn/compatible-mode/v1` | `SENSENOVA_API_KEY` | `SenseChat-5`, `SenseChat-Turbo` | ✅ | ✅ | OpenAI-compat |
+| **ByteDance Doubao** | `https://ark.cn-beijing.volces.com/api/v3` | `ARK_API_KEY` (Volcengine) | `doubao-pro-32k`, `doubao-pro-128k`, `doubao-lite-32k`, `doubao-1.5-pro` | ✅ | ✅ | Volcengine Ark; endpoint-by-model-id |
+| **Tencent Hunyuan** | `https://api.hunyuan.cloud.tencent.com/v1` | `HUNYUAN_API_KEY` | `hunyuan-pro`, `hunyuan-standard`, `hunyuan-lite`, `hunyuan-code` | ✅ | ✅ | hunyuan-code — специализированный для code-gen |
+| **Baidu ERNIE (Wenxin)** | `https://qianfan.baidubce.com/v2` | `ERNIE_API_KEY` (+ `ERNIE_SECRET_KEY`) | `ernie-4.0-turbo-8k`, `ernie-4.0-8k-latest`, `ernie-3.5-8k`, `ernie-speed-128k`, `ernie-x1` | ✅ | ✅ | Qianfan platform OpenAI-compat; ernie-x1 — reasoning |
+| **SiliconFlow** | `https://api.siliconflow.cn/v1` | `SILICONFLOW_API_KEY` | агрегатор: `deepseek-ai/DeepSeek-V3`, `Qwen/Qwen2.5-72B-Instruct`, `meta-llama/Llama-3.3-70B-Instruct` | ✅ | ✅ | китайский аналог OpenRouter; бесплатный tier |
+| **Higress / Aliyun Bailian** | `https://dashscope.aliyuncs.com/compatible-mode/v1` (через DashScope) | `DASHSCOPE_API_KEY` | то же что Qwen + hosted open-source модели | ✅ | ✅ | gateway для self-hosted китайских моделей |
+
+### 2.1.3. Агрегаторы (OpenAI-compatible, один API key — доступ ко всем моделям)
+
+| Provider | Base URL | API Key env-var | Покрывает | Notes |
+|---|---|---|---|---|
+| **OpenRouter** | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` | Anthropic, OpenAI, Google, Meta Llama, Mistral, DeepSeek, Qwen, GLM, Yi, + 300 других | единый billing, routing по model-id; `HTTP_REFERRER` для ranking |
+| **Together AI** | `https://api.together.xyz/v1` | `TOGETHER_API_KEY` | Llama, Qwen, DeepSeek, Mixtral, DBRX, + 200 OSS моделей | fast inference (240+ TPS) |
+| **Groq** | `https://api.groq.com/openai/v1` | `GROQ_API_KEY` | Llama-3.3-70B, Llama-3.1-8B, Mixtral, Gemma, DeepSeek-R1 (distill) | LPU-ускорение, 500+ TPS |
+| **Fireworks AI** | `https://api.fireworks.ai/inference/v1` | `FIREWORKS_API_KEY` | Llama, Qwen, DeepSeek, Mistral, + 100 OSS | serverless + fine-tuning |
+| **SiliconFlow** | (см. §2.1.2) | `SILICONFLOW_API_KEY` | китайский агрегатор (DeepSeek, Qwen, GLM, Llama, и др.) | бесплатный tier, низкие цены для китайских моделей |
+| **NVIDIA NIM** | `https://integrate.api.nvidia.com/v1` | `NVIDIA_API_KEY` | Llama, Mistral, Qwen, DeepSeek, Gemma | 1000 бесплатных запросов при регистрации |
+| **Cerebras** | `https://api.cerebras.ai/v1` | `CEREBRAS_API_KEY` | Llama-3.1-8B, Llama-3.3-70B | CS-3 wafer-scale; 1500+ TPS |
+| **SambaNova** | `https://api.sambanova.ai/v1` | `SAMBANOVA_API_KEY` | Llama, DeepSeek, Qwen | RDU-ускорение |
+
+### 2.1.4. Локальные провайдеры (для air-gapped / privacy / dev-тестирования)
+
+| Provider | Base URL (OpenAI-compat) | Запуск | Модели (примеры) | Notes |
+|---|---|---|---|---|
+| **Ollama** | `http://localhost:11434/v1` | `ollama serve` | `qwen2.5:7b`, `qwen2.5-coder:14b`, `deepseek-r1:14b`, `llama3.3:70b`, `glm4:9b`, `mistral:7b` | default для dev; auto-pull моделей |
+| **LM Studio** | `http://localhost:1234/v1` | LM Studio app → Local Server | любая GGUF-модель (Qwen, DeepSeek, Llama, GLM, Phi) | GUI для model-management; OpenAI-compat |
+| **vLLM** | `http://localhost:8000/v1` | `vllm serve --model Qwen/Qwen2.5-7B-Instruct --api-server` | любая HF-модель | production-grade serving; поддерживает OpenAI + Anthropic-compat |
+| **llama.cpp server** | `http://localhost:8080/v1` | `llama-server -m model.gguf --port 8080` | любая GGUF | минимальный footprint; edge-deploy |
+| **TGI (HuggingFace)** | `http://localhost:8090/v1` | `text-generation-launcher --model-id ...` | любая HF-модель | OpenAI-compat с v1.0+ |
+| **LocalAI** | `http://localhost:8081/v1` | docker-compose | любая (GGUF, GPTQ, GGML) | drop-in replacement для OpenAI; multi-backend |
+| **Jan** | `http://localhost:1337/v1` | Jan app | любая GGUF | GUI-first альтернатива LM Studio |
+| **Ollama-compatible: GPT4All** | `http://localhost:4891/v1` | GPT4All app | GGUF models | desktop-class local inference |
+
+### 2.1.5. Совместимость с open-source code-агентами (для re-use провайдеров)
+
+OryaAgent MVP должен уметь читать конфиги провайдеров, которые используют популярные open-source агенты — это упрощает миграцию пользователей и стандартизирует env-vars:
+
+| Агент | Формат конфига | Что re-use'ить |
+|---|---|---|
+| **OpenCode** (sst/opencode) | `~/.config/opencode/auth.json` или `opencode.json` с `providers[].api_key` | env-vars `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`; поддержка произвольных OpenAI-compat endpoints через `baseUrl` |
+| **KiloCode** (kilocode/kilo) | VS Code settings / MCP servers | env-vars `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `QWEN_API_KEY`; MCP-server protocol |
+| **Cline / RooCode** | VS Code settings | env-vars `DEEPSEEK_API_KEY`, `QWEN_API_KEY`, `OPENROUTER_API_KEY`; `apiProvider` field |
+| **Aider** | `~/.aider.conf.yml` | env-vars; `-model deepseek/deepseek-chat` через LiteLLM convention |
+| **Continue.dev** | `~/.continue/config.json` | `models[].apiBase`, `models[].apiKey` fields |
+
+**MVP реализует importer** для `opencode.json` и `~/.continue/config.json` (см. M-02) — пользователь может мигрировать с этих агентов одним `orya import --from opencode`.
+
+### 2.1.6. Принципы проектирования LLM-seam для мультипровайдерности
+
+1. **OpenAI-compat-first:** ~90% провайдеров (включая все китайские, кроме Qwen-native и GLM-native) реализуются через один и тот же code-path: `ChatOpenAI(base_url=..., api_key=..., model=...)`. Это снижает support-burden и унифицирует observability.
+2. **Native SDK только при необходимости:** Qwen (`dashscope` SDK) и GLM (`zhipuai` SDK) можно подключить через native SDK для расширенных фич (multimodal, embeddings, async-batch), но базовый chat+tools работает через OpenAI-compat endpoint — поэтому в MVP только OpenAI-compat.
+3. **Capability-detection:** при инициализации провайдера проверяем 3 capability: `supports_tool_calling`, `supports_streaming`, `supports_system_prompt`. Если хотя бы одна отсутствует — fail-fast с понятным сообщением. Реестр capabilities хранится в `app/core/llm/capabilities.yaml`.
+4. **Provider-agnostic tool-format:** все провайдеры приводятся к LangChain `bind_tools()` interface (LangChain сам маппит OpenAI-function-calling ↔ Anthropic-tools ↔ Gemini-function-declarations). В MVP не должно быть `if provider == "anthropic"` в бизнес-логике.
+5. **Model-alias registry:** `app/core/llm/models.yaml` — declarative mapping `alias → (provider, model_id, capabilities, context_window, pricing)`. Например `qwen-coder` → `(qwen, qwen3-coder-plus, tools+streaming, 256K, $0.002/1K)`. В ALPHA этот registry станет основой для `TieredModelRouter` (small/large/tournament).
+6. **Pricing registry:** `app/core/llm/pricing.yaml` — `input_per_1k`, `output_per_1k` per model — нужно для cost-tracking (ALPHA A-14).
+7. **No vendor lock-in:** любая бизнес-логика MVP (`graph.py`, `prompt.py`, `tools.py`) не должна импортировать `langchain_anthropic` или `langchain_openai` напрямую — только через `get_llm()`.
 
 ---
 
@@ -66,16 +154,87 @@
 - `pyproject.toml` с зависимостями: langchain, langgraph, fastapi, uvicorn, chainlit, asyncpg, redis, pydantic-settings, pytest, pytest-asyncio.
 - Makefile: `make dev`, `make test`, `make lint`.
 
-**M-01 — LLM-provider-seam (LangChain init_chat_model)**
-- `app/core/llm.py::get_llm(provider: str, model: str) -> BaseChatModel` через `langchain.chat_models.init_chat_model`.
-- Поддержка: Anthropic (`claude-sonnet-3.5`), OpenAI (`gpt-4o`), Ollama (`qwen-3b` local).
-- Config: `~/.orya/config.yaml` или env (`ORYA_LLM_PROVIDER`, `ORYA_LLM_MODEL`, `ORYA_LLM_API_KEY`).
-- Это **главный архитектурный шов** — он будет расширен в ALPHA (TieredModelRouter, PromptCacheLayout, ConnectionPool), но его интерфейс остаётся неизменным.
+**M-01 — LLM-provider-seam (LangChain init_chat_model + OpenAI-compatible adapters)**
+- `app/core/llm.py::get_llm(provider: str, model: str, **kwargs) -> BaseChatModel`.
+- **Архитектура шва:**
+  - Если `provider` ∈ {`anthropic`, `openai`, `google`, `vertexai`} → используем `langchain.chat_models.init_chat_model` с native LangChain-классом (`ChatAnthropic`, `ChatOpenAI`, `ChatVertexAI`).
+  - Если `provider` — любой из списка §2.1.2–2.1.4 (китайские, агрегаторы, локальные) → используем `ChatOpenAI(base_url=settings.base_url, api_key=settings.api_key, model=model)` (OpenAI-compatible path).
+  - Один экзотический fallback: `provider="openrouter"` → `ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=..., model="anthropic/claude-3.5-sonnet", extra_headers={"HTTP-Referer": "...", "X-Title": "OryaAgent"})`.
+- **Реестр провайдеров** (declarative): `app/core/llm/providers.yaml` — каждая запись: `{name, base_url, env_var, langchain_class, capabilities, default_model}`. См. полный список в §2.1.
+- **Реестр моделей** (declarative): `app/core/llm/models.yaml` — `{alias, provider, model_id, context_window, supports_tools, supports_streaming, pricing}`.
+- **Поддерживаемые провайдеры в MVP (20+):**
+  - **Западные (4):** `anthropic`, `openai`, `google`, `xai`.
+  - **Китайские (14):** `deepseek`, `qwen` (Alibaba DashScope), `glm` (Zhipu), `mimo` (Xiaomi), `moonshot` (Kimi), `baichuan`, `minimax`, `stepfun`, `yi` (01.AI), `iflytek` (Spark), `sensenova`, `doubao` (Volcengine), `hunyuan` (Tencent), `ernie` (Baidu Qianfan).
+  - **Агрегаторы (7):** `openrouter`, `together`, `groq`, `fireworks`, `siliconflow`, `nvidia`, `cerebras`, `sambanova`.
+  - **Локальные (8):** `ollama`, `lmstudio`, `vllm`, `llamacpp`, `tgi`, `localai`, `jan`, `gpt4all`.
+- **Capability-detection при init:** `get_llm()` проверяет `supports_tools` и `supports_streaming` для выбранной модели (через `models.yaml`). Если не поддерживает — `ValueError` с понятным сообщением (например: "DeepSeek R1 (deepseek-reasoner) не поддерживает tool-calling — выберите deepseek-chat или подключите провайдер через адаптер").
+- **Config sources (приоритет):** env (`ORYA_LLM_PROVIDER`, `ORYA_LLM_MODEL`, `ORYA_LLM_API_KEY`, `ORYA_LLM_BASE_URL`) → `~/.orya/config.yaml` → `models.yaml` alias → fail-fast.
+- **Импорт из других агентов:** `app/core/llm/importers.py` — `import_opencode()`, `import_continue()`, `import_aider()` — читают `~/.config/opencode/auth.json`, `~/.continue/config.json`, `~/.aider.conf.yml` и заполняют `~/.orya/config.yaml`.
+- **Default в MVP:** `provider=anthropic`, `model=claude-sonnet-3.5` (как в v6 baseline). Все остальные провайдеры — опциональны, но code-path должен быть готов к ним с первого дня.
+- Это **главный архитектурный шов** — он будет расширен в ALPHA (TieredModelRouter с tier=small/large/tournament, PromptCacheLayout, ConnectionPool), но его интерфейс `get_llm(provider, model, **kwargs) -> BaseChatModel` остаётся неизменным. TieredModelRouter в ALPHA будет выбирать между, например, `deepseek-chat` (tier=small), `claude-sonnet-3.5` (tier=large), и tournament из 3 моделей (deepseek-r1 + qwen3-coder + glm-4.5).
 
-**M-02 — pydantic-settings конфиг**
+**M-02 — pydantic-settings конфиг + multi-provider registry**
 - `app/core/config.py::Settings(BaseSettings)` — все настройки приложения.
-- Источники: `.env` → env vars → `~/.orya/config.yaml`.
-- Поля: `llm_provider`, `llm_model`, `database_url`, `redis_url`, `memory_dir` (default `~/.orya/memory/`), `permission_policy` (`strict`/`permissive`), `log_level`.
+- Источники (приоритет): `.env` → env vars → `~/.orya/config.yaml`.
+- Поля (поля провайдеров — см. ниже):
+  - `llm_provider: str = "anthropic"` (default).
+  - `llm_model: str = "claude-sonnet-3.5"`.
+  - `llm_api_key: SecretStr | None` (если None — берётся из провайдер-specific env-var).
+  - `llm_base_url: str | None` (для OpenAI-compat override; если None — из `providers.yaml`).
+  - `database_url`, `redis_url`, `memory_dir` (default `~/.orya/memory/`), `permission_policy` (`strict`/`permissive`), `log_level`.
+- **Multi-provider config block** в `~/.orya/config.yaml`:
+  ```yaml
+  llm:
+    default_provider: anthropic
+    default_model: claude-sonnet-3.5
+    providers:
+      anthropic:
+        api_key: ${ANTHROPIC_API_KEY}
+        default_model: claude-sonnet-3.5
+      deepseek:
+        api_key: ${DEEPSEEK_API_KEY}
+        base_url: https://api.deepseek.com/v1
+        default_model: deepseek-chat
+      qwen:
+        api_key: ${DASHSCOPE_API_KEY}
+        base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+        default_model: qwen3-coder-plus
+      glm:
+        api_key: ${ZHIPUAI_API_KEY}
+        base_url: https://open.bigmodel.cn/api/paas/v4
+        default_model: glm-4.5
+      mimo:                          # Xiaomi MiMo
+        api_key: ${MIMO_API_KEY}
+        base_url: https://api.mimo.xiaomi.com/v1
+        default_model: mimo-7b-rl
+      moonshot:                      # Kimi
+        api_key: ${MOONSHOT_API_KEY}
+        base_url: https://api.moonshot.cn/v1
+        default_model: kimi-k2
+      openrouter:
+        api_key: ${OPENROUTER_API_KEY}
+        base_url: https://openrouter.ai/api/v1
+        default_model: anthropic/claude-3.5-sonnet
+        extra_headers:
+          HTTP-Referer: https://github.com/Reider85/OryaAgent
+          X-Title: OryaAgent
+      ollama:                        # local
+        base_url: http://localhost:11434/v1
+        default_model: qwen2.5-coder:14b
+        api_key: "ollama"            # placeholder, any non-empty
+      lmstudio:                      # local
+        base_url: http://localhost:1234/v1
+        default_model: qwen2.5-coder-7b-instruct
+        api_key: "lm-studio"
+      vllm:                          # local production-grade
+        base_url: http://localhost:8000/v1
+        default_model: Qwen/Qwen2.5-7B-Instruct
+        api_key: "vllm"
+    # ... (full list — см. providers.yaml)
+  ```
+- **Capability registry:** `app/core/llm/capabilities.yaml` — `{provider: {model: {supports_tools, supports_streaming, supports_system_prompt, context_window}}}`.
+  - ⚠️ **Важно:** DeepSeek-R1 (`deepseek-reasoner`), Qwen-QwQ, GLM-Zero, o1 — **reasoning-модели без tool-calling**. Для них в MVP есть fallback: режим `tools=off` (plain chat без function-calling). Это фиксируется в capabilities и тестируется.
+- **Importers** (см. M-01): `orya import --from opencode|continue|aider|cline` — миграция с существующих агентов.
 
 **M-03 — PostgreSQL-схема (orya_sessions)**
 - `app/db/schema.sql` — таблицы: `sessions`, `messages`, `tool_calls`, `memory_audit_log`.
@@ -256,7 +415,7 @@
 
 Эти инварианты заложены в MVP, потому что v7 ALPHA/BETA/PROD будут их расширять, не переписывая:
 
-1. **LLM-seam (M-01):** функция `get_llm(provider, model)` остаётся с тем же интерфейсом. v7 ALPHA обернёт её в `TieredModelRouter.select(tier, user_id)` и `ConnectionPool.acquire(provider)`, но `get_llm` останется точкой входа.
+1. **LLM-seam (M-01):** функция `get_llm(provider, model, **kwargs) -> BaseChatModel` остаётся с тем же интерфейсом. v7 ALPHA обернёт её в `TieredModelRouter.select(tier, user_id)` и `ConnectionPool.acquire(provider)`, но `get_llm` останется точкой входа. **Реестр провайдеров `providers.yaml` и моделей `models.yaml`** — declarative, расширяется без изменения кода (новый провайдер = новая запись в YAML). TieredModelRouter в ALPHA будет комбинировать модели из разных провайдеров (например, `small=deepseek-chat`, `large=claude-sonnet-3.5`, `tournament=[qwen3-coder, glm-4.5, deepseek-r1]`).
 
 2. **System-prompt-builder (M-05):** сигнатура `build_system_prompt(state, tools) -> list[BaseMessage]`. v7 BETA добавит параметр `dfc: DFC` и будет инжектировать dynamic_suffix, но текущий контракт сохранится (через default-arg `dfc=None`).
 
@@ -288,8 +447,14 @@
 
 - ✅ `make dev` запускает Chainlit UI на http://localhost:8000.
 - ✅ Первый чат создаёт сессию, персистит в PostgreSQL, виден в sidebar.
-- ✅ LLM-call проходит через `init_chat_model` (Anthropic по умолчанию).
-- ✅ Все 5 tools (read, write, edit, bash, grep) работают:
+- ✅ LLM-call проходит через `get_llm()` seam (default: Anthropic claude-sonnet-3.5).
+- ✅ **Мультипровайдерность:** smoke-тест проходит минимум на 5 провайдерах (Anthropic + DeepSeek + Qwen + GLM + Ollama local). Остальные 15+ провайдеров — integration tests с skip-флагом `@pytest.mark.skipif(not os.getenv("DEEPSEEK_API_KEY"))`.
+- ✅ **Capability-detection:** `get_llm(provider="deepseek", model="deepseek-reasoner")` — выдаёт понятную ошибку "Reasoning model without tool-calling — используйте deepseek-chat".
+- ✅ **Provider-picker в UI:** Chainlit sidebar показывает dropdown с 20+ провайдерами и их моделями (из `providers.yaml` + `models.yaml`).
+- ✅ **`/llm/health/{provider}`** endpoint возвращает status 200 если провайдер доступен.
+- ✅ **`/llm/providers`** и **`/llm/models`** endpoints возвращают declarative registries.
+- ✅ **Importers:** `orya import --from opencode` читает `~/.config/opencode/auth.json` и заполняет `~/.orya/config.yaml`.
+- ✅ Все 5 tools (read, write, edit, bash, grep) работают на всех поддерживаемых провайдерах с tool-calling:
   - `read` возвращает file-content.
   - `write` создаёт/обновляет файл atomically.
   - `edit` делает string-replace с uniqueness-check.
@@ -304,8 +469,8 @@
 - ✅ `/memory/stats` → JSON с file-sizes/line-counts/last-modified.
 - ✅ `/memory/compact` → запускает Compactor (placeholder в MVP: подсчёт метрик без embeddings).
 - ✅ `memory_audit_log` пишется на каждое memory-operation.
-- ✅ Smoke-тесты 5/5 проходят.
-- ✅ README объясняет, как запустить и расширить.
+- ✅ Smoke-тесты 5/5 проходят на default провайдере (Anthropic).
+- ✅ README объясняет, как запустить и расширить (включая секцию «Как подключить новый провайдер»).
 
 ---
 
@@ -331,23 +496,37 @@
 
 | Риск | Mitigation |
 |---|---|
-| LLM-provider API key не настроен | Fail-fast на старте с понятным сообщением |
-| PostgreSQL не запущен | Health-check на /health, понятная ошибка |
-| Chainlit конфликтует с FastAPI | Использовать M-24 паттерн (Chainlit через FastAPI) |
+| LLM-provider API key не настроен | Fail-fast на старте с понятным сообщением; список возможных env-vars в error; `orya providers list` для диагностики |
+| Reasoning-модель (DeepSeek-R1, o1, Qwen-QwQ) не поддерживает tool-calling | Capability-detection в `get_llm()`; fallback на plain-chat-mode; warning в logs |
+| Китайский провайдер geo-blocked (DeepSeek/Qwen/GLM недоступны из ЕС/US без VPN) | Health-check `GET /llm/health/{provider}` перед использованием; авто-fallback на OpenRouter-equivalent |
+| OpenRouter rate-limit (403/429 на free tier) | Retry с exponential-backoff (3 попытки); fallback на direct provider |
+| Token-blowup на reasoning-моделях (R1/o1 эмитят `<think>...</think>`) | `trim_thinking()` post-processor в `app/core/llm.py`; метрика `llm.call.thinking_tokens` |
+| Локальный Ollama не запущен | `GET http://localhost:11434/api/tags` health-check; понятная ошибка «Запустите `ollama serve`» |
+| LM Studio модель не загружена | `GET http://localhost:1234/v1/models` check; warning «Загрузите модель в LM Studio» |
+| vLLM с длинным контекстом OOM | Передавать `max_model_len` через `extra_body`; auto-shrink context window |
+| Китайский провайдер возвращает 400 на `cache_control` | Provider-capability detection; PromptCacheLayout (ALPHA) fallback на plain SystemMessage |
+| Разные форматы tool-calling (Anthropic vs OpenAI-compat) | LangChain `bind_tools()` сам маппит; тесты на 5+ провайдерах в smoke |
 | Prompt-injection через file-content | Markers + sanitization + audit log (M-22) |
 | Token-blowup на больших файлах | `read` с start_line/end_line, `bash` с token-efficient output (M-23) |
 | Concurrent session writes в MD-файлы | `fcntl.flock` file-lock в MDStore |
 | PostgresSaver checkpoint corruption | JSONL projection как fallback для replay |
-| Smoke-тесты flaky на CI | Изолированные test-fixtures, deterministic test data |
+| Smoke-тесты flaky на CI | Изолированные test-fixtures, deterministic test data; skip-флаг для external-providers в CI |
 
 ---
 
 ## 9. Forbidden patterns
 
 - ❌ Использовать LLM-call напрямую без `get_llm()` seam.
+- ❌ Импортировать `langchain_anthropic` / `langchain_openai` / `langchain_google_vertexai` в бизнес-логике (`graph.py`, `prompt.py`, `tools.py`) — только в `app/core/llm.py`.
+- ❌ Хардкодить `if provider == "anthropic"` в любом файле кроме `app/core/llm.py` и `app/core/llm/providers.yaml` — все провайдер-специфичные настройки живут в declarative registry.
+- ❌ Хардкодить model names в коде — через `models.yaml` alias (например, `qwen-coder`, а не `qwen3-coder-plus`).
+- ❌ Хардкодить base_url провайдера в коде — только в `providers.yaml` или env.
+- ❌ Использовать reasoning-модели (DeepSeek-R1, o1, Qwen-QwQ, GLM-Zero) с `bind_tools()` без capability-check — будет runtime error у пользователя.
+- ❌ Зависеть от OpenAI-only фич (например, `response_format: {type: "json_object"}`) — только через LangChain `with_structured_output()`, который сам выбирает supported format per provider.
 - ❌ Хардкодить tool-list в `build_graph()` — через `get_tools(session_id)`.
 - ❌ Делать destructive op без `interrupt_before` (кроме `/learn`, `/memory/*` — explicit user command).
 - ❌ Хранить PII (API keys, secrets) в MD-файлах L0 — только knowledge, не credentials.
+- ❌ Хранить API-keys в `~/.orya/config.yaml` plaintext — только через `${ENV_VAR}` подстановку.
 - ❌ Использовать `eval()` / `exec()` для tool-output parsing — только json.loads / ast.literal_eval.
 - ❌ Блокировать event-loop в tool-executor — `asyncio.to_thread` для CPU-bound, `subprocess` для shell.
 - ❌ Дублировать logic между Chainlit UI и FastAPI endpoints — общий `app/core/` layer.
@@ -365,11 +544,24 @@ app/
 ├── main.py                    # FastAPI app entry-point
 ├── core/
 │   ├── __init__.py
-│   ├── config.py              # M-02: pydantic-settings
-│   ├── llm.py                 # M-01: get_llm() seam
+│   ├── config.py              # M-02: pydantic-settings + multi-provider config
+│   ├── llm.py                 # M-01: get_llm() seam (OpenAI-compat-first)
+│   ├── llm/
+│   │   ├── __init__.py
+│   │   ├── providers.yaml     # declarative registry: 20+ провайдеров
+│   │   ├── models.yaml        # declarative registry: model aliases + capabilities
+│   │   ├── capabilities.yaml   # supports_tools / supports_streaming / context_window
+│   │   ├── pricing.yaml        # input_per_1k / output_per_1k per model
+│   │   ├── importers.py        # import_opencode(), import_continue(), import_aider()
+│   │   └── adapters/
+│   │       ├── __init__.py
+│   │       ├── anthropic.py   # ChatAnthropic wrapper
+│   │       ├── openai_compat.py  # ChatOpenAI(base_url=...) — universal adapter
+│   │       ├── gemini.py       # ChatVertexAI / ChatGoogleGenerativeAI
+│   │       └── local.py       # Ollama / LM Studio / vLLM / llama.cpp / TGI / LocalAI
 │   ├── graph.py               # M-04: LangGraph build_graph()
 │   ├── prompt.py              # M-05: build_system_prompt()
-│   ├── context.py             # M-06: trim_messages()
+│   ├── context.py             # M-06: trim_messages() + trim_thinking() for reasoning models
 │   ├── tools.py               # M-12: get_tools()
 │   ├── permissions.py         # M-13: PermissionPolicy
 │   ├── security.py            # M-22: sanitize_untrusted()
@@ -391,7 +583,8 @@ app/
 │   ├── __init__.py
 │   ├── sessions.py            # M-20: /sessions
 │   ├── learn.py               # M-26: /learn
-│   └── memory.py              # M-27: /memory/stats, /memory/compact
+│   ├── memory.py              # M-27: /memory/stats, /memory/compact
+│   └── llm.py                 # /llm/health/{provider}, /llm/providers, /llm/models
 ├── db/
 │   ├── __init__.py            # get_asyncpg_pool()
 │   ├── schema.sql             # M-03
@@ -400,22 +593,34 @@ app/
     ├── __init__.py
     ├── chainlit_app.py        # M-15, M-24
     ├── interrupt.py           # M-16: ask_permission()
-    └── sidebar.py             # M-17: sessions, settings
+    └── sidebar.py             # M-17: sessions, settings, provider-picker
 
 tests/
 ├── conftest.py
 ├── unit/
-│   ├── test_llm_seam.py
+│   ├── test_llm_seam.py           # get_llm() для всех 20+ провайдеров (mocked)
+│   ├── test_llm_providers_yaml.py # валидность providers.yaml
+│   ├── test_llm_models_yaml.py    # валидность models.yaml
+│   ├── test_capabilities.py        # capability-detection для reasoning vs chat
+│   ├── test_importers.py           # import_opencode, import_continue, import_aider
 │   ├── test_tools.py
 │   ├── test_cache.py
 │   ├── test_permissions.py
 │   ├── test_mdstore.py
 │   └── test_compactor.py
+├── integration/
+│   ├── test_provider_anthropic.py     # real API call (skip в CI если нет ключа)
+│   ├── test_provider_deepseek.py
+│   ├── test_provider_qwen.py
+│   ├── test_provider_glm.py
+│   ├── test_provider_openrouter.py
+│   ├── test_provider_ollama.py         # local, always-run
+│   └── test_provider_lmstudio.py
 └── smoke/
-    └── test_smoke.py          # M-18: 5 эталонных задач
+    └── test_smoke.py          # M-18: 5 эталонных задач (параметризованный по провайдерам)
 
 ~/.orya/
-├── config.yaml                # M-02
+├── config.yaml                # M-02: multi-provider config
 ├── memory/                    # M-25
 │   ├── PROJECT.md
 │   ├── LEARNED.md
