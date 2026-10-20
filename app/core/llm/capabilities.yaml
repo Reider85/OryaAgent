@@ -1,0 +1,139 @@
+# Per-model capability matrix (M-01 capability-detection).
+# Used by get_llm() when the model is not a registered alias, and exposed
+# via /llm/models. Keyed by provider -> model_id.
+#
+# Reasoning models (DeepSeek-R1, o1, Qwen-QwQ, GLM-Zero, MiMo) ship WITHOUT
+# reliable tool-calling — get_llm() fails fast on them unless
+# require_tools=False is passed (plain-chat fallback mode).
+
+capabilities:
+  anthropic:
+    claude-3-5-sonnet-latest: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 200000}
+    claude-opus-4-20250514: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 200000}
+    claude-3-5-haiku-latest: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 200000}
+
+  openai:
+    gpt-4o: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 128000}
+    gpt-4-turbo: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 128000}
+    gpt-4o-mini: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 128000}
+    o1: {supports_tools: false, supports_streaming: false, supports_system_prompt: false, context_window: 200000, suggests: gpt-4o}
+    o3-mini: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 200000}
+
+  google:
+    gemini-2.0-flash: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 1000000}
+    gemini-1.5-pro: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 2000000}
+    gemini-1.5-flash: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 1000000}
+
+  xai:
+    grok-2: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 131072}
+    grok-beta: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 8192}
+
+  deepseek:
+    deepseek-chat: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 128000}
+    deepseek-coder: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 128000}
+    deepseek-reasoner: {supports_tools: false, supports_streaming: true, supports_system_prompt: true, context_window: 64000, suggests: deepseek-chat}
+
+  qwen:
+    qwen3-coder-plus: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 256000}
+    qwen-max: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 32768}
+    qwen-plus: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 131072}
+    qwen-turbo: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 1000000}
+    qwen2.5-72b-instruct: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 131072}
+    qwen3-235b-a22b: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 131072}
+
+  glm:
+    glm-4-plus: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 128000}
+    glm-4.5: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 128000}
+    glm-4-air: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 128000}
+    glm-4-flash: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 128000}
+    glm-4-airx: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 128000}
+    glm-zero-preview: {supports_tools: false, supports_streaming: true, supports_system_prompt: true, context_window: 128000, suggests: glm-4.5}
+
+  mimo:
+    mimo-7b-rl: {supports_tools: false, supports_streaming: true, supports_system_prompt: true, context_window: 32768, suggests: deepseek-chat}
+    mimo-7b-base: {supports_tools: false, supports_streaming: true, supports_system_prompt: true, context_window: 32768, suggests: deepseek-chat}
+    mimo-vl-7b-instruct: {supports_tools: false, supports_streaming: true, supports_system_prompt: true, context_window: 32768, suggests: deepseek-chat}
+
+  moonshot:
+    kimi-k2: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 200000}
+    kimi-k1.5: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 131072}
+    moonshot-v1-8k: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 8192}
+    moonshot-v1-32k: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 32768}
+    moonshot-v1-128k: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 131072}
+
+  baichuan:
+    baichuan4-turbo: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 32768}
+    baichuan4-air: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 32768}
+    baichuan3-turbo: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 32768}
+
+  minimax:
+    abab6.5-chat: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 32768}
+    abab6.5s-chat: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 32768}
+    MiniMax-Text-01: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 1000000}
+
+  stepfun:
+    step-1-8k: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 8192}
+    step-1-32k: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 32768}
+    step-1-128k: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 131072}
+    step-1-flash: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 8192}
+    step-2-16k: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 16384}
+
+  yi:
+    yi-large: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 32768}
+    yi-medium: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 32768}
+    yi-large-turbo: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 32768}
+    yi-lightning: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 16384}
+
+  iflytek:
+    generalv3.5: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 128000}
+    general: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 128000}
+    spark-v4: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 128000}
+
+  sensenova:
+    SenseChat-5: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 128000}
+    SenseChat-Turbo: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 32768}
+
+  doubao:
+    doubao-pro-32k: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 32768}
+    doubao-pro-128k: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 131072}
+    doubao-lite-32k: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 32768}
+    doubao-1.5-pro: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 131072}
+
+  hunyuan:
+    hunyuan-pro: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 32768}
+    hunyuan-standard: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 32768}
+    hunyuan-lite: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 32768}
+    hunyuan-code: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 32768}
+
+  ernie:
+    ernie-4.0-turbo-8k: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 8192}
+    ernie-4.0-8k-latest: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 8192}
+    ernie-3.5-8k: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 8192}
+    ernie-speed-128k: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 131072}
+    ernie-x1: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 128000}
+
+  # Aggregators expose the same models as their upstream providers;
+  # register only entries that differ from the upstream registry above.
+  openrouter:
+    anthropic/claude-3.5-sonnet: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 200000}
+    openai/gpt-4o: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 128000}
+    deepseek/deepseek-chat: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 128000}
+    deepseek/deepseek-r1: {supports_tools: false, supports_streaming: true, supports_system_prompt: true, context_window: 64000, suggests: deepseek/deepseek-chat}
+
+  groq:
+    llama-3.3-70b-versatile: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 131072}
+
+  together:
+    meta-llama/Llama-3.3-70B-Instruct-Turbo: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 131072}
+
+  siliconflow:
+    deepseek-ai/DeepSeek-V3: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 131072}
+    Qwen/Qwen2.5-72B-Instruct: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 32768}
+
+  # Local models vary by what the user pulled — assume tool support for
+  # known coding models, verify at runtime via bind_tools errors otherwise.
+  ollama:
+    "qwen2.5-coder:14b": {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 32768}
+    "qwen2.5-coder:7b": {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 32768}
+    "llama3.3:70b": {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 131072}
+    "deepseek-r1:14b": {supports_tools: false, supports_streaming: true, supports_system_prompt: true, context_window: 64000, suggests: "qwen2.5-coder:14b"}

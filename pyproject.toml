@@ -31,6 +31,10 @@ dependencies = [
     "asyncpg>=0.29.0",
     "redis>=5.0.0",
     "pydantic-settings>=2.1.0",
+    "langchain-openai>=1.7.2",
+    "langchain-anthropic>=1.7.6",
+    "langchain-google-genai>=4.4.2",
+    "pyyaml>=6.0.3",
 ]
 
 [project.optional-dependencies]
@@ -61,6 +65,8 @@ packages = ["app"]
 [tool.ruff]
 line-length = 88
 target-version = "py311"
+
+[tool.ruff.lint]
 select = [
     "E",  # pycodestyle errors
     "W",  # pycodestyle warnings

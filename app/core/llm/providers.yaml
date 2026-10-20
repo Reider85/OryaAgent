@@ -1,0 +1,302 @@
+# Declarative provider registry for the OryaAgent LLM seam (M-01).
+# One entry per provider. Never hardcode base URLs or env vars in Python —
+# add new providers here instead.
+#
+# Fields:
+#   adapter          - code-path that builds the chat model:
+#                      anthropic | openai | google_genai  -> langchain init_chat_model (native)
+#                      openai_compat                      -> ChatOpenAI(base_url=...)
+#   base_url         - OpenAI-compatible endpoint (required for openai_compat)
+#   env_var          - provider-specific API key env var
+#   default_model    - model used when nothing else is configured
+#   api_key_placeholder - non-empty dummy key for local servers that require one
+#   tier             - western | chinese | aggregator | local
+#   extra_headers    - extra HTTP headers (e.g. OpenRouter attribution)
+
+providers:
+  # ---------------------------------------------------------------- western
+  anthropic:
+    adapter: anthropic
+    base_url: https://api.anthropic.com
+    env_var: ANTHROPIC_API_KEY
+    default_model: claude-sonnet-3.5
+    tier: western
+    description: Anthropic Claude (default provider in MVP)
+
+  openai:
+    adapter: openai
+    base_url: https://api.openai.com/v1
+    env_var: OPENAI_API_KEY
+    default_model: gpt-4o
+    tier: western
+    description: OpenAI GPT (reference implementation)
+
+  google:
+    adapter: google_genai
+    base_url: https://generativelanguage.googleapis.com
+    env_var: GOOGLE_API_KEY
+    default_model: gemini-2.0-flash
+    tier: western
+    description: Google Gemini
+
+  xai:
+    adapter: openai_compat
+    base_url: https://api.x.ai/v1
+    env_var: XAI_API_KEY
+    default_model: grok-2
+    tier: western
+    description: xAI Grok (OpenAI-compatible API)
+
+  # ---------------------------------------------------------------- chinese
+  deepseek:
+    adapter: openai_compat
+    base_url: https://api.deepseek.com/v1
+    env_var: DEEPSEEK_API_KEY
+    default_model: deepseek-chat
+    tier: chinese
+    description: DeepSeek V3 / R1 (best cost/quality for code)
+
+  qwen:
+    adapter: openai_compat
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    env_var: DASHSCOPE_API_KEY
+    default_model: qwen3-coder-plus
+    tier: chinese
+    description: Alibaba Qwen via DashScope OpenAI-compatible endpoint
+
+  glm:
+    adapter: openai_compat
+    base_url: https://open.bigmodel.cn/api/paas/v4
+    env_var: ZHIPUAI_API_KEY
+    default_model: glm-4.5
+    tier: chinese
+    description: Zhipu AI GLM (free tier via glm-4-flash)
+
+  mimo:
+    adapter: openai_compat
+    base_url: https://api.mimo.xiaomi.com/v1
+    env_var: MIMO_API_KEY
+    default_model: mimo-7b-rl
+    tier: chinese
+    description: Xiaomi MiMo (reasoning for code/agent tasks)
+
+  moonshot:
+    adapter: openai_compat
+    base_url: https://api.moonshot.cn/v1
+    env_var: MOONSHOT_API_KEY
+    default_model: kimi-k2
+    tier: chinese
+    description: Moonshot / Kimi (long-context, agent-optimized)
+
+  baichuan:
+    adapter: openai_compat
+    base_url: https://api.baichuan-ai.com/v1
+    env_var: BAICHUAN_API_KEY
+    default_model: baichuan4-turbo
+    tier: chinese
+    description: Baichuan AI
+
+  minimax:
+    adapter: openai_compat
+    base_url: https://api.minimax.chat/v1
+    env_var: MINIMAX_API_KEY
+    default_model: MiniMax-Text-01
+    tier: chinese
+    description: Minimax (MiniMax-Text-01 — 1M context window)
+
+  stepfun:
+    adapter: openai_compat
+    base_url: https://api.stepfun.com/v1
+    env_var: STEPFUN_API_KEY
+    default_model: step-1-8k
+    tier: chinese
+    description: StepFun (step-2 — reasoning model)
+
+  yi:
+    adapter: openai_compat
+    base_url: https://api.lingyiwanwu.com/v1
+    env_var: YI_API_KEY
+    default_model: yi-large
+    tier: chinese
+    description: 01.AI Yi
+
+  iflytek:
+    adapter: openai_compat
+    base_url: https://spark-api-open.xf-yun.com/v1
+    env_var: IFLYTEK_API_KEY
+    default_model: generalv3.5
+    tier: chinese
+    description: iFlyTek Spark (OpenAI-compatible HTTP API)
+
+  sensenova:
+    adapter: openai_compat
+    base_url: https://api.sensenova.cn/compatible-mode/v1
+    env_var: SENSENOVA_API_KEY
+    default_model: SenseChat-5
+    tier: chinese
+    description: SenseTime SenseNova
+
+  doubao:
+    adapter: openai_compat
+    base_url: https://ark.cn-beijing.volces.com/api/v3
+    env_var: ARK_API_KEY
+    default_model: doubao-pro-32k
+    tier: chinese
+    description: ByteDance Doubao via Volcengine Ark
+
+  hunyuan:
+    adapter: openai_compat
+    base_url: https://api.hunyuan.cloud.tencent.com/v1
+    env_var: HUNYUAN_API_KEY
+    default_model: hunyuan-pro
+    tier: chinese
+    description: Tencent Hunyuan (hunyuan-code for code-gen)
+
+  ernie:
+    adapter: openai_compat
+    base_url: https://qianfan.baidubce.com/v2
+    env_var: ERNIE_API_KEY
+    default_model: ernie-4.0-turbo-8k
+    tier: chinese
+    description: Baidu ERNIE via Qianfan OpenAI-compatible endpoint
+
+  # ------------------------------------------------------------- aggregators
+  openrouter:
+    adapter: openai_compat
+    base_url: https://openrouter.ai/api/v1
+    env_var: OPENROUTER_API_KEY
+    default_model: anthropic/claude-3.5-sonnet
+    tier: aggregator
+    extra_headers:
+      HTTP-Referer: https://github.com/Reider85/OryaAgent
+      X-Title: OryaAgent
+    description: OpenRouter (300+ models, single billing)
+
+  together:
+    adapter: openai_compat
+    base_url: https://api.together.xyz/v1
+    env_var: TOGETHER_API_KEY
+    default_model: meta-llama/Llama-3.3-70B-Instruct-Turbo
+    tier: aggregator
+    description: Together AI (200+ OSS models)
+
+  groq:
+    adapter: openai_compat
+    base_url: https://api.groq.com/openai/v1
+    env_var: GROQ_API_KEY
+    default_model: llama-3.3-70b-versatile
+    tier: aggregator
+    description: Groq (LPU inference, 500+ TPS)
+
+  fireworks:
+    adapter: openai_compat
+    base_url: https://api.fireworks.ai/inference/v1
+    env_var: FIREWORKS_API_KEY
+    default_model: accounts/fireworks/models/llama-v3p3-70b-instruct
+    tier: aggregator
+    description: Fireworks AI (serverless OSS inference)
+
+  siliconflow:
+    adapter: openai_compat
+    base_url: https://api.siliconflow.cn/v1
+    env_var: SILICONFLOW_API_KEY
+    default_model: deepseek-ai/DeepSeek-V3
+    tier: aggregator
+    description: SiliconFlow (Chinese aggregator, free tier)
+
+  nvidia:
+    adapter: openai_compat
+    base_url: https://integrate.api.nvidia.com/v1
+    env_var: NVIDIA_API_KEY
+    default_model: meta/llama-3.3-70b-instruct
+    tier: aggregator
+    description: NVIDIA NIM (1000 free requests)
+
+  cerebras:
+    adapter: openai_compat
+    base_url: https://api.cerebras.ai/v1
+    env_var: CEREBRAS_API_KEY
+    default_model: llama-3.3-70b
+    tier: aggregator
+    description: Cerebras (CS-3 wafer-scale, 1500+ TPS)
+
+  sambanova:
+    adapter: openai_compat
+    base_url: https://api.sambanova.ai/v1
+    env_var: SAMBANOVA_API_KEY
+    default_model: Meta-Llama-3.3-70B-Instruct
+    tier: aggregator
+    description: SambaNova (RDU acceleration)
+
+  # ------------------------------------------------------------------ local
+  ollama:
+    adapter: openai_compat
+    base_url: http://localhost:11434/v1
+    env_var: null
+    api_key_placeholder: ollama
+    default_model: qwen2.5-coder:14b
+    tier: local
+    description: Ollama (default local dev server)
+
+  lmstudio:
+    adapter: openai_compat
+    base_url: http://localhost:1234/v1
+    env_var: null
+    api_key_placeholder: lm-studio
+    default_model: qwen2.5-coder-7b-instruct
+    tier: local
+    description: LM Studio local server
+
+  vllm:
+    adapter: openai_compat
+    base_url: http://localhost:8000/v1
+    env_var: null
+    api_key_placeholder: vllm
+    default_model: Qwen/Qwen2.5-7B-Instruct
+    tier: local
+    description: vLLM OpenAI-compatible API server
+
+  llamacpp:
+    adapter: openai_compat
+    base_url: http://localhost:8080/v1
+    env_var: null
+    api_key_placeholder: llama.cpp
+    default_model: local-model
+    tier: local
+    description: llama.cpp server (llama-server)
+
+  tgi:
+    adapter: openai_compat
+    base_url: http://localhost:8090/v1
+    env_var: null
+    api_key_placeholder: tgi
+    default_model: local-model
+    tier: local
+    description: HuggingFace Text Generation Inference
+
+  localai:
+    adapter: openai_compat
+    base_url: http://localhost:8081/v1
+    env_var: null
+    api_key_placeholder: localai
+    default_model: local-model
+    tier: local
+    description: LocalAI (drop-in OpenAI replacement)
+
+  jan:
+    adapter: openai_compat
+    base_url: http://localhost:1337/v1
+    env_var: null
+    api_key_placeholder: jan
+    default_model: local-model
+    tier: local
+    description: Jan local server
+
+  gpt4all:
+    adapter: openai_compat
+    base_url: http://localhost:4891/v1
+    env_var: null
+    api_key_placeholder: gpt4all
+    default_model: local-model
+    tier: local
+    description: GPT4All desktop local inference

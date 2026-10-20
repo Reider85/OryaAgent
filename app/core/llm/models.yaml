@@ -1,0 +1,321 @@
+# Model alias registry for the OryaAgent LLM seam (M-01).
+# Declarative mapping: alias -> (provider, model_id, capabilities).
+# Business code refers to models via aliases — never hardcode model ids.
+#
+# Fields:
+#   alias            - stable name used in config / UI / code
+#   provider         - must exist in providers.yaml
+#   model_id         - actual model string sent to the provider API
+#   context_window   - max context tokens (informational, used by M-06 later)
+#   supports_tools   - false for reasoning models without function-calling
+#   supports_streaming
+#   suggests         - recommended replacement when supports_tools is false
+
+models:
+  # ---------------------------------------------------------------- western
+  - alias: claude-sonnet-3.5
+    provider: anthropic
+    model_id: claude-3-5-sonnet-latest
+    context_window: 200000
+    supports_tools: true
+    supports_streaming: true
+    description: Default MVP model (Anthropic)
+
+  - alias: claude-opus-4
+    provider: anthropic
+    model_id: claude-opus-4-20250514
+    context_window: 200000
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: claude-haiku-3.5
+    provider: anthropic
+    model_id: claude-3-5-haiku-latest
+    context_window: 200000
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: gpt-4o
+    provider: openai
+    model_id: gpt-4o
+    context_window: 128000
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: gpt-4-turbo
+    provider: openai
+    model_id: gpt-4-turbo
+    context_window: 128000
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: gpt-4o-mini
+    provider: openai
+    model_id: gpt-4o-mini
+    context_window: 128000
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: o1
+    provider: openai
+    model_id: o1
+    context_window: 200000
+    supports_tools: false
+    supports_streaming: false
+    suggests: gpt-4o
+    description: Reasoning model — no tool-calling in MVP
+
+  - alias: o3-mini
+    provider: openai
+    model_id: o3-mini
+    context_window: 200000
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: gemini-2.0-flash
+    provider: google
+    model_id: gemini-2.0-flash
+    context_window: 1000000
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: gemini-1.5-pro
+    provider: google
+    model_id: gemini-1.5-pro
+    context_window: 2000000
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: gemini-1.5-flash
+    provider: google
+    model_id: gemini-1.5-flash
+    context_window: 1000000
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: grok-2
+    provider: xai
+    model_id: grok-2
+    context_window: 131072
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: grok-beta
+    provider: xai
+    model_id: grok-beta
+    context_window: 8192
+    supports_tools: true
+    supports_streaming: true
+
+  # ---------------------------------------------------------------- chinese
+  - alias: deepseek-chat
+    provider: deepseek
+    model_id: deepseek-chat
+    context_window: 128000
+    supports_tools: true
+    supports_streaming: true
+    description: DeepSeek V3 — recommended default for code
+
+  - alias: deepseek-reasoner
+    provider: deepseek
+    model_id: deepseek-reasoner
+    context_window: 64000
+    supports_tools: false
+    supports_streaming: true
+    suggests: deepseek-chat
+    description: DeepSeek R1 — reasoning without tool-calling
+
+  - alias: deepseek-coder
+    provider: deepseek
+    model_id: deepseek-coder
+    context_window: 128000
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: qwen-coder
+    provider: qwen
+    model_id: qwen3-coder-plus
+    context_window: 256000
+    supports_tools: true
+    supports_streaming: true
+    description: Qwen3-Coder — strongest code model (alias per spec)
+
+  - alias: qwen-max
+    provider: qwen
+    model_id: qwen-max
+    context_window: 32768
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: qwen-plus
+    provider: qwen
+    model_id: qwen-plus
+    context_window: 131072
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: qwen2.5-72b
+    provider: qwen
+    model_id: qwen2.5-72b-instruct
+    context_window: 131072
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: glm-4.5
+    provider: glm
+    model_id: glm-4.5
+    context_window: 128000
+    supports_tools: true
+    supports_streaming: true
+    description: GLM-4.5 reasoning model
+
+  - alias: glm-4-plus
+    provider: glm
+    model_id: glm-4-plus
+    context_window: 128000
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: glm-4-flash
+    provider: glm
+    model_id: glm-4-flash
+    context_window: 128000
+    supports_tools: true
+    supports_streaming: true
+    description: Free-tier GLM model
+
+  - alias: glm-zero-preview
+    provider: glm
+    model_id: glm-zero-preview
+    context_window: 128000
+    supports_tools: false
+    supports_streaming: true
+    suggests: glm-4.5
+    description: GLM-Zero — reasoning without tool-calling
+
+  - alias: mimo-7b-rl
+    provider: mimo
+    model_id: mimo-7b-rl
+    context_window: 32768
+    supports_tools: false
+    supports_streaming: true
+    suggests: deepseek-chat
+    description: Xiaomi MiMo-7B-RL — partial tool support, treat as chat-only
+
+  - alias: kimi-k2
+    provider: moonshot
+    model_id: kimi-k2
+    context_window: 200000
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: moonshot-v1-128k
+    provider: moonshot
+    model_id: moonshot-v1-128k
+    context_window: 131072
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: baichuan4-turbo
+    provider: baichuan
+    model_id: baichuan4-turbo
+    context_window: 32768
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: minimax-text-01
+    provider: minimax
+    model_id: MiniMax-Text-01
+    context_window: 1000000
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: step-2-16k
+    provider: stepfun
+    model_id: step-2-16k
+    context_window: 16384
+    supports_tools: true
+    supports_streaming: true
+    description: StepFun step-2 reasoning model
+
+  - alias: yi-large
+    provider: yi
+    model_id: yi-large
+    context_window: 32768
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: spark-v4
+    provider: iflytek
+    model_id: spark-v4
+    context_window: 128000
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: sensechat-5
+    provider: sensenova
+    model_id: SenseChat-5
+    context_window: 128000
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: doubao-pro-32k
+    provider: doubao
+    model_id: doubao-pro-32k
+    context_window: 32768
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: hunyuan-code
+    provider: hunyuan
+    model_id: hunyuan-code
+    context_window: 32768
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: ernie-x1
+    provider: ernie
+    model_id: ernie-x1
+    context_window: 128000
+    supports_tools: true
+    supports_streaming: true
+    description: ERNIE X1 reasoning model
+
+  # ------------------------------------------------------------- aggregators
+  - alias: openrouter-claude
+    provider: openrouter
+    model_id: anthropic/claude-3.5-sonnet
+    context_window: 200000
+    supports_tools: true
+    supports_streaming: true
+    description: OpenRouter default (Claude via aggregator)
+
+  - alias: groq-llama-3.3-70b
+    provider: groq
+    model_id: llama-3.3-70b-versatile
+    context_window: 131072
+    supports_tools: true
+    supports_streaming: true
+
+  - alias: siliconflow-deepseek-v3
+    provider: siliconflow
+    model_id: deepseek-ai/DeepSeek-V3
+    context_window: 131072
+    supports_tools: true
+    supports_streaming: true
+
+  # ------------------------------------------------------------------ local
+  - alias: ollama-coder
+    provider: ollama
+    model_id: qwen2.5-coder:14b
+    context_window: 32768
+    supports_tools: true
+    supports_streaming: true
+    description: Default local dev model (Ollama)
+
+  - alias: lmstudio-coder
+    provider: lmstudio
+    model_id: qwen2.5-coder-7b-instruct
+    context_window: 32768
+    supports_tools: true
+    supports_streaming: true

@@ -2,9 +2,9 @@
 
 Senior Python coding agent with UI and long-term memory.
 
-## Phase: MVP (M-00 Bootstrap)
+## Phase: MVP
 
-This is the bootstrap phase (M-00) of OryaAgent v7.0. The project structure has been initialized and is ready for development.
+Tickets M-00 (bootstrap) and M-01 (LLM-provider-seam) are implemented.
 
 ## Quick Start
 
@@ -85,11 +85,29 @@ tests/                  # Test suites
 
 ## Phase Progress
 
-- ✅ **M-00** - Bootstrap project structure (this phase)
-- 📋 **M-01** - LLM-provider-seam (next)
-- 📋 **M-02** - pydantic-settings configuration
+- ✅ **M-00** - Bootstrap project structure
+- ✅ **M-01** - LLM-provider-seam: `get_llm()`, 34 providers (YAML registries), importers, `/llm/*` endpoints
+- 📋 **M-02** - pydantic-settings configuration (next)
 - 📋 **M-03** - PostgreSQL schema
 - ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for full 28 tickets)
+
+## LLM Providers (M-01)
+
+The agent is provider-agnostic: all models are constructed through a single seam.
+
+```python
+from app.core.llm import get_llm
+
+llm = get_llm("deepseek", "deepseek-chat")        # Chinese provider (OpenAI-compat)
+llm = get_llm("anthropic", "claude-sonnet-3.5")   # Western provider (native)
+llm = get_llm("ollama", "ollama-coder")           # Local server
+```
+
+- **Registry:** `app/core/llm/providers.yaml` (34 providers) + `models.yaml` (41 aliases) — to add a provider, add a YAML entry; no code changes needed for OpenAI-compatible endpoints.
+- **Capability detection:** reasoning models without tool-calling (`deepseek-reasoner`, `o1`, `glm-zero-preview`) fail fast with a suggested replacement; pass `require_tools=False` for plain chat.
+- **API keys:** env vars (`DEEPSEEK_API_KEY`, `DASHSCOPE_API_KEY`, ...) or `ORYA_LLM_API_KEY`; see `.env.example`.
+- **Import from another agent:** `orya import --from opencode|continue|aider`.
+- **Registry endpoints:** `GET /llm/providers`, `GET /llm/models`, `GET /llm/health/{provider}`.
 
 ## Notes
 

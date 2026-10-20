@@ -134,5 +134,11 @@ Thumbs.db
 sessions/
 memory/
 
+# Chainlit runtime artifacts (auto-generated config + translations)
+.chainlit/
+
+# Ruff
+.ruff_cache/
+
 # Docker
 .dockerignore
