@@ -46,6 +46,10 @@ def main() -> None:
         help="Source agent to import from",
     )
 
+    db_parser = sub.add_parser("db", help="Database commands")
+    db_sub = db_parser.add_subparsers(dest="db_command")
+    db_sub.add_parser("migrate", help="Apply pending SQL migrations (M-03)")
+
     args = parser.parse_args()
     if args.command == "import":
         from app.core.llm.importers import IMPORTERS
@@ -64,6 +68,23 @@ def main() -> None:
                 print(f"    export {var}=...")
         for note in report.notes:
             print(f"  Note: {note}")
+    elif args.command == "db" and args.db_command == "migrate":
+        import asyncio
+
+        from app.db import apply_migrations, close_pool, get_asyncpg_pool
+
+        async def _run_migrations() -> list[str]:
+            pool = await get_asyncpg_pool()
+            try:
+                return await apply_migrations(pool)
+            finally:
+                await close_pool()
+
+        applied = asyncio.run(_run_migrations())
+        if applied:
+            print(f"Applied migrations: {', '.join(applied)}")
+        else:
+            print("No pending migrations.")
     else:
         parser.print_help()
 

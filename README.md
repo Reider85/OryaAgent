@@ -4,7 +4,7 @@ Senior Python coding agent with UI and long-term memory.
 
 ## Phase: MVP
 
-Tickets M-00 (bootstrap), M-01 (LLM-provider-seam) and M-02 (configuration) are implemented.
+Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration) and M-03 (PostgreSQL schema) are implemented.
 
 ## Quick Start
 
@@ -53,6 +53,7 @@ Tickets M-00 (bootstrap), M-01 (LLM-provider-seam) and M-02 (configuration) are 
 - `make lint` - Lint code with ruff
 - `make format` - Format code with ruff
 - `make clean` - Clean up build artifacts
+- `make db-up` / `make db-migrate` / `make db-down` - PostgreSQL lifecycle (M-03)
 
 ### Configuration
 
@@ -95,6 +96,22 @@ tests/                  # Test suites
 └── conftest.py         # Test configuration
 ```
 
+## Database (M-03)
+
+PostgreSQL stores session metadata, typed messages, tool-call audit and the memory audit log; LangGraph checkpoints live in separate tables managed by `AsyncPostgresSaver`.
+
+- **Schema:** `app/db/schema.sql` (canonical) — tables `sessions`, `messages`, `tool_calls`, `memory_audit_log`.
+- **Migrations:** plain SQL files in `app/db/migrations/` (`NNNN_name.sql`), tracked in `schema_migrations`, applied idempotently:
+
+  ```bash
+  make db-up       # start PostgreSQL via docker compose
+  make db-migrate  # apply pending migrations (or: orya db migrate / python -m app.db.migrate)
+  ```
+
+  Host port conflicts can be resolved with `POSTGRES_PORT=5435 make db-up` (plus a matching `DATABASE_URL`).
+- **Pool:** `from app.db import get_asyncpg_pool` — lazy asyncpg singleton from `settings.database_url` / `DATABASE_POOL_SIZE` / `DATABASE_MAX_OVERFLOW`.
+- **Checkpoints (M-04 wiring):** `from app.db.checkpoints import get_checkpointer` — `AsyncPostgresSaver` over the same database; `setup()` creates/migrates `checkpoints*` tables. On Windows, psycopg requires a `SelectorEventLoop` (uvicorn already uses one).
+
 ## Documentation
 
 - [Architecture v7](analytics/ARCHITECT7.md)
@@ -107,7 +124,8 @@ tests/                  # Test suites
 - ✅ **M-00** - Bootstrap project structure
 - ✅ **M-01** - LLM-provider-seam: `get_llm()`, 34 providers (YAML registries), importers, `/llm/*` endpoints
 - ✅ **M-02** - pydantic-settings configuration: `Settings`, `~/.orya/config.yaml` merge, env/.env priority
-- 📋 **M-03** - PostgreSQL schema
+- ✅ **M-03** - PostgreSQL schema: `schema.sql` (4 tables), asyncpg pool, SQL migrations (`orya db migrate`), PostgresSaver checkpoints
+- 📋 **M-04** - LangGraph core
 - ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for full 28 tickets)
 
 ## LLM Providers (M-01)

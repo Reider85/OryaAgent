@@ -1,4 +1,4 @@
-.PHONY: dev test lint clean install
+.PHONY: dev test lint clean install format check-lint check-format setup db-up db-migrate db-down
 
 # Install dependencies
 install:
@@ -42,3 +42,13 @@ check-lint:
 # Quick format check (no linting)
 check-format:
 	uv run ruff format --check .
+
+# Database (M-03)
+db-up:
+	docker compose up -d postgres
+
+db-migrate:
+	uv run python -m app.db.migrate
+
+db-down:
+	docker compose down
