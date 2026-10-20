@@ -67,7 +67,10 @@ logger = logging.getLogger(__name__)
 #: M-05 (``app/core/prompt.py``) plugs its ``build_system_prompt`` in here —
 #: the agent-loop itself must not import the prompt module (M-05 depends on
 #: M-04, not the other way round).
-SystemPromptFn = Callable[[Any, Sequence[Any]], "str | BaseMessage | None"]
+SystemPromptFn = Callable[
+    [Any, Sequence[Any]],
+    "str | BaseMessage | Sequence[BaseMessage] | None",
+]
 
 
 class PolicyLike(Protocol):
@@ -155,8 +158,8 @@ def build_graph(
         policy: Permission policy (M-13). When omitted, the graph runs in
             auto mode (no interrupts) and never denies a tool call.
         system_prompt_fn: Optional callable ``(state, tools) -> str |
-            BaseMessage | None`` used to prepend a system prompt. M-05 injects
-            ``build_system_prompt`` here.
+            BaseMessage | Sequence[BaseMessage] | None`` used to prepend a
+            system prompt. M-05 injects ``build_system_prompt`` here.
 
     Returns:
         The compiled LangGraph state graph.

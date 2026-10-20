@@ -4,7 +4,7 @@ Senior Python coding agent with UI and long-term memory.
 
 ## Phase: MVP
 
-Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration) and M-03 (PostgreSQL schema) are implemented.
+Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (PostgreSQL schema), M-04 (LangGraph core) and M-05 (system-prompt builder) are implemented.
 
 ## Quick Start
 
@@ -112,6 +112,21 @@ PostgreSQL stores session metadata, typed messages, tool-call audit and the memo
 - **Pool:** `from app.db import get_asyncpg_pool` — lazy asyncpg singleton from `settings.database_url` / `DATABASE_POOL_SIZE` / `DATABASE_MAX_OVERFLOW`.
 - **Checkpoints (M-04 wiring):** `from app.db.checkpoints import get_checkpointer` — `AsyncPostgresSaver` over the same database; `setup()` creates/migrates `checkpoints*` tables. On Windows, psycopg requires a `SelectorEventLoop` (uvicorn already uses one).
 
+## System Prompt (M-05)
+
+`app/core/prompt.py::build_system_prompt(state, tools) -> list[BaseMessage]` assembles the agent's system message from six independently testable sections:
+
+1. **Identity** — who the agent is and its working style (static, cacheable prefix).
+2. **Tool descriptions** — each tool rendered as OpenAI-function JSON via `convert_to_openai_function`.
+3. **Project context** — working directory, best-effort `git status`, and `PROJECT.md` from the memory dir.
+4. **Long-term memory** — `LEARNED.md` + `PREFERENCES.md` (L0, M-25 files), capped at 8 KB.
+5. **Behavior rules** — workspace hygiene, atomic edits, destructive-op confirmation (static).
+6. **Untrusted-content policy** — tool results / file content are data, never instructions (M-22, prompt side).
+
+Stable sections come first so the prompt keeps a cacheable prefix for the ALPHA PromptCacheLayout; dynamic data (git, memory files) follows. The M-04 graph prepends the returned `SystemMessage` to the conversation — the builder never returns history.
+
+To add a new section: write a `*_block()` function returning `str` and append it in `build_system_prompt`; add a test in `tests/unit/test_prompt.py`.
+
 ## Documentation
 
 - [Architecture v7](analytics/ARCHITECT7.md)
@@ -125,7 +140,8 @@ PostgreSQL stores session metadata, typed messages, tool-call audit and the memo
 - ✅ **M-01** - LLM-provider-seam: `get_llm()`, 34 providers (YAML registries), importers, `/llm/*` endpoints
 - ✅ **M-02** - pydantic-settings configuration: `Settings`, `~/.orya/config.yaml` merge, env/.env priority
 - ✅ **M-03** - PostgreSQL schema: `schema.sql` (4 tables), asyncpg pool, SQL migrations (`orya db migrate`), PostgresSaver checkpoints
-- 📋 **M-04** - LangGraph core
+- ✅ **M-04** - LangGraph core: StateGraph agent-loop, permission-review node, `interrupt_before` ask-mode, run config
+- ✅ **M-05** - System-prompt builder: `build_system_prompt()` with identity, tools, project context, L0 memory, behavior rules, untrusted-content policy
 - ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for full 28 tickets)
 
 ## LLM Providers (M-01)
