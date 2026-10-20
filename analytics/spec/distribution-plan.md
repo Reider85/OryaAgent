@@ -3,7 +3,7 @@
 **Документ:** distribution-plan
 **Дата:** 20 октября 2026
 **Статус:** Draft v0.1
-**Связанные документы:** [README.md](../README.md), [enterprise-features.md](enterprise-features.md), [risk-register.md](risk-register.md)
+**Связанные документы:** [README.md](../../README.md), [enterprise-features.md](enterprise-features.md), [risk-register.md](risk-register.md)
 
 ---
 
@@ -562,7 +562,7 @@ Top questions (predicted):
   A: Yes, Ollama is supported out of the box. See [guide/providers](docs/guide/providers.md).
 
 - **Q: Is my code sent to cloud?**
-  A: Only if you choose cloud LLM. With Ollama — fully local. Audit log is local. See [SECURITY.md](SECURITY.md).
+  A: Only if you choose cloud LLM. With Ollama — fully local. Audit log is local. See [SECURITY.md](../SECURITY.md).
 
 - **Q: Can I use this in CI/CD?**
   A: Yes, `orya --auto` mode for non-interactive usage. See [guide/ci-cd](docs/guide/ci-cd.md).
@@ -571,7 +571,7 @@ Top questions (predicted):
   A: OryaAgent itself is free. LLM API costs depend on your usage (~$0.01-0.50 per session with Claude Sonnet).
 
 - **Q: Can I contribute?**
-  A: Yes! See [CONTRIBUTING.md](CONTRIBUTING.md). We welcome LLM adapters, tools, docs, tests.
+  A: Yes! See [CONTRIBUTING.md](../CONTRIBUTING.md). We welcome LLM adapters, tools, docs, tests.
 
 ## 7. Enterprise distribution
 

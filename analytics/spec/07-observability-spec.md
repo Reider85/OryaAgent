@@ -3,7 +3,7 @@
 **Документ:** 07-observability-spec
 **Дата:** 20 октября 2026
 **Статус:** Draft v0.1
-**Связанные документы:** [01-module-contracts.md](01-module-contracts.md), [02-llm-adapter-spec.md](02-llm-adapter-spec.md), [enterprise-features.md](../enterprise-features.md)
+**Связанные документы:** [01-module-contracts.md](01-module-contracts.md), [02-llm-adapter-spec.md](02-llm-adapter-spec.md), [enterprise-features.md](enterprise-features.md)
 
 ---
 

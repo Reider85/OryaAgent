@@ -3,13 +3,13 @@
 **Документ:** competitors-extra
 **Дата:** 20 октября 2026
 **Статус:** Draft v0.1
-**Связанные документы:** [agents-architect.md](agents-architect.md), [product/personas.md](product/personas.md)
+**Связанные документы:** [agents-architect.md](../agents-architect.md), [product/personas.md](product/personas.md)
 
 ---
 
 ## 0. Назначение
 
-[`agents-architect.md`](agents-architect.md) детально разобрал 5 architecture-line: Claude Code, OpenCode, Kilo Code, DeepSeek Harness, MiMoCode. Но рынок coding-агентов шире. Этот документ дополняет картину 6-ю продуктами, которые имеют принципиально другие архитектурные подходы или занимают разные ниши:
+[`agents-architect.md`](../agents-architect.md) детально разобрал 5 architecture-line: Claude Code, OpenCode, Kilo Code, DeepSeek Harness, MiMoCode. Но рынок coding-агентов шире. Этот документ дополняет картину 6-ю продуктами, которые имеют принципиально другие архитектурные подходы или занимают разные ниши:
 
 1. **Cursor** — IDE-native подход
 2. **Aider** — git-oriented workflow

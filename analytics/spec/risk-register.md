@@ -3,7 +3,7 @@
 **Документ:** risk-register
 **Дата:** 20 октября 2026
 **Статус:** Living document — обновляется при появлении новых рисков
-**Связанные документы:** [self-agent.md](self-agent.md), [competitors-extra.md](competitors-extra.md), [05-security-model.md](spec/05-security-model.md)
+**Связанные документы:** [self-agent.md](../self-agent.md), [competitors-extra.md](competitors-extra.md), [05-security-model.md](05-security-model.md)
 
 ---
 
@@ -118,7 +118,7 @@
 
 **Mitigation:**
 - Ask-mode по умолчанию (см. ADR-004) — destructive actions требуют подтверждения
-- System prompt с явным предупреждением о prompt injection (см. [05-security-model.md](spec/05-security-model.md) раздел 3.2.1)
+- System prompt с явным предупреждением о prompt injection (см. [05-security-model.md](05-security-model.md) раздел 3.2.1)
 - Content marking: user input и tool-results помечаются явно
 - Untrusted sources (node_modules, vendor/) — отдельная маркировка
 - Sensitive files detection — access к `.env` etc. требует подтверждения
@@ -129,7 +129,7 @@
 - Pen-test обнаруживает bypass
 - New attack vector в public research
 
-**План:** Incident response procedure (см. [05-security-model.md](spec/05-security-model.md) раздел 10). Если protection не сработала — post-mortem, обновить defense layers.
+**План:** Incident response procedure (см. [05-security-model.md](05-security-model.md) раздел 10). Если protection не сработала — post-mortem, обновить defense layers.
 
 ### R-004: Конкурент (Codex CLI, Aider) выпускает killer feature
 
@@ -222,7 +222,7 @@
 **Описание:** Sensitive data (API keys, пароли, personal data) попадает в session-log или audit-log без redaction. Если лог утекает (например, при bug report) — sensitive data раскрывается.
 
 **Mitigation:**
-- Sensitive pattern detection (см. [05-security-model.md](spec/05-security-model.md) раздел 6.2.4) — redacts API keys, tokens
+- Sensitive pattern detection (см. [05-security-model.md](05-security-model.md) раздел 6.2.4) — redacts API keys, tokens
 - Sensitive file detection — access требует подтверждения
 - Audit log — только `input_hash`, не полный input
 - Session log — `0600` permissions
@@ -248,7 +248,7 @@
 **Описание:** Новый релиз замедляет cold start, LLM-token-to-render latency, или session-load time. Пользователи жалуются.
 
 **Mitigation:**
-- Performance tests в CI (см. [06-testing-strategy.md](spec/06-testing-strategy.md) раздел 2.5)
+- Performance tests в CI (см. [06-testing-strategy.md](06-testing-strategy.md) раздел 2.5)
 - Nightly benchmarks с trend tracking
 - LLM-token-to-render <50ms — SLO
 - Cold start <500ms — SLO
@@ -466,7 +466,7 @@
 
 - **Internal:** Risk register — internal document, доступный core team
 - **Public summary:** Top-5 risks упомянуты в README «Known limitations»
-- **Security incidents:** Disclosed через SECURITY.md policy, см. [05-security-model.md](spec/05-security-model.md) раздел 10
+- **Security incidents:** Disclosed через SECURITY.md policy, см. [05-security-model.md](05-security-model.md) раздел 10
 
 ## 7. История изменений
 

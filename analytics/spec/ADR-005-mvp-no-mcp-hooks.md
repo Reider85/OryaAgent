@@ -95,7 +95,7 @@ MCP-клиент и hooks-система — отложены на v0.2.0 (по 
 
 6. **Community пока нет.** Зачем MCP-совместимость, если нет MCP-серверов, специфичных для OryaAgent? Когда community вырастет — MCP будет обоснован.
 
-7. **Enterprise-расширения — через audit-log + config.** Большинство enterprise use cases (audit forwarding, custom telemetry, MDM policies) можно решить через configuration + audit-log forwarding, без hooks. См. [enterprise-features.md](../enterprise-features.md).
+7. **Enterprise-расширения — через audit-log + config.** Большинство enterprise use cases (audit forwarding, custom telemetry, MDM policies) можно решить через configuration + audit-log forwarding, без hooks. См. [enterprise-features.md](enterprise-features.md).
 
 8. **Migration path определён.** Когда MCP-клиент будет добавлен (v0.2.0), его API будет совместим с Model Context Protocol стандартом — community MCP-серверы будут работать из коробки. Migration cost — нулевой для пользователей (не было MCP до v0.2.0, появился — opt-in).
 
@@ -244,6 +244,6 @@ Configuration-driven telemetry — без hooks. Только predefined metrics
 - [self-agent.md](../self-agent.md) — пункт «Что сознательно НЕ делаем в MVP»
 - [agents-architect.md](../agents-architect.md) — вывод №4 «автономность надстраивается над циклом»
 - [01-module-contracts.md](../spec/01-module-contracts.md) — текущий MVP scope
-- [enterprise-features.md](../enterprise-features.md) — enterprise extension через config + audit
+- [enterprise-features.md](enterprise-features.md) — enterprise extension через config + audit
 - [Model Context Protocol](https://modelcontextprotocol.io/) — official spec
 - [Anthropic MCP introduction](https://www.anthropic.com/news/model-context-protocol)

@@ -3,7 +3,7 @@
 **Документ:** enterprise-features
 **Дата:** 20 октября 2026
 **Статус:** Draft v0.1
-**Связанные документы:** [README.md](../README.md), [05-security-model.md](spec/05-security-model.md), [07-observability-spec.md](spec/07-observability-spec.md), [distribution-plan.md](distribution-plan.md), [product/personas.md](product/personas.md)
+**Связанные документы:** [README.md](../../README.md), [05-security-model.md](05-security-model.md), [07-observability-spec.md](07-observability-spec.md), [distribution-plan.md](distribution-plan.md), [product/personas.md](product/personas.md)
 
 ---
 
@@ -447,7 +447,7 @@ audit:
 
 ### 6.2. Audit events
 
-Все audit events описаны в [05-security-model.md](spec/05-security-model.md) раздел 7. Enterprise добавляет:
+Все audit events описаны в [05-security-model.md](05-security-model.md) раздел 7. Enterprise добавляет:
 
 ```json
 {
