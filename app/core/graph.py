@@ -72,6 +72,12 @@ SystemPromptFn = Callable[
     "str | BaseMessage | Sequence[BaseMessage] | None",
 ]
 
+#: Signature of the optional context trimmer injected into the graph.
+#: M-06 (``app/core/context.py``) plugs its ``trim_messages`` in here —
+#: the agent-loop itself must not import the context module (M-04 depends
+#: on neither M-05 nor M-06; both are injected as seams).
+TrimFn = Callable[[list[BaseMessage]], list[BaseMessage]]
+
 
 class PolicyLike(Protocol):
     """Minimal permission-policy contract used by the graph (M-13).
@@ -147,6 +153,7 @@ def build_graph(
     policy: PolicyLike | None = None,
     *,
     system_prompt_fn: SystemPromptFn | None = None,
+    trim_fn: TrimFn | None = None,
 ) -> CompiledStateGraph:
     """Build the agent-loop graph.
 
@@ -160,6 +167,10 @@ def build_graph(
         system_prompt_fn: Optional callable ``(state, tools) -> str |
             BaseMessage | Sequence[BaseMessage] | None`` used to prepend a
             system prompt. M-05 injects ``build_system_prompt`` here.
+        trim_fn: Optional callable ``(messages) -> messages`` used to trim
+            the history to the context-window budget before the model
+            call. M-06 injects ``trim_messages`` here; the system prompt
+            is built after trimming and never enters the state.
 
     Returns:
         The compiled LangGraph state graph.
@@ -170,6 +181,8 @@ def build_graph(
     async def agent_node(state: MessagesState) -> dict[str, list[BaseMessage]]:
         """Call the model with the current conversation."""
         messages: list[BaseMessage] = list(state.get("messages") or [])
+        if trim_fn is not None:
+            messages = list(trim_fn(messages))
         if system_prompt_fn is not None:
             prompt = system_prompt_fn(state, tools)
             if isinstance(prompt, str):

@@ -59,6 +59,10 @@ _YAML_FALLBACKS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
         ("ORYA_RECURSION_LIMIT", "RECURSION_LIMIT"),
         ("recursion_limit",),
     ),
+    "context_max_tokens": (
+        ("ORYA_CONTEXT_MAX_TOKENS", "CONTEXT_MAX_TOKENS"),
+        ("context_max_tokens",),
+    ),
     "log_level": (("LOG_LEVEL", "ORYA_LOG_LEVEL"), ("log_level",)),
 }
 
@@ -139,6 +143,13 @@ class Settings(BaseSettings):
         default=25,
         validation_alias=AliasChoices("ORYA_RECURSION_LIMIT", "RECURSION_LIMIT"),
         description="Max agent-loop iterations (LangGraph recursion_limit)",
+    )
+
+    # --- Context manager (M-06) -------------------------------------------
+    context_max_tokens: int = Field(
+        default=120_000,
+        validation_alias=AliasChoices("ORYA_CONTEXT_MAX_TOKENS", "CONTEXT_MAX_TOKENS"),
+        description="Context-window budget; conversation history is trimmed to fit",
     )
 
     # --- Logging ---------------------------------------------------------

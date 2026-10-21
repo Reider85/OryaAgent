@@ -79,6 +79,7 @@ def test_defaults():
     assert s.redis_url == "redis://localhost:6379"
     assert s.permission_policy == "strict"
     assert s.recursion_limit == 25
+    assert s.context_max_tokens == 120_000
     assert s.log_level == "INFO"
     assert s.memory_dir == Path.home() / ".orya" / "memory"
     # Future-phase placeholders
@@ -163,6 +164,7 @@ def test_yaml_top_level_fallbacks(tmp_path: Path):
             "log_level": "WARNING",
             "redis_url": "redis://yaml-host:6379/1",
             "recursion_limit": 40,
+            "context_max_tokens": 64_000,
             "memory_dir": str(Path("~/.orya/custom-memory").expanduser()),
         },
         tmp_path,
@@ -173,6 +175,7 @@ def test_yaml_top_level_fallbacks(tmp_path: Path):
     assert s.log_level == "WARNING"
     assert s.redis_url == "redis://yaml-host:6379/1"
     assert s.recursion_limit == 40
+    assert s.context_max_tokens == 64_000
     assert s.memory_dir == Path.home() / ".orya" / "custom-memory"
 
 

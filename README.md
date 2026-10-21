@@ -4,7 +4,7 @@ Senior Python coding agent with UI and long-term memory.
 
 ## Phase: MVP
 
-Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (PostgreSQL schema), M-04 (LangGraph core) and M-05 (system-prompt builder) are implemented.
+Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (PostgreSQL schema), M-04 (LangGraph core), M-05 (system-prompt builder) and M-06 (context manager) are implemented.
 
 ## Quick Start
 
@@ -127,6 +127,20 @@ Stable sections come first so the prompt keeps a cacheable prefix for the ALPHA 
 
 To add a new section: write a `*_block()` function returning `str` and append it in `build_system_prompt`; add a test in `tests/unit/test_prompt.py`.
 
+## Context Manager (M-06)
+
+`app/core/context.py::trim_messages(messages, max_tokens=None) -> list[BaseMessage]` keeps the conversation within the context-window budget before each model call (default 120 000 tokens, `ORYA_CONTEXT_MAX_TOKENS`):
+
+1. **Tool-result truncation** — `ToolMessage` over 5 000 chars keeps the first 100 and last 50 lines with a `[N lines truncated]` marker (M-23 token-efficient output).
+2. **Thinking strip** — `reasoning_content` emitted by reasoning models (DeepSeek-R1, o1, GLM-Zero) is removed from the history; the final answer survives.
+3. **Sliding window** — LangChain `trim_messages` with `strategy="last"` (newest turns win), `start_on="human"` (never start mid-turn), `include_system=True` (a `SystemMessage` always survives), `allow_partial=False`.
+
+Token counting uses `tiktoken` for known OpenAI-family models and falls back to a `chars/4` approximation for every other provider (Claude, Gemini, DeepSeek, local models) — `encoding_for_model` is never called for unknown models.
+
+The M-04 graph does not import this module: it accepts an optional `trim_fn` seam on `build_graph()` (same pattern as `system_prompt_fn`), so `agent_node` trims the history before prepending the freshly built system prompt. `trim_state(state)` is a thin wrapper returning a `{"messages": ...}` state update.
+
+v7 BETA will replace the implementation with DFC (5 layers) — the `trim_messages(messages, max_tokens) -> list[BaseMessage]` signature is an architectural invariant and stays.
+
 ## Documentation
 
 - [Architecture v7](analytics/ARCHITECT7.md)
@@ -142,6 +156,7 @@ To add a new section: write a `*_block()` function returning `str` and append it
 - ✅ **M-03** - PostgreSQL schema: `schema.sql` (4 tables), asyncpg pool, SQL migrations (`orya db migrate`), PostgresSaver checkpoints
 - ✅ **M-04** - LangGraph core: StateGraph agent-loop, permission-review node, `interrupt_before` ask-mode, run config
 - ✅ **M-05** - System-prompt builder: `build_system_prompt()` with identity, tools, project context, L0 memory, behavior rules, untrusted-content policy
+- ✅ **M-06** - Context manager: `trim_messages()` — tool-result truncation, thinking strip, sliding window (`trim_fn` seam in the graph)
 - ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for full 28 tickets)
 
 ## LLM Providers (M-01)
