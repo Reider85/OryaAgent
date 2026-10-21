@@ -104,6 +104,29 @@ def route_after_agent(state: MessagesState) -> str:
     return END
 
 
+def _bind_tools(model: Any, tools: Sequence[Any]) -> Any:
+    """Bind tools to the chat model (PROMPT_MVP M-12: ``graph.bind_tools``).
+
+    Real providers (ChatAnthropic, ChatOpenAI, ...) implement
+    ``bind_tools()``; test doubles and minimal fake models may raise
+    ``NotImplementedError`` or lack the method entirely. The agent-loop
+    must keep working either way - LangGraph's ``ToolNode`` executes
+    whatever tool calls the model emits - so binding failures degrade
+    to an unbound model with a debug log instead of crashing.
+    """
+    bind = getattr(model, "bind_tools", None)
+    if bind is None or not tools:
+        return model
+    try:
+        return bind(list(tools))
+    except NotImplementedError:
+        logger.debug(
+            "Model %s does not support bind_tools; running unbound",
+            type(model).__name__,
+        )
+        return model
+
+
 def _deny_messages(tool_calls: Sequence[dict]) -> list[ToolMessage]:
     """Build ``ToolMessage`` placeholders for denied tool calls."""
     denied: list[ToolMessage] = []
@@ -173,10 +196,14 @@ def build_graph(
             is built after trimming and never enters the state.
 
     Returns:
-        The compiled LangGraph state graph.
+        The compiled LangGraph state graph. ``tools`` are bound to the
+        model via ``bind_tools`` when the model supports it (M-12);
+        models without ``bind_tools`` (test doubles) run unbound.
     """
     graph = StateGraph(MessagesState)
-    tool_node = ToolNode(list(tools))
+    tool_list = list(tools)
+    tool_node = ToolNode(tool_list)
+    bound_model = _bind_tools(model, tool_list)
 
     async def agent_node(state: MessagesState) -> dict[str, list[BaseMessage]]:
         """Call the model with the current conversation."""
@@ -191,7 +218,7 @@ def build_graph(
                 messages = [prompt, *messages]
             elif prompt:
                 messages = [*prompt, *messages]
-        response = await model.ainvoke(messages)
+        response = await bound_model.ainvoke(messages)
         return {"messages": [response]}
 
     human_node = build_human_node(policy)
@@ -211,9 +238,11 @@ def build_graph(
         interrupt_before=["tools"] if ask_mode else [],
     )
     logger.debug(
-        "Agent graph built: nodes=agent,tools,human ask_mode=%s checkpointer=%s",
+        "Agent graph built: nodes=agent,tools,human ask_mode=%s checkpointer=%s "
+        "tools_bound=%s",
         ask_mode,
         type(checkpointer).__name__ if checkpointer is not None else "none",
+        bound_model is not model,
     )
     return compiled
 
