@@ -4,7 +4,7 @@ Senior Python coding agent with UI and long-term memory.
 
 ## Phase: MVP
 
-Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (PostgreSQL schema), M-04 (LangGraph core), M-05 (system-prompt builder), M-06 (context manager), M-07 (tool `read`), M-08 (tool `write`) and M-09 (tool `edit`) are implemented.
+Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (PostgreSQL schema), M-04 (LangGraph core), M-05 (system-prompt builder), M-06 (context manager), M-07 (tool `read`), M-08 (tool `write`), M-09 (tool `edit`) and M-10 (tool `bash`) are implemented.
 
 ## Quick Start
 

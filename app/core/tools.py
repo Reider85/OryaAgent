@@ -10,7 +10,8 @@ MVP progress:
 * M-07 registers ``read`` - the first of the five coding tools;
 * M-08 registers ``write`` - the atomic file writer;
 * M-09 registers ``edit`` - the targeted string replacement;
-* M-10..M-11 add ``bash``, ``grep``/``glob`` here;
+* M-10 registers ``bash`` - the shell command tool;
+* M-11 registers ``grep``/``glob`` - the search tools;
 * M-12 completes the ticket (registration of all five + integration
   tests); v7 BETA wraps the list through ``CapabilityRegistry.filter``
   without changing this signature.
@@ -26,6 +27,7 @@ from __future__ import annotations
 
 from langchain_core.tools import BaseTool
 
+from app.tools.bash import bash
 from app.tools.edit import edit
 from app.tools.read import read
 from app.tools.write import write
@@ -38,4 +40,4 @@ def get_tools(session_id: str | None = None) -> list[BaseTool]:
     the MVP list is global.
     """
     del session_id  # reserved for M-12 per-session filtering
-    return [read, write, edit]
+    return [read, write, edit, bash]
