@@ -1,4 +1,4 @@
-"""Tool: read tests (M-07) - pagination, validation, cache seam, graph e2e."""
+"""Tool tests: read (M-07) and write (M-08) - pagination, validation, cache seam, atomic write, graph e2e."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from app.core.security import (
     UNTRUSTED_CONTENT_START,
 )
 from app.core.tools import get_tools
-from app.tools import read
+from app.tools import read, write
 from app.tools.read import DEFAULT_MAX_LINES
 
 
@@ -240,11 +240,10 @@ async def test_read_pagination_uses_separate_cache_entries(tmp_path: Path):
 # --- tool registry + graph wiring (partial M-12) -----------------------------
 
 
-def test_get_tools_returns_read():
+def test_get_tools_returns_read_and_write():
     tools = get_tools("session-1")
 
-    assert len(tools) == 1
-    assert tools[0].name == "read"
+    assert [t.name for t in tools] == ["read", "write"]
 
 
 def test_build_graph_binds_tools_when_supported():
@@ -262,7 +261,7 @@ def test_build_graph_binds_tools_when_supported():
     build_graph(get_tools(), model)
 
     assert model.bound is not None
-    assert [t.name for t in model.bound] == ["read"]
+    assert [t.name for t in model.bound] == ["read", "write"]
 
 
 def test_build_graph_falls_back_without_bind_tools():
@@ -298,3 +297,162 @@ async def test_graph_executes_read_tool_end_to_end(tmp_path: Path):
     assert len(tool_messages) == 1
     assert "hello from graph" in tool_messages[0].content
     assert UNTRUSTED_CONTENT_START in tool_messages[0].content
+
+
+# --- write (M-08) ------------------------------------------------------------
+
+
+async def test_write_creates_new_file(tmp_path: Path):
+    result = await write.ainvoke({"path": "new.txt", "content": "hello"})
+
+    assert (tmp_path / "new.txt").read_text(encoding="utf-8") == "hello"
+    assert result.startswith("Wrote 5 bytes to ")
+    assert str(tmp_path / "new.txt") in result
+
+
+async def test_write_overwrites_existing_file(tmp_path: Path):
+    target = _write(tmp_path / "a.txt", "old content")
+
+    result = await write.ainvoke({"path": str(target), "content": "new"})
+
+    assert target.read_text(encoding="utf-8") == "new"
+    assert result.startswith("Wrote 3 bytes to ")
+
+
+async def test_write_empty_content(tmp_path: Path):
+    result = await write.ainvoke({"path": "empty.txt", "content": ""})
+
+    assert (tmp_path / "empty.txt").read_text(encoding="utf-8") == ""
+    assert result.startswith("Wrote 0 bytes to ")
+
+
+async def test_write_counts_utf8_bytes(tmp_path: Path):
+    result = await write.ainvoke({"path": "u.txt", "content": "привет"})
+
+    assert result.startswith("Wrote 12 bytes to ")
+
+
+async def test_write_creates_parent_dirs_by_default(tmp_path: Path):
+    await write.ainvoke({"path": "sub/dir/file.txt", "content": "nested"})
+
+    assert (tmp_path / "sub" / "dir" / "file.txt").read_text(encoding="utf-8") == (
+        "nested"
+    )
+
+
+async def test_write_create_dirs_false_missing_parent_raises(tmp_path: Path):
+    with pytest.raises(ToolException, match="Parent directory does not exist"):
+        await write.ainvoke(
+            {"path": "missing/file.txt", "content": "x", "create_dirs": False}
+        )
+
+    assert not (tmp_path / "missing").exists()
+
+
+async def test_write_path_outside_roots_raises(tmp_path: Path):
+    outside = tmp_path.parent / "outside-write.txt"
+
+    try:
+        with pytest.raises(ToolException, match="outside allowed roots"):
+            await write.ainvoke({"path": str(outside), "content": "x"})
+    finally:
+        outside.unlink(missing_ok=True)
+
+    assert not outside.exists()
+
+
+async def test_write_path_traversal_escape_raises():
+    with pytest.raises(ToolException, match="outside allowed roots"):
+        await write.ainvoke({"path": "../escape.txt", "content": "x"})
+
+
+async def test_write_directory_target_raises(tmp_path: Path):
+    (tmp_path / "adir").mkdir()
+
+    with pytest.raises(ToolException, match="is a directory"):
+        await write.ainvoke({"path": "adir", "content": "x"})
+
+
+async def test_write_is_atomic_via_replace(tmp_path: Path, monkeypatch):
+    import os as os_module
+
+    calls: list[tuple[Path, Path]] = []
+    real_replace = os_module.replace
+
+    def spy(src, dst):  # noqa: ANN001, ANN202
+        calls.append((Path(src), Path(dst)))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os_module, "replace", spy)
+    target = tmp_path / "atomic.txt"
+
+    result = await write.ainvoke({"path": str(target), "content": "atomic"})
+
+    assert "Wrote 6 bytes to " in result
+    assert len(calls) == 1
+    tmp_src, dst = calls[0]
+    assert dst == target
+    assert tmp_src.parent == target.parent  # same directory -> same filesystem
+    assert not tmp_src.exists()  # replaced, no leftover temp file
+    assert target.read_text(encoding="utf-8") == "atomic"
+
+
+async def test_write_cleans_up_temp_on_failure(tmp_path: Path, monkeypatch):
+    import os as os_module
+
+    def boom(src, dst):  # noqa: ANN001, ANN202
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os_module, "replace", boom)
+
+    with pytest.raises(ToolException, match="Cannot write"):
+        await write.ainvoke({"path": "f.txt", "content": "x"})
+
+    assert not any(tmp_path.iterdir())
+
+
+async def test_write_result_is_not_cached(tmp_path: Path):
+    cache = get_cache()
+    assert isinstance(cache, MemoryCache)
+
+    await write.ainvoke({"path": "nocache.txt", "content": "x"})
+
+    assert cache.hits == 0
+    assert cache.misses == 0
+
+
+async def test_write_then_read_returns_new_content(tmp_path: Path):
+    target = _write(tmp_path / "cached.txt", "old version")
+
+    first = await read.ainvoke({"path": str(target)})
+    await write.ainvoke({"path": str(target), "content": "new version"})
+    second = await read.ainvoke({"path": str(target)})
+
+    assert "old version" in first
+    assert "new version" in second
+
+
+async def test_graph_executes_write_tool_end_to_end(tmp_path: Path):
+    model = FakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write",
+                        "args": {"path": "graph-out.txt", "content": "from graph"},
+                        "id": "call_w1",
+                    }
+                ],
+            ),
+            AIMessage(content="done"),
+        ]
+    )
+    graph = build_graph(get_tools(), model)
+
+    result = await graph.ainvoke({"messages": [HumanMessage(content="write it")]})
+
+    tool_messages = [m for m in result["messages"] if isinstance(m, ToolMessage)]
+    assert len(tool_messages) == 1
+    assert "Wrote 10 bytes to " in tool_messages[0].content
+    assert (tmp_path / "graph-out.txt").read_text(encoding="utf-8") == "from graph"
