@@ -4,7 +4,7 @@ Senior Python coding agent with UI and long-term memory.
 
 ## Phase: MVP
 
-Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (PostgreSQL schema), M-04 (LangGraph core), M-05 (system-prompt builder) and M-06 (context manager) are implemented.
+Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (PostgreSQL schema), M-04 (LangGraph core), M-05 (system-prompt builder), M-06 (context manager), M-07 (tool `read`), M-08 (tool `write`) and M-09 (tool `edit`) are implemented.
 
 ## Quick Start
 
@@ -159,6 +159,7 @@ v7 BETA will replace the implementation with DFC (5 layers) — the `trim_messag
 - ✅ **M-06** - Context manager: `trim_messages()` — tool-result truncation, thinking strip, sliding window (`trim_fn` seam in the graph)
 - ✅ **M-07** - Tool `read`: line-numbered pagination, path validation, untrusted-content framing, cache seam (M-21)
 - ✅ **M-08** - Tool `write`: atomic write (tmp + `os.replace`), `create_dirs`, path validation, registry wiring
+- ✅ **M-09** - Tool `edit`: exact string replacement, uniqueness guard, `replace_all`, atomic rewrite, registry wiring
 - ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for full 28 tickets)
 
 ## LLM Providers (M-01)

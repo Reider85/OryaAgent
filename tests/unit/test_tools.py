@@ -1,4 +1,4 @@
-"""Tool tests: read (M-07) and write (M-08) - pagination, validation, cache seam, atomic write, graph e2e."""
+"""Tool tests: read (M-07), write (M-08) and edit (M-09) - pagination, validation, cache seam, atomic write/edit, graph e2e."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from app.core.security import (
     UNTRUSTED_CONTENT_START,
 )
 from app.core.tools import get_tools
-from app.tools import read, write
+from app.tools import edit, read, write
 from app.tools.read import DEFAULT_MAX_LINES
 
 
@@ -240,10 +240,10 @@ async def test_read_pagination_uses_separate_cache_entries(tmp_path: Path):
 # --- tool registry + graph wiring (partial M-12) -----------------------------
 
 
-def test_get_tools_returns_read_and_write():
+def test_get_tools_returns_read_write_and_edit():
     tools = get_tools("session-1")
 
-    assert [t.name for t in tools] == ["read", "write"]
+    assert [t.name for t in tools] == ["read", "write", "edit"]
 
 
 def test_build_graph_binds_tools_when_supported():
@@ -261,7 +261,7 @@ def test_build_graph_binds_tools_when_supported():
     build_graph(get_tools(), model)
 
     assert model.bound is not None
-    assert [t.name for t in model.bound] == ["read", "write"]
+    assert [t.name for t in model.bound] == ["read", "write", "edit"]
 
 
 def test_build_graph_falls_back_without_bind_tools():
@@ -456,3 +456,224 @@ async def test_graph_executes_write_tool_end_to_end(tmp_path: Path):
     assert len(tool_messages) == 1
     assert "Wrote 10 bytes to " in tool_messages[0].content
     assert (tmp_path / "graph-out.txt").read_text(encoding="utf-8") == "from graph"
+
+
+# --- edit (M-09) ---------------------------------------------------------------
+
+
+async def test_edit_unique_string_replaced(tmp_path: Path):
+    target = _write(tmp_path / "a.py", "def add(a, b):\n    return a + b\n")
+
+    result = await edit.ainvoke(
+        {
+            "path": str(target),
+            "old_string": "def add(a, b):",
+            "new_string": "def add(a, b, /):",
+        }
+    )
+
+    assert target.read_text(encoding="utf-8") == "def add(a, b, /):\n    return a + b\n"
+    assert result.startswith(f"Edited {target}: replaced 1 occurrence")
+
+
+async def test_edit_missing_file_raises(tmp_path: Path):
+    with pytest.raises(ToolException, match="File not found"):
+        await edit.ainvoke({"path": "nope.txt", "old_string": "a", "new_string": "b"})
+
+
+async def test_edit_old_string_not_found_raises(tmp_path: Path):
+    target = _write(tmp_path / "a.txt", "hello world")
+
+    with pytest.raises(ToolException, match="old_string not found"):
+        await edit.ainvoke(
+            {"path": str(target), "old_string": "nope", "new_string": "x"}
+        )
+
+    assert target.read_text(encoding="utf-8") == "hello world"
+
+
+async def test_edit_non_unique_raises_without_replace_all(tmp_path: Path):
+    target = _write(tmp_path / "a.txt", "foo bar foo")
+
+    with pytest.raises(ToolException, match="not unique"):
+        await edit.ainvoke(
+            {"path": str(target), "old_string": "foo", "new_string": "baz"}
+        )
+
+    assert target.read_text(encoding="utf-8") == "foo bar foo"
+
+
+async def test_edit_replace_all_replaces_every_occurrence(tmp_path: Path):
+    target = _write(tmp_path / "a.txt", "foo bar foo")
+
+    result = await edit.ainvoke(
+        {
+            "path": str(target),
+            "old_string": "foo",
+            "new_string": "baz",
+            "replace_all": True,
+        }
+    )
+
+    assert target.read_text(encoding="utf-8") == "baz bar baz"
+    assert "replaced 2 occurrence(s)" in result
+
+
+async def test_edit_empty_old_string_raises(tmp_path: Path):
+    target = _write(tmp_path / "a.txt", "hello")
+
+    with pytest.raises(ToolException, match="old_string must not be empty"):
+        await edit.ainvoke({"path": str(target), "old_string": "", "new_string": "x"})
+
+    assert target.read_text(encoding="utf-8") == "hello"
+
+
+async def test_edit_path_outside_roots_raises(tmp_path: Path):
+    outside = tmp_path.parent / "outside-edit.txt"
+    outside.write_text("secret", encoding="utf-8")
+
+    try:
+        with pytest.raises(ToolException, match="outside allowed roots"):
+            await edit.ainvoke(
+                {"path": str(outside), "old_string": "secret", "new_string": "x"}
+            )
+        assert outside.read_text(encoding="utf-8") == "secret"
+    finally:
+        outside.unlink(missing_ok=True)
+
+
+async def test_edit_path_traversal_escape_raises():
+    with pytest.raises(ToolException, match="outside allowed roots"):
+        await edit.ainvoke(
+            {"path": "../escape.txt", "old_string": "a", "new_string": "b"}
+        )
+
+
+async def test_edit_directory_target_raises(tmp_path: Path):
+    (tmp_path / "adir").mkdir()
+
+    with pytest.raises(ToolException, match="is a directory"):
+        await edit.ainvoke({"path": "adir", "old_string": "a", "new_string": "b"})
+
+
+async def test_edit_is_atomic_via_replace(tmp_path: Path, monkeypatch):
+    import os as os_module
+
+    calls: list[tuple[Path, Path]] = []
+    real_replace = os_module.replace
+
+    def spy(src, dst):  # noqa: ANN001, ANN202
+        calls.append((Path(src), Path(dst)))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os_module, "replace", spy)
+    target = _write(tmp_path / "atomic.txt", "before")
+
+    await edit.ainvoke(
+        {"path": str(target), "old_string": "before", "new_string": "after"}
+    )
+
+    assert len(calls) == 1
+    tmp_src, dst = calls[0]
+    assert dst == target
+    assert tmp_src.parent == target.parent  # same directory -> same filesystem
+    assert not tmp_src.exists()  # replaced, no leftover temp file
+    assert target.read_text(encoding="utf-8") == "after"
+
+
+async def test_edit_cleans_up_temp_on_failure(tmp_path: Path, monkeypatch):
+    import os as os_module
+
+    def boom(src, dst):  # noqa: ANN001, ANN202
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os_module, "replace", boom)
+    target = _write(tmp_path / "f.txt", "original")
+
+    with pytest.raises(ToolException, match="Cannot write"):
+        await edit.ainvoke(
+            {"path": str(target), "old_string": "original", "new_string": "x"}
+        )
+
+    assert target.read_text(encoding="utf-8") == "original"
+
+
+async def test_edit_preserves_crlf_line_endings(tmp_path: Path):
+    target = tmp_path / "crlf.txt"
+    target.write_bytes(b"line1\r\nline2\r\n")
+
+    await edit.ainvoke(
+        {"path": str(target), "old_string": "line1", "new_string": "LINE1"}
+    )
+
+    assert target.read_bytes() == b"LINE1\r\nline2\r\n"
+
+
+async def test_edit_non_utf8_file_raises(tmp_path: Path):
+    target = tmp_path / "latin.txt"
+    target.write_bytes(b"caf\xe9")  # latin-1 'café', invalid utf-8
+
+    with pytest.raises(ToolException, match="Not a UTF-8 text file"):
+        await edit.ainvoke(
+            {"path": str(target), "old_string": "caf", "new_string": "tea"}
+        )
+
+
+async def test_edit_result_is_not_cached(tmp_path: Path):
+    cache = get_cache()
+    assert isinstance(cache, MemoryCache)
+    target = _write(tmp_path / "nocache.txt", "before")
+
+    await edit.ainvoke(
+        {"path": str(target), "old_string": "before", "new_string": "after"}
+    )
+
+    assert cache.hits == 0
+    assert cache.misses == 0
+
+
+async def test_edit_then_read_returns_new_content_via_mtime(tmp_path: Path):
+    target = _write(tmp_path / "cached.txt", "version one")
+    cache = get_cache()
+    assert isinstance(cache, MemoryCache)
+
+    first = await read.ainvoke({"path": str(target)})
+    await edit.ainvoke({"path": str(target), "old_string": "one", "new_string": "two"})
+    os.utime(target, ns=(2_000_000_000, 2_000_000_000))
+    second = await read.ainvoke({"path": str(target)})
+
+    assert "version one" in first
+    assert "version two" in second
+    assert cache.hits == 0
+    assert cache.misses == 2
+
+
+async def test_graph_executes_edit_tool_end_to_end(tmp_path: Path):
+    target = _write(tmp_path / "graph-edit.txt", "alpha beta")
+    model = FakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "edit",
+                        "args": {
+                            "path": str(target),
+                            "old_string": "alpha",
+                            "new_string": "gamma",
+                        },
+                        "id": "call_e1",
+                    }
+                ],
+            ),
+            AIMessage(content="done"),
+        ]
+    )
+    graph = build_graph(get_tools(), model)
+
+    result = await graph.ainvoke({"messages": [HumanMessage(content="edit it")]})
+
+    tool_messages = [m for m in result["messages"] if isinstance(m, ToolMessage)]
+    assert len(tool_messages) == 1
+    assert "replaced 1 occurrence(s)" in tool_messages[0].content
+    assert target.read_text(encoding="utf-8") == "gamma beta"
