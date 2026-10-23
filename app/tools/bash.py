@@ -6,27 +6,43 @@ Contract (PROMPT_MVP M-10, BACKLOG5 M-10)::
 
 Behaviour:
 
-* **JSON output**: returns JSON string (parsed as object by consumers) with
-  ``stdout``, ``stderr``, ``exit_code``, ``duration_ms``, ``truncated``.
-* **Token efficiency**: if stdout or stderr exceeds 5000 chars, truncate to
-  first 2500 + last 2500 chars with marker; dedup repeated lines (100+ identical
-  lines → ``... [100 identical lines] ...``).
-* **Injection detection**: if stdout/stderr contains injection patterns, prefix
-  ``"WARNING: possible prompt injection detected in [pattern_id]"`` to the JSON.
-* **Platform shells**: POSIX uses ``/bin/bash -lc``; Windows prefers ``bash.exe``
-  from PATH (Git Bash/WSL) or ``cmd.exe /d /s /c`` as fallback.
-* **Timeout handling**: timeout kills subprocess and raises ToolException.
-* **Abort handling**: if agent loop cancels, kill subprocess.
-* **Environment filtering**: subprocess env is filtered to allowlist (PATH, HOME,
-  USER, LANG, LC_ALL, TERM, COLUMNS, LINES + Windows essentials + explicit env).
-* **Atomic execution**: no partial output; full output captured or truncated.
-* **Permission gating**: under strict policy this tool is gated by interrupt_before
-  (M-13) — the graph pauses for user approval before the tool node runs.
-* **Output framing**: the JSON payload is wrapped with untrusted-content markers
-  (``app/core/security.py``) so command output is never mistaken for instructions.
+* **JSON output**: returns a JSON document with ``stdout``, ``stderr``,
+  ``exit_code``, ``duration_ms`` and ``truncated``.
+* **Token efficiency (M-23)**: streams longer than 5000 chars are cut to
+  first 2500 chars + ``... [N chars truncated] ...`` + last 2500 chars
+  (char-based, so a single 200 KB line is cut too); 100+ identical
+  consecutive lines collapse to ``... [100 identical lines] ...`` (dedup
+  runs before truncation). ``truncated`` reports whether the *raw* output
+  exceeded the cap - it is true when dedup alone had to drop lines as well.
+* **Injection detection**: if raw stdout/stderr contains an injection
+  pattern, the JSON carries ``injection_warning`` (``WARNING: possible
+  prompt injection detected in [pattern_id]``). Deviation from BACKLOG5's
+  "warning prefix": the warning lives *inside* the JSON document so the
+  tool result stays one parseable object - prefixing would break the JSON
+  contract the token-efficient format is built on.
+* **Platform shells**: POSIX uses ``/bin/bash -lc``; Windows prefers a
+  Win32 bash (Git Bash - the WSL System32 shim is skipped because it
+  cannot run Windows toolchains) with ``cmd.exe /d /s /c`` fallback.
+* **Timeout handling**: the subprocess is killed (terminate -> wait 5s ->
+  kill) and the tool raises ``ToolException("Command timed out after
+  {timeout}s")`` - a timed-out command never returns a partial result.
+* **Abort handling**: if the agent loop cancels the tool call, the running
+  process is killed before ``CancelledError`` propagates (``_ProcHandle``
+  publishes the Popen handle from the worker thread to the event loop).
+* **Environment filtering**: subprocess env is an allowlist (PATH, HOME,
+  USER, LANG, LC_ALL, TERM, COLUMNS, LINES + Windows essentials + the
+  explicit ``env`` argument).
+* **Permission gating**: under strict policy this tool is gated by
+  ``interrupt_before`` (M-13) - the graph pauses for user approval.
+* **Output framing**: the JSON payload is wrapped with untrusted-content
+  markers (``app/core/security.py``) so command output is never mistaken
+  for instructions.
 
-The subprocess runs in ``asyncio.to_thread`` so the agent-loop's event
-loop is never blocked.
+The subprocess runs in ``asyncio.to_thread`` rather than
+``asyncio.create_subprocess_exec`` because Windows only supports asyncio
+subprocesses on a Proactor loop while uvicorn runs a Selector loop on
+Windows (see README); ``_ProcHandle`` restores kill-on-timeout/cancel on
+top of the thread.
 
 Usage::
 
@@ -44,6 +60,8 @@ import logging
 import os
 import platform
 import shutil
+import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Annotated
@@ -57,26 +75,69 @@ logger = logging.getLogger(__name__)
 
 #: Max chars per stream before truncation (BACKLOG5 M-10).
 MAX_CHARS_PER_STREAM = 5_000
-#: Max lines to keep when truncating.
-TRUNCATE_HEAD_LINES = 2_500
-TRUNCATE_TAIL_LINES = 2_500
-#: Threshold for deduplication (100+ identical lines).
+#: Chars kept at the start / end of an over-long stream.
+TRUNCATE_HEAD_CHARS = 2_500
+TRUNCATE_TAIL_CHARS = 2_500
+#: Threshold for deduplication: >= 100 identical consecutive lines collapse.
 DEDUP_THRESHOLD = 100
+
+
+def _is_wsl_bash(path: str) -> bool:
+    """True for the WSL shim (``%SystemRoot%\\System32\\bash.exe``).
+
+    The shim runs commands inside WSL, where Windows toolchains
+    (venv python, pytest, npm ...) are not addressable - so for a Windows
+    agent it is not a usable shell.
+    """
+    try:
+        resolved = Path(path).resolve()
+        system32 = (
+            Path(os.environ.get("SystemRoot", "C:\\Windows")) / "System32"
+        ).resolve()
+    except OSError:
+        return False
+    return resolved.parent == system32
+
+
+def _find_windows_bash() -> str | None:
+    """Locate a Win32 bash (Git Bash); the WSL shim is excluded.
+
+    Order: next to ``git.exe``, under the standard Git install dirs, then
+    whatever ``PATH`` offers. Returns ``None`` when only the WSL shim (or
+    no bash at all) is available.
+    """
+    candidates: list[str] = []
+    git = shutil.which("git")
+    if git:
+        git_dir = Path(git).parent
+        candidates.append(str(git_dir / "bash.exe"))  # cmd\bash.exe (rare)
+        candidates.append(str(git_dir.parent / "bin" / "bash.exe"))  # Git\bin\bash.exe
+    for env_var in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+        base = os.environ.get(env_var)
+        if base:
+            candidates.append(str(Path(base) / "Git" / "bin" / "bash.exe"))
+    path_bash = shutil.which("bash")
+    if path_bash:
+        candidates.append(path_bash)
+
+    for candidate in candidates:
+        if Path(candidate).is_file() and not _is_wsl_bash(candidate):
+            return candidate
+    return None
 
 
 def _resolve_shell() -> list[str]:
     """Return shell command and arguments for the current platform.
 
     POSIX: ``["/bin/bash", "-lc"]``
-    Windows: prefer ``["bash.exe", "-lc"]`` if found in PATH, else ``["cmd.exe", "/d", "/s", "/c"]``
+    Windows: a Win32 bash (Git Bash) as ``[<bash>, "-lc"]`` if found -
+    the WSL System32 shim is skipped - else ``["cmd.exe", "/d", "/s", "/c"]``.
     """
     if platform.system() == "Windows":
-        if shutil.which("bash"):
-            # Prefer bash.exe (Git Bash/WSL) if available
-            return ["bash.exe", "-lc"]
-        else:
-            # Fallback to cmd.exe
-            return ["cmd.exe", "/d", "/s", "/c"]
+        win_bash = _find_windows_bash()
+        if win_bash:
+            return [win_bash, "-lc"]
+        return ["cmd.exe", "/d", "/s", "/c"]
     else:
         # POSIX systems: use bash with login shell
         return ["/bin/bash", "-lc"]
@@ -125,12 +186,11 @@ def _build_allowlist_env(
 
 
 def _dedup_lines(text: str) -> str:
-    """Dedup repeated lines: 100+ identical → marker."""
+    """Collapse runs of identical lines: >= 100 identical -> single marker."""
     lines = text.splitlines()
-    if len(lines) <= DEDUP_THRESHOLD:
+    if len(lines) < DEDUP_THRESHOLD:
         return text
 
-    # Find consecutive identical sequences
     deduped = []
     i = 0
     while i < len(lines):
@@ -139,7 +199,7 @@ def _dedup_lines(text: str) -> str:
             j += 1
 
         count = j - i
-        if count > DEDUP_THRESHOLD:
+        if count >= DEDUP_THRESHOLD:
             deduped.append(f"... [{count} identical lines] ...")
         else:
             deduped.extend(lines[i:j])
@@ -150,36 +210,39 @@ def _dedup_lines(text: str) -> str:
 
 
 def _truncate_stream(text: str) -> str:
-    """Truncate long text: first + last 2500 lines with marker."""
-    lines = text.splitlines()
-    if len(lines) <= TRUNCATE_HEAD_LINES + TRUNCATE_TAIL_LINES:
+    """Cut an over-long stream to head + marker + tail (char-based).
+
+    Works on characters so a single huge line (e.g. minified JSON) is cut
+    too; the head is trimmed back to the last line boundary when possible.
+    """
+    if len(text) <= MAX_CHARS_PER_STREAM:
         return text
 
-    head = lines[:TRUNCATE_HEAD_LINES]
-    tail = lines[-TRUNCATE_TAIL_LINES:]
-    removed = len(lines) - TRUNCATE_HEAD_LINES - TRUNCATE_TAIL_LINES
+    head = text[:TRUNCATE_HEAD_CHARS]
+    line_break = head.rfind("\n")
+    if line_break > 0:
+        head = head[:line_break]
+    tail = text[-TRUNCATE_TAIL_CHARS:]
+    removed = len(text) - len(head) - len(tail)
 
-    return "\n".join([
-        *head,
-        f"... [{removed} lines truncated] ...",
-        *tail,
-    ])
+    return f"{head}\n... [{removed} chars truncated] ...\n{tail}"
 
 
 def _build_output(
     stdout: str,
     stderr: str,
     exit_code: int,
-    duration_ms: int,
+    duration_ms: float,
+    truncated: bool,
     injection_warning: str | None,
 ) -> str:
-    """Build JSON response with injection warning."""
-    result = {
+    """Build the JSON response and frame it as untrusted content."""
+    result: dict[str, object] = {
         "stdout": stdout,
         "stderr": stderr,
         "exit_code": exit_code,
         "duration_ms": duration_ms,
-        "truncated": len(stdout) > MAX_CHARS_PER_STREAM or len(stderr) > MAX_CHARS_PER_STREAM,
+        "truncated": truncated,
     }
 
     if injection_warning:
@@ -188,45 +251,97 @@ def _build_output(
     return wrap_untrusted(json.dumps(result, ensure_ascii=False))
 
 
+def _terminate_process(proc: subprocess.Popen[str] | None) -> None:
+    """terminate -> wait(5s) -> kill. Safe to call from any thread."""
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=5)
+    except Exception:  # best-effort escalation to kill
+        try:
+            proc.kill()
+            proc.wait(timeout=5)
+        except Exception:  # process already gone
+            pass
+
+
+class _ProcHandle:
+    """Thread-safe bridge from the worker thread to the event loop.
+
+    The thread registers its ``Popen`` handle here; the event loop then
+    terminates the process on timeout or task cancellation even though
+    Windows cannot spawn subprocesses on the Selector event loop (see
+    module docstring).
+    """
+
+    __slots__ = ("_lock", "_proc", "_cancelled")
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._proc: subprocess.Popen[str] | None = None
+        self._cancelled = False
+
+    @property
+    def cancelled(self) -> bool:
+        with self._lock:
+            return self._cancelled
+
+    def attach(self, proc: subprocess.Popen[str]) -> None:
+        """Register the freshly spawned process, killing it if we lost a race."""
+        with self._lock:
+            self._proc = proc
+            cancelled = self._cancelled
+        if cancelled:
+            _terminate_process(proc)
+
+    def cancel(self) -> None:
+        """Mark the handle cancelled and kill the process if it is running."""
+        with self._lock:
+            self._cancelled = True
+            proc = self._proc
+        _terminate_process(proc)
+
+
 async def _execute_subprocess(
     command: str,
     shell: list[str],
     timeout: float,
     cwd: Path | None,
     env: dict[str, str],
+    handle: _ProcHandle,
 ) -> tuple[str, str, int, float]:
-    """Execute command in subprocess; return stdout, stderr, exit_code, duration_ms."""
+    """Execute command in a worker thread; return stdout, stderr, exit_code, ms.
+
+    Raises ``TimeoutError`` when the command exceeded ``timeout`` (the
+    process is killed first); ``CancelledError`` from the awaiting task
+    propagates untouched so ``bash()`` can kill the process.
+    """
     start_time = time.monotonic()
 
-    # Prepare command arguments
     if shell[0] == "cmd.exe":
-        # Windows cmd.exe: wrap command in quotes
         cmd_args = shell + [f'"{command}"']
     else:
-        # Bash: command is argument to -lc
         cmd_args = shell + [command]
 
     try:
         # Run in worker thread to avoid blocking event loop
-        stdout, stderr = await asyncio.to_thread(
+        stdout, stderr, returncode = await asyncio.to_thread(
             _run_sync_subprocess,
             cmd_args,
             timeout,
             cwd,
             env,
+            handle,
         )
-        exit_code = 0
     except TimeoutError:
-        stdout = ""
-        stderr = "Command timed out"
-        exit_code = 124  # Standard timeout exit code
-    except Exception as exc:
-        stdout = ""
-        stderr = str(exc)
-        exit_code = 1
+        raise
+    except Exception as exc:  # e.g. executable not found -> JSON error result
+        duration_ms = (time.monotonic() - start_time) * 1000
+        return "", str(exc), 1, duration_ms
 
     duration_ms = (time.monotonic() - start_time) * 1000
-    return stdout, stderr, exit_code, duration_ms
+    return stdout, stderr, returncode, duration_ms
 
 
 def _run_sync_subprocess(
@@ -234,34 +349,34 @@ def _run_sync_subprocess(
     timeout: float,
     cwd: Path | None,
     env: dict[str, str],
-) -> tuple[str, str]:
-    """Synchronous subprocess execution (runs in worker thread)."""
-    import subprocess
+    handle: _ProcHandle,
+) -> tuple[str, str, int]:
+    """Synchronous subprocess execution (runs in a worker thread).
+
+    Returns ``(stdout, stderr, returncode)``.
+    """
+    if handle.cancelled:
+        # Cancelled before we spawned anything - the task never reads this.
+        return "", "", -1
+
+    proc = subprocess.Popen(
+        cmd_args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=str(cwd) if cwd else None,
+        env=env,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    handle.attach(proc)
 
     try:
-        proc = subprocess.Popen(
-            cmd_args,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=str(cwd) if cwd else None,
-            env=env,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-
-        try:
-            stdout, stderr = proc.communicate(timeout=timeout)
-            return stdout, stderr
-        except subprocess.TimeoutExpired:
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-            raise TimeoutError("Command timed out")
-    except Exception as exc:
-        raise exc
+        stdout, stderr = proc.communicate(timeout=timeout)
+        return stdout, stderr, proc.returncode or 0
+    except subprocess.TimeoutExpired:
+        _terminate_process(proc)
+        raise TimeoutError(f"Command timed out after {timeout}s")
 
 
 @tool
@@ -285,10 +400,13 @@ async def bash(
 ) -> str:
     """Execute a shell command and return structured JSON output.
 
-    Use timeout to prevent long-running commands. cwd changes the working
-    directory for the command only. env adds extra variables to the subprocess
-    environment (filtered by security policy). Output is JSON with stdout,
-    stderr, exit code, duration, and truncation flags.
+    Use timeout to prevent long-running commands (a timeout kills the
+    process and raises an error instead of returning partial output).
+    cwd changes the working directory for the command only. env adds
+    extra variables to the subprocess environment (filtered by security
+    policy). Output is JSON with stdout, stderr, exit code, duration and
+    truncation flag; over-long output is truncated and repeated lines are
+    deduplicated to keep the tool result token-efficient.
     """
     # Validate timeout
     if timeout <= 0:
@@ -307,7 +425,8 @@ async def bash(
     # Resolve shell for platform
     shell = _resolve_shell()
 
-    # Execute command
+    # Execute command; kill the process on timeout / task cancellation
+    handle = _ProcHandle()
     try:
         stdout, stderr, exit_code, duration_ms = await _execute_subprocess(
             command,
@@ -315,31 +434,35 @@ async def bash(
             timeout,
             resolved_cwd,
             subprocess_env,
+            handle,
         )
     except TimeoutError:
         raise ToolException(f"Command timed out after {timeout}s")
+    except asyncio.CancelledError:
+        handle.cancel()
+        raise
 
-    # Process output: dedup and truncate
-    processed_stdout = _dedup_lines(stdout)
-    processed_stderr = _dedup_lines(stderr)
+    # truncation flag reflects the raw output size (before dedup/truncate)
+    truncated = len(stdout) > MAX_CHARS_PER_STREAM or len(stderr) > MAX_CHARS_PER_STREAM
 
-    # Truncate if needed
-    if len(processed_stdout) > MAX_CHARS_PER_STREAM:
-        processed_stdout = _truncate_stream(processed_stdout)
-    if len(processed_stderr) > MAX_CHARS_PER_STREAM:
-        processed_stderr = _truncate_stream(processed_stderr)
+    # Token-efficient processing: dedup repeated lines, then cut over-long text
+    processed_stdout = _truncate_stream(_dedup_lines(stdout))
+    processed_stderr = _truncate_stream(_dedup_lines(stderr))
 
-    # Check for injection patterns
-    injection_warning = None
-    if detect_injection(processed_stdout) or detect_injection(processed_stderr):
-        pattern = detect_injection(processed_stdout) or detect_injection(processed_stderr)
-        injection_warning = f"WARNING: possible prompt injection detected in [{pattern}]"
+    # Injection detection runs on the raw output so a pattern is never
+    # lost inside a truncated region
+    pattern = detect_injection(stdout) or detect_injection(stderr)
+    injection_warning = (
+        f"WARNING: possible prompt injection detected in [{pattern}]"
+        if pattern
+        else None
+    )
 
-    # Build final output
     return _build_output(
         processed_stdout,
         processed_stderr,
         exit_code,
         duration_ms,
+        truncated,
         injection_warning,
     )

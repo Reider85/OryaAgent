@@ -160,6 +160,7 @@ v7 BETA will replace the implementation with DFC (5 layers) — the `trim_messag
 - ✅ **M-07** - Tool `read`: line-numbered pagination, path validation, untrusted-content framing, cache seam (M-21)
 - ✅ **M-08** - Tool `write`: atomic write (tmp + `os.replace`), `create_dirs`, path validation, registry wiring
 - ✅ **M-09** - Tool `edit`: exact string replacement, uniqueness guard, `replace_all`, atomic rewrite, registry wiring
+- ✅ **M-10** - Tool `bash`: JSON output (stdout/stderr/exit_code/duration_ms/truncated), char-based truncation, line dedup, injection detection, allowlist-env, timeout/cancel process kill
 - ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for full 28 tickets)
 
 ## LLM Providers (M-01)

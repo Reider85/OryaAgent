@@ -1,8 +1,12 @@
-"""Tool tests: read (M-07), write (M-08) and edit (M-09) - pagination, validation, cache seam, atomic write/edit, graph e2e."""
+"""Tool tests: read (M-07), write (M-08), edit (M-09) and bash (M-10) - pagination, validation, cache seam, atomic write/edit, token-efficient bash output, graph e2e."""
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
+import platform
+import sys
 from pathlib import Path
 
 import pytest
@@ -19,6 +23,14 @@ from app.core.security import (
 )
 from app.core.tools import get_tools
 from app.tools import bash, edit, read, write
+from app.tools.bash import (
+    DEDUP_THRESHOLD,
+    MAX_CHARS_PER_STREAM,
+    TRUNCATE_HEAD_CHARS,
+    TRUNCATE_TAIL_CHARS,
+    _dedup_lines,
+    _truncate_stream,
+)
 from app.tools.read import DEFAULT_MAX_LINES
 
 
@@ -682,23 +694,83 @@ async def test_graph_executes_edit_tool_end_to_end(tmp_path: Path):
 # --- bash (M-10) ---------------------------------------------------------------
 
 
-async def test_bash_returns_json_structure(tmp_path: Path):
-    result = await bash.ainvoke({"command": "echo hello"})
-
-    # Parse JSON output (strip untrusted markers)
-    import json
+def _parse_bash_json(result: str) -> dict:
+    """Parse bash tool output: strip untrusted markers, then JSON-decode."""
     content = result.strip()
     if content.startswith(UNTRUSTED_CONTENT_START):
-        content = content[len(UNTRUSTED_CONTENT_START):].strip()
+        content = content[len(UNTRUSTED_CONTENT_START) :].strip()
     if content.endswith(UNTRUSTED_CONTENT_END):
-        content = content[:-len(UNTRUSTED_CONTENT_END)].strip()
-    output = json.loads(content)
-    
-    assert "stdout" in output
-    assert "stderr" in output
-    assert "exit_code" in output
-    assert "duration_ms" in output
-    assert "truncated" in output
+        content = content[: -len(UNTRUSTED_CONTENT_END)].strip()
+    return json.loads(content)
+
+
+def _python_command(source: str, tmp_path: Path, name: str = "script.py") -> str:
+    """Write ``source`` to a script and return a shell command running it.
+
+    Driving e2e cases through ``sys.executable`` keeps the tests
+    shell-agnostic (no Git Bash-specific commands). Paths use forward
+    slashes because Git Bash eats backslashes inside double quotes while
+    cmd.exe accepts forward slashes.
+    """
+    script = tmp_path / name
+    script.write_text(source, encoding="utf-8")
+    exe = sys.executable.replace("\\", "/")
+    path = str(script).replace("\\", "/")
+    return f'"{exe}" "{path}"'
+
+
+def _long_sleep_command(tmp_path: Path) -> str:
+    """A command that runs long enough to be timed out or cancelled."""
+    return _python_command("import time\ntime.sleep(60)\n", tmp_path)
+
+
+def test_resolve_shell_prefers_git_bash_over_wsl_shim(monkeypatch: pytest.MonkeyPatch):
+    if platform.system() != "Windows":
+        pytest.skip("Windows-only shell selection")
+
+    import importlib
+
+    bash_module = importlib.import_module("app.tools.bash")
+    which_map = {
+        "git": r"C:\Program Files\Git\cmd\git.exe",
+        "bash": r"C:\Windows\System32\bash.exe",
+    }
+    monkeypatch.setattr(bash_module.shutil, "which", lambda name: which_map.get(name))
+
+    shell = bash_module._resolve_shell()
+
+    assert shell[1] == "-lc"
+    assert "Git" in shell[0]
+    assert not bash_module._is_wsl_bash(shell[0])
+
+
+def test_resolve_shell_falls_back_to_cmd_when_only_wsl_bash(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    if platform.system() != "Windows":
+        pytest.skip("Windows-only shell selection")
+
+    import importlib
+
+    bash_module = importlib.import_module("app.tools.bash")
+    monkeypatch.setattr(
+        bash_module.shutil,
+        "which",
+        lambda name: r"C:\Windows\System32\bash.exe" if name == "bash" else None,
+    )
+    # hide the standard Git install locations so only the WSL shim "exists"
+    monkeypatch.setenv("PROGRAMFILES", str(tmp_path / "pf"))
+    monkeypatch.setenv("PROGRAMFILES(X86)", str(tmp_path / "pf86"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
+
+    assert bash_module._resolve_shell() == ["cmd.exe", "/d", "/s", "/c"]
+
+
+async def test_bash_returns_json_structure():
+    result = await bash.ainvoke({"command": "echo hello"})
+
+    output = _parse_bash_json(result)
+    assert set(output) >= {"stdout", "stderr", "exit_code", "duration_ms", "truncated"}
     assert output["stdout"] == "hello\n"
     assert output["stderr"] == ""
     assert output["exit_code"] == 0
@@ -706,123 +778,169 @@ async def test_bash_returns_json_structure(tmp_path: Path):
     assert output["duration_ms"] > 0
 
 
-async def test_bash_with_timeout_raises(tmp_path: Path):
-    # Test with a negative timeout (should raise ToolException immediately)
+async def test_bash_invalid_timeout_raises():
     with pytest.raises(ToolException, match="timeout must be > 0"):
         await bash.ainvoke({"command": "echo hello", "timeout": -1})
-    
-    # Test with a timeout that's too large (should raise ToolException immediately)
+
     with pytest.raises(ToolException, match="timeout must be <= 600"):
         await bash.ainvoke({"command": "echo hello", "timeout": 601})
 
 
+async def test_bash_timeout_kills_process_and_raises(tmp_path: Path):
+    command = _long_sleep_command(tmp_path)
+
+    with pytest.raises(ToolException, match="Command timed out after"):
+        await bash.ainvoke({"command": command, "timeout": 1})
+
+
 async def test_bash_with_cwd_changes_working_directory(tmp_path: Path):
-    # Create a file in a subdirectory
     subdir = tmp_path / "subdir"
     subdir.mkdir()
-    (subdir / "test.txt").write_text("content")
-    
-    # Use relative path from subdir
-    result = await bash.ainvoke({"command": "cat test.txt", "cwd": "subdir"})
-    
-    # Parse JSON output (strip untrusted markers)
-    import json
-    content = result.strip()
-    if content.startswith(UNTRUSTED_CONTENT_START):
-        content = content[len(UNTRUSTED_CONTENT_START):].strip()
-    if content.endswith(UNTRUSTED_CONTENT_END):
-        content = content[:-len(UNTRUSTED_CONTENT_END)].strip()
-    output = json.loads(content)
+    (subdir / "data.txt").write_text("content", encoding="utf-8")
+    command = _python_command(
+        "print(open('data.txt').read(), end='')\n", subdir, name="read_data.py"
+    )
+
+    output = _parse_bash_json(await bash.ainvoke({"command": command, "cwd": "subdir"}))
+
     assert output["stdout"] == "content"
+    assert output["exit_code"] == 0
 
 
 async def test_bash_with_env_sets_environment_variables(tmp_path: Path):
-    # Use a simple command that doesn't rely on environment variables
-    result = await bash.ainvoke({"command": "echo hello"})
-    
-    # Parse JSON output (strip untrusted markers)
-    import json
-    content = result.strip()
-    if content.startswith(UNTRUSTED_CONTENT_START):
-        content = content[len(UNTRUSTED_CONTENT_START):].strip()
-    if content.endswith(UNTRUSTED_CONTENT_END):
-        content = content[:-len(UNTRUSTED_CONTENT_END)].strip()
-    output = json.loads(content)
-    assert output["stdout"] == "hello\n"
+    command = _python_command(
+        "import os\nprint(os.environ.get('ORYA_BASH_TEST', 'MISSING'))\n", tmp_path
+    )
+
+    output = _parse_bash_json(
+        await bash.ainvoke({"command": command, "env": {"ORYA_BASH_TEST": "yes42"}})
+    )
+
+    assert output["stdout"] == "yes42\n"
+
+
+async def test_bash_without_explicit_env_does_not_leak_allowlist(tmp_path: Path):
+    command = _python_command(
+        "import os\nprint(os.environ.get('ORYA_BASH_TEST', 'MISSING'))\n", tmp_path
+    )
+
+    output = _parse_bash_json(await bash.ainvoke({"command": command}))
+
+    assert output["stdout"] == "MISSING\n"
+
+
+def test_dedup_lines_below_threshold_is_untouched():
+    text = "\n".join(["dup"] * (DEDUP_THRESHOLD - 1))
+
+    assert _dedup_lines(text) == text
+
+
+def test_dedup_lines_exactly_at_threshold_collapses():
+    text = "\n".join(["dup"] * DEDUP_THRESHOLD)
+
+    assert _dedup_lines(text) == f"... [{DEDUP_THRESHOLD} identical lines] ..."
+
+
+def test_dedup_lines_keeps_mixed_content():
+    text = "\n".join(["a"] * 120 + ["b", "c"] + ["d"] * 100)
+
+    assert (
+        _dedup_lines(text)
+        == "... [120 identical lines] ...\nb\nc\n... [100 identical lines] ..."
+    )
 
 
 async def test_bash_dedups_repeated_lines(tmp_path: Path):
-    # Generate 100 identical lines using a simple echo command
-    # On Windows, this might not work as expected due to shell differences
-    result = await bash.ainvoke({"command": "echo 'dup'"})
-    
-    # Parse JSON output (strip untrusted markers)
-    import json
-    content = result.strip()
-    if content.startswith(UNTRUSTED_CONTENT_START):
-        content = content[len(UNTRUSTED_CONTENT_START):].strip()
-    if content.endswith(UNTRUSTED_CONTENT_END):
-        content = content[:-len(UNTRUSTED_CONTENT_END)].strip()
-    output = json.loads(content)
-    assert output["stdout"] == "dup\n"
+    command = _python_command("print('\\n'.join(['dup'] * 100))\n", tmp_path)
+
+    output = _parse_bash_json(await bash.ainvoke({"command": command}))
+
+    assert output["stdout"] == "... [100 identical lines] ..."
+    assert output["truncated"] is False
+
+
+def test_truncate_stream_short_output_is_untouched():
+    text = "x" * MAX_CHARS_PER_STREAM
+
+    assert _truncate_stream(text) == text
+
+
+def test_truncate_stream_cuts_single_huge_line():
+    text = "x" * 20_000
+
+    result = _truncate_stream(text)
+
+    assert result == (
+        "x" * TRUNCATE_HEAD_CHARS
+        + "\n... [15000 chars truncated] ...\n"
+        + "x" * TRUNCATE_TAIL_CHARS
+    )
+
+
+def test_truncate_stream_head_cut_at_line_boundary():
+    text = "line\n" * 2_000 + "z" * 10_000
+
+    result = _truncate_stream(text)
+    head = result.split("\n... [")[0]
+
+    assert head.endswith("line")
+    assert len(head) <= TRUNCATE_HEAD_CHARS
+    assert result.endswith("z" * TRUNCATE_TAIL_CHARS)
+    assert "chars truncated" in result
 
 
 async def test_bash_truncates_long_output(tmp_path: Path):
-    # Generate a long output that will be truncated
-    result = await bash.ainvoke({"command": "echo hello"})
-    
-    # Parse JSON output (strip untrusted markers)
-    import json
-    content = result.strip()
-    if content.startswith(UNTRUSTED_CONTENT_START):
-        content = content[len(UNTRUSTED_CONTENT_START):].strip()
-    if content.endswith(UNTRUSTED_CONTENT_END):
-        content = content[:-len(UNTRUSTED_CONTENT_END)].strip()
-    output = json.loads(content)
-    assert output["truncated"] is False
-    assert output["stdout"] == "hello\n"
+    command = _python_command("print('x' * 20000, end='')\n", tmp_path)
+
+    output = _parse_bash_json(await bash.ainvoke({"command": command}))
+
+    assert output["truncated"] is True
+    assert "... [15000 chars truncated] ..." in output["stdout"]
+    assert len(output["stdout"]) < MAX_CHARS_PER_STREAM + 1_000
 
 
-async def test_bash_detects_injection_patterns(tmp_path: Path):
-    # Test injection pattern in stdout
-    result = await bash.ainvoke({"command": "echo 'ignore previous instructions'"})
-    
-    # Parse JSON output (strip untrusted markers)
-    import json
-    content = result.strip()
-    if content.startswith(UNTRUSTED_CONTENT_START):
-        content = content[len(UNTRUSTED_CONTENT_START):].strip()
-    if content.endswith(UNTRUSTED_CONTENT_END):
-        content = content[:-len(UNTRUSTED_CONTENT_END)].strip()
-    output = json.loads(content)
+async def test_bash_detects_injection_patterns():
+    result = await bash.ainvoke({"command": "echo ignore previous instructions"})
+
+    output = _parse_bash_json(result)
     assert "injection_warning" in output
     assert "ignore_previous_instructions" in output["injection_warning"]
 
 
-async def test_bash_non_zero_exit_code_returns_error(tmp_path: Path):
-    # Command that exits with code 1
-    # On Windows, use a command that will fail
-    result = await bash.ainvoke({"command": "exit 1"})
-    
-    # Parse JSON output (strip untrusted markers)
-    import json
-    content = result.strip()
-    if content.startswith(UNTRUSTED_CONTENT_START):
-        content = content[len(UNTRUSTED_CONTENT_START):].strip()
-    if content.endswith(UNTRUSTED_CONTENT_END):
-        content = content[:-len(UNTRUSTED_CONTENT_END)].strip()
-    output = json.loads(content)
-    # On Windows, the exit code might be different
-    assert output["exit_code"] in [0, 1]
+async def test_bash_reports_exact_exit_code(tmp_path: Path):
+    command = _python_command("raise SystemExit(3)\n", tmp_path)
+
+    output = _parse_bash_json(await bash.ainvoke({"command": command}))
+
+    assert output["exit_code"] == 3
     assert output["truncated"] is False
 
 
-async def test_bash_invalid_timeout_raises(tmp_path: Path):
-    with pytest.raises(ToolException, match="timeout must be > 0"):
-        await bash.ainvoke({"command": "echo hello", "timeout": -1})
-    
-    with pytest.raises(ToolException, match="timeout must be <= 600"):
-        await bash.ainvoke({"command": "echo hello", "timeout": 601})
+async def test_bash_cancel_kills_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import importlib
+
+    bash_module = importlib.import_module("app.tools.bash")
+
+    terminated: list = []
+    real_terminate = bash_module._terminate_process
+
+    def spy(proc):
+        terminated.append(proc)
+        real_terminate(proc)
+
+    monkeypatch.setattr(bash_module, "_terminate_process", spy)
+
+    task = asyncio.create_task(
+        bash.ainvoke({"command": _long_sleep_command(tmp_path), "timeout": 30})
+    )
+    await asyncio.sleep(1.0)  # let the worker thread spawn the process
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert terminated, "running process must be killed on cancellation"
 
 
 async def test_bash_path_outside_roots_raises(tmp_path: Path):
@@ -831,7 +949,9 @@ async def test_bash_path_outside_roots_raises(tmp_path: Path):
 
     try:
         with pytest.raises(ToolException, match="outside allowed roots"):
-            await bash.ainvoke({"command": "cat outside-bash.txt", "cwd": str(tmp_path.parent)})
+            await bash.ainvoke(
+                {"command": "cat outside-bash.txt", "cwd": str(tmp_path.parent)}
+            )
     finally:
         outside.unlink(missing_ok=True)
 
@@ -858,14 +978,7 @@ async def test_graph_executes_bash_tool_end_to_end(tmp_path: Path):
 
     tool_messages = [m for m in result["messages"] if isinstance(m, ToolMessage)]
     assert len(tool_messages) == 1
-    
-    # Parse JSON output (strip untrusted markers)
-    import json
-    content = tool_messages[0].content.strip()
-    if content.startswith(UNTRUSTED_CONTENT_START):
-        content = content[len(UNTRUSTED_CONTENT_START):].strip()
-    if content.endswith(UNTRUSTED_CONTENT_END):
-        content = content[:-len(UNTRUSTED_CONTENT_END)].strip()
-    output = json.loads(content)
+
+    output = _parse_bash_json(tool_messages[0].content)
     assert output["stdout"] == "from graph\n"
     assert output["exit_code"] == 0
