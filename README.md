@@ -4,7 +4,7 @@ Senior Python coding agent with UI and long-term memory.
 
 ## Phase: MVP
 
-Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (PostgreSQL schema), M-04 (LangGraph core), M-05 (system-prompt builder), M-06 (context manager), M-07 (tool `read`), M-08 (tool `write`), M-09 (tool `edit`) and M-10 (tool `bash`) are implemented.
+Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (PostgreSQL schema), M-04 (LangGraph core), M-05 (system-prompt builder), M-06 (context manager), M-07 (tool `read`), M-08 (tool `write`), M-09 (tool `edit`), M-10 (tool `bash`) and M-11 (tools `grep`/`glob`) are implemented.
 
 ## Quick Start
 
@@ -161,6 +161,7 @@ v7 BETA will replace the implementation with DFC (5 layers) — the `trim_messag
 - ✅ **M-08** - Tool `write`: atomic write (tmp + `os.replace`), `create_dirs`, path validation, registry wiring
 - ✅ **M-09** - Tool `edit`: exact string replacement, uniqueness guard, `replace_all`, atomic rewrite, registry wiring
 - ✅ **M-10** - Tool `bash`: JSON output (stdout/stderr/exit_code/duration_ms/truncated), char-based truncation, line dedup, injection detection, allowlist-env, timeout/cancel process kill
+- ✅ **M-11** - Tools `grep`/`glob`: ripgrep-backed search, JSON token-efficient output (`matches`/`files` + truncation flag), injection detection, untrusted framing, path validation, cache seam
 - ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for full 28 tickets)
 
 ## LLM Providers (M-01)

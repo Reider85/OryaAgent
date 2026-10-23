@@ -11,10 +11,10 @@ MVP progress:
 * M-08 registers ``write`` - the atomic file writer;
 * M-09 registers ``edit`` - the targeted string replacement;
 * M-10 registers ``bash`` - the shell command tool;
-* M-11 registers ``grep``/``glob`` - the search tools;
-* M-12 completes the ticket (registration of all five + integration
-  tests); v7 BETA wraps the list through ``CapabilityRegistry.filter``
-  without changing this signature.
+* M-11 registers ``grep``/``glob`` - the ripgrep-backed search tools;
+* M-12 completes the ticket (integration tests over the full list);
+  v7 BETA wraps the list through ``CapabilityRegistry.filter`` without
+  changing this signature.
 
 Usage::
 
@@ -30,6 +30,7 @@ from langchain_core.tools import BaseTool
 from app.tools.bash import bash
 from app.tools.edit import edit
 from app.tools.read import read
+from app.tools.search import glob, grep
 from app.tools.write import write
 
 
@@ -40,4 +41,4 @@ def get_tools(session_id: str | None = None) -> list[BaseTool]:
     the MVP list is global.
     """
     del session_id  # reserved for M-12 per-session filtering
-    return [read, write, edit, bash]
+    return [read, write, edit, bash, grep, glob]
