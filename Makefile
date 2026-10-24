@@ -1,4 +1,4 @@
-.PHONY: dev ui test lint clean install format check-lint check-format setup db-up db-migrate db-down
+.PHONY: dev ui test lint clean install format check-lint check-format setup db-up db-migrate db-down redis-up redis-down
 
 # Install dependencies
 install:
@@ -56,3 +56,10 @@ db-migrate:
 
 db-down:
 	docker compose down
+
+# Redis tool-cache (M-21)
+redis-up:
+	docker compose up -d redis
+
+redis-down:
+	docker compose stop redis

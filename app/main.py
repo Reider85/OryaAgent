@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI
 
 from app.api.llm import router as llm_router
+from app.api.metrics import router as metrics_router
 from app.api.sessions import router as sessions_router
 
 logging.basicConfig(
@@ -20,14 +21,19 @@ logging.basicConfig(
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """Start the M-14 session-log projection worker; cancel it on shutdown.
+    """Wire the M-21 cache backend and the M-14 projection worker.
 
-    The worker soft-fails without PostgreSQL (logged warning, retried on
-    the next pass) so ``/health`` and unit tests keep working with no
-    database running.
+    ``init_cache`` probes Redis per ``settings.cache_backend`` (``auto``
+    falls back to the in-memory backend with a warning) and
+    ``close_cache`` releases the client on shutdown. The worker
+    soft-fails without PostgreSQL (logged warning, retried on the next
+    pass) so ``/health`` and unit tests keep working with no database
+    running.
     """
+    from app.core.cache import close_cache, init_cache
     from app.db.session_log import projection_worker
 
+    await init_cache()
     task = asyncio.create_task(projection_worker())
     try:
         yield
@@ -35,6 +41,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
+        await close_cache()
 
 
 app = FastAPI(
@@ -46,6 +53,7 @@ app = FastAPI(
 
 app.include_router(llm_router)
 app.include_router(sessions_router)
+app.include_router(metrics_router)
 
 
 @app.get("/health")
