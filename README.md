@@ -4,7 +4,7 @@ Senior Python coding agent with UI and long-term memory.
 
 ## Phase: MVP
 
-Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (PostgreSQL schema), M-04 (LangGraph core), M-05 (system-prompt builder), M-06 (context manager), M-07 (tool `read`), M-08 (tool `write`), M-09 (tool `edit`), M-10 (tool `bash`), M-11 (tools `grep`/`glob`), M-12 (tool-registry integration), M-13 (permissions), M-14 (session-log), M-15 (Chainlit UI), M-16 (permission ask-prompt), M-17 (sidebar/settings), M-18 (smoke tests) and M-20 (sessions API) are implemented.
+Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (PostgreSQL schema), M-04 (LangGraph core), M-05 (system-prompt builder), M-06 (context manager), M-07 (tool `read`), M-08 (tool `write`), M-09 (tool `edit`), M-10 (tool `bash`), M-11 (tools `grep`/`glob`), M-12 (tool-registry integration), M-13 (permissions), M-14 (session-log), M-15 (Chainlit UI), M-16 (permission ask-prompt), M-17 (sidebar/settings), M-18 (smoke tests), M-20 (sessions API) and M-21 (Redis cache) are implemented.
 
 ## Quick Start
 
@@ -54,6 +54,7 @@ Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (
 - `make format` - Format code with ruff
 - `make clean` - Clean up build artifacts
 - `make db-up` / `make db-migrate` / `make db-down` - PostgreSQL lifecycle (M-03)
+- `make redis-up` / `make redis-down` - Redis for the tool-result cache (M-21)
 
 ### Configuration
 
@@ -225,6 +226,24 @@ curl -s -X POST localhost:8000/sessions/$SID/messages \
   -H 'content-type: application/json' -d '{"content":"run the tests"}'
 ```
 
+## Tool-result cache (M-21)
+
+Repeated tool calls for unchanged files are served from a cache instead of re-running the tool (TRIZ #28). The seam lives in `app/core/cache.py`:
+
+- **Keys:** `orya:tool_cache:{tool}:{sha256(args + mtime_ns)}` — the file mtime is part of the key, so any change makes the next call a miss automatically.
+- **Backends:** `CacheWrapper` (Redis) is the primary backend; `ORYA_CACHE_BACKEND` selects `auto` (probe Redis at startup, fall back to `MemoryCache` with a warning — the default), `redis` (fail fast) or `memory` (never touch Redis). TTL is `ORYA_CACHE_TTL_SECONDS` (default 300s per BACKLOG5).
+- **Cacheable:** `read`, `grep`, `glob`. Never cached: `write`, `edit`, `bash` (side effects) — write/edit instead call `invalidate_cache_for_path()` (`app/hooks/cache_invalidation.py`), which drops every entry registered for the changed path through the Redis `orya:tool_cache:idx:{path}` index.
+- **Cache-hit marker:** when a tool call goes through the graph, a hit returns a `ToolMessage` with `metadata={"from_cache": true}` (direct `ainvoke()` calls keep returning the plain payload).
+- **Stats:** process-local per-tool counters (Redis additionally mirrors `orya:cache_stats:{date}:{tool}` hashes).
+
+```bash
+make redis-up   # start Redis (docker compose), optional — auto mode falls back to memory
+curl -s localhost:8000/metrics            # Prometheus text: orya_tool_cache_hits_total{tool="read"}
+curl -s localhost:8000/tools/cache-stats  # {"backend": "...", "tools": {"read": {"hits": 1, "misses": 1, "hit_rate": 0.5}}}
+```
+
+Host port conflicts can be resolved with `REDIS_PORT=6381 make redis-up` (plus a matching `REDIS_URL`).
+
 ## Documentation
 
 - [Architecture v7](analytics/ARCHITECT7.md)
@@ -254,6 +273,7 @@ curl -s -X POST localhost:8000/sessions/$SID/messages \
 - ✅ **M-17** - Sidebar & settings: session list from JSONL + DB titles, session switching with history restore, model/permission/allow-list panel (`~/.orya/settings.json`)
 - ✅ **M-18** - Smoke tests: 5 canonical tasks (read/explain, atomic edit, bash+pytest, grep report, `/learn`) + cache/injection/JSON checks
 - ✅ **M-20** - Sessions API: `/sessions` CRUD (create, paginated list, metadata+messages, soft-delete), full-turn `POST /sessions/{id}/messages` (JSON with `tool_steps`/`pending_interrupt`), `POST /sessions/{id}/resume` for the M-13 permission gate; shared session-agent runtime (`app/core/agent.py`) reused by Chainlit
+- ✅ **M-21** - CacheWrapper: Redis backend (`ORYA_CACHE_BACKEND=auto|memory|redis`, TTL `ORYA_CACHE_TTL_SECONDS`), per-path invalidation hook on write/edit, `from_cache` ToolMessage metadata, `/metrics` (Prometheus text) + `/tools/cache-stats`
 - ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for full 28 tickets)
 
 ## LLM Providers (M-01)

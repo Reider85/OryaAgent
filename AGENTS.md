@@ -34,13 +34,13 @@ Senior Python coding agent (FastAPI + LangGraph + LLM provider seam). MVP ticket
 - `app/core/permissions.py` — `PermissionPolicy`: precedence deny → session allowlist → allowlist → mode. Fail-closed: no checkpointer ⇒ `ask` = deny; unknown resume answer = deny; a mixed approve/refuse batch is wholly refused.
 - `app/core/context.py` — `trim_messages(messages, max_tokens, *, model)` signature is an architectural invariant (v7 BETA keeps it).
 - `app/db/` — app tables use **asyncpg** (`schema.sql` canonical + `migrations/NNNN_name.sql`); checkpoints use a **separate psycopg pool** (`checkpoints.py`, `AsyncPostgresSaver.setup()`). **A schema change requires editing BOTH `schema.sql` AND a new migration file** — `tests/unit/test_db_schema.py` fails on drift. Checkpoint tables are not in schema.sql.
-- `app/ui/` is empty (Chainlit M-15+); Redis is declared but unused (in-memory cache).
+- `app/ui/` = Chainlit (M-15+); Redis backs the M-21 tool-result cache (`ORYA_CACHE_BACKEND=auto|memory|redis`, probed in the FastAPI lifespan / `on_chat_start`).
 
 ## Conventions
 
 - Module docstrings open with ticket id: `"""Tool: write - atomic file writer (M-08).` Commits: `M-13: permissions (...)`.
 - Tools: `@tool` + async + `Annotated[str, "..."]` params; blocking work via `asyncio.to_thread`; failures raise `ToolException` (chain with `from exc`). FS tools must call `validate_path()` (`app/tools/_validators.py`) before any I/O; allowed roots = cwd, `~/.orya`, `settings.memory_dir`. Writes are atomic (`mkstemp` same dir → fsync → `os.replace`).
-- User-visible file/shell output goes through `wrap_untrusted()`/`detect_injection()` (`app/core/security.py`); bash/grep/glob return a single JSON document. Read-only tools may use `get_cache()`; write/edit/bash never cache.
+- User-visible file/shell output goes through `wrap_untrusted()`/`detect_injection()` (`app/core/security.py`); bash/grep/glob return a single JSON document. Read-only tools may use `get_cache()`; write/edit/bash never cache (they call `invalidate_cache_for_path()` — M-21). A cache hit through the ToolNode returns `ToolMessage(metadata={"from_cache": True})` (`from_cache_result()` in `app/core/cache.py`).
 - Adding a tool = 5 steps: `app/tools/<name>.py` + `__init__.py` re-export + `get_tools()` + `EXPECTED_NAMES`/`EXPECTED_REQUIRED_ARGS` in `tests/integration/test_tools_integration.py` + unit tests; add read-only tools to the permission allowlist.
 - Adding a prompt section = `*_block()` → append in `build_system_prompt` (stable sections first, dynamic git/memory last) + test in `tests/unit/test_prompt.py`.
 - Ruff: line-length 88, double quotes, isort on, E501/B904 ignored (formatter owns length).
