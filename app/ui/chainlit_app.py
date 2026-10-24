@@ -1,4 +1,4 @@
-"""Chainlit UI (M-15/M-16): streaming chat + permission ask-prompt.
+"""Chainlit UI (M-15/M-16/M-17): streaming chat + permission ask-prompt + sidebar/settings.
 
 Chainlit drives LangGraph directly (BACKLOG4 M-15 shape; FastAPI/SSE
 routing is a follow-up ticket): every chat session owns one compiled
@@ -17,8 +17,9 @@ the continuation (tool execution + the agent's next answer) into the
 same reply. A batch may pause several times, so the handler loops until
 the checkpoint state holds no pending interrupt.
 
-Deferred to follow-up tickets: session sidebar and settings (M-17),
-FastAPI/SSE routing (M-24).
+M-17 adds session sidebar and settings: session list from JSONL files,
+settings panel for model/permission mode, session switching with history
+restoration. Settings persisted to ~/.orya/settings.json.
 
 Windows note: psycopg (``AsyncPostgresSaver``) cannot run on the
 ProactorEventLoop, and the bash tool relies on running under a Selector
@@ -42,6 +43,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
+from app.core.config import get_settings
 from app.core.context import trim_messages
 from app.core.graph import build_graph, default_run_config, resume_command
 from app.core.llm import get_llm
@@ -51,6 +53,13 @@ from app.core.tools import get_tools
 from app.db.checkpoints import get_checkpointer
 from app.db.session_log import ensure_session, log_message
 from app.ui.interrupt import ask_permission, get_pending_interrupt
+from app.ui.sessions import enrich_titles_from_db, list_sessions
+from app.ui.settings import (
+    load_settings,
+    model_choices,
+    policy_from_settings,
+    save_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +194,33 @@ async def resolve_checkpointer() -> tuple[Any, bool]:
         return MemorySaver(), True
 
 
-def build_session_graph(thread_id: str, checkpointer: Any) -> CompiledStateGraph:
+async def _load_session_history(graph: Any, thread_id: str) -> None:
+    """Load and display session history from checkpoint state.
+
+    Called when switching to an existing session to show previous messages.
+    """
+    try:
+        config = default_run_config(thread_id)
+        state = await graph.aget_state(config)
+        messages = (state.values or {}).get("messages") or []
+
+        # Display user and assistant messages
+        for msg in messages:
+            if isinstance(msg, HumanMessage):
+                await cl.Message(content=_content_text(msg.content)).send()
+            elif isinstance(msg, AIMessage):
+                await cl.Message(content=_content_text(msg.content)).send()
+    except Exception as exc:
+        logger.warning("Cannot load session history for %s: %s", thread_id, exc)
+
+
+def build_session_graph(
+    thread_id: str,
+    checkpointer: Any,
+    *,
+    model: str | None = None,
+    policy: Any | None = None,
+) -> CompiledStateGraph:
     """Assemble the per-session graph through the architectural seams.
 
     Tools (M-12), model (M-01), policy (M-13), system prompt (M-05) and
@@ -194,9 +229,9 @@ def build_session_graph(thread_id: str, checkpointer: Any) -> CompiledStateGraph
     """
     return build_graph(
         get_tools(thread_id),
-        get_llm(),
+        model if model else get_llm(),
         checkpointer,
-        get_policy(),
+        policy if policy else get_policy(),
         system_prompt_fn=build_system_prompt,
         trim_fn=trim_messages,
     )
@@ -296,17 +331,31 @@ async def _render_run(
 
 @cl.on_chat_start
 async def on_chat_start() -> None:
-    """Create the session thread and compile its graph (M-15)."""
+    """Create the session thread and compile its graph (M-15/M-17)."""
     thread_id = str(uuid.uuid4())
     checkpointer, degraded = await resolve_checkpointer()
+
+    # Load settings and build graph with overrides
+    settings = load_settings()
+    graph = build_session_graph(
+        thread_id,
+        checkpointer,
+        model=settings.model,
+        policy=policy_from_settings(settings),
+    )
+
     cl.user_session.set("thread_id", thread_id)
-    cl.user_session.set("graph", build_session_graph(thread_id, checkpointer))
+    cl.user_session.set("graph", graph)
+    cl.user_session.set("checkpointer", checkpointer)  # Store for session switching
     await _safe_ensure_session(thread_id)
+
     logger.info(
-        "Chainlit session started: thread_id=%s checkpointer=%s",
+        "Chainlit session started: thread_id=%s checkpointer=%s settings=%s",
         thread_id,
         "memory" if degraded else "postgres",
+        settings.model or "default",
     )
+
     if degraded:
         await cl.Message(
             content=(
@@ -314,6 +363,198 @@ async def on_chat_start() -> None:
                 "only (no resume after a restart)."
             )
         ).send()
+
+    # Show sidebar with sessions and settings panel
+    await _show_sidebar(thread_id)
+    await _show_settings_panel(settings)
+
+
+async def _show_sidebar(thread_id: str) -> None:
+    """Show sidebar with session list and new session button."""
+    sessions_dir = get_settings().sessions_dir
+    sessions = await list_sessions(sessions_dir, limit=10)
+    enriched = await enrich_titles_from_db(sessions)
+
+    # Create sidebar elements
+    elements = []
+
+    # New session button
+    new_session_action = cl.Action(
+        name="new_session", payload={"thread_id": None}, label="New session"
+    )
+    elements.append(new_session_action)
+
+    # Session list
+    for session in enriched:
+        session_action = cl.Action(
+            name="switch_session",
+            payload={"thread_id": session.session_id},
+            label=session.display_name,
+        )
+        elements.append(session_action)
+
+    # Show sidebar
+    await cl.ChatSettings(title="Sessions", elements=elements).send()
+
+
+async def _show_settings_panel(settings: Any) -> None:
+    """Show settings panel with model, permission mode, and allow list."""
+    # Model choices
+    model_options = model_choices()
+    current_model = settings.model or "default"
+
+    # Permission mode options
+    mode_options = [("strict", "Strict"), ("permissive", "Permissive")]
+    current_mode = settings.permission_mode or "strict"
+
+    # Create settings form
+    settings_elements = []
+
+    # Model selection
+    settings_elements.append(
+        {
+            "label": "Model",
+            "type": "select",
+            "options": model_options,
+            "default": current_model,
+        }
+    )
+
+    # Permission mode selection
+    settings_elements.append(
+        {
+            "label": "Permission Mode",
+            "type": "select",
+            "options": mode_options,
+            "default": current_mode,
+        }
+    )
+
+    # Allow list textarea
+    settings_elements.append(
+        {
+            "label": "Allow List (newline-separated patterns)",
+            "type": "textarea",
+            "default": "\n".join(settings.allow_list),
+        }
+    )
+
+    await cl.ChatSettings(title="Settings", elements=settings_elements).send()
+
+
+@cl.on_settings_update
+async def on_settings_update(settings_data: dict) -> None:
+    """Handle settings changes and rebuild graph."""
+    thread_id = cl.user_session.get("thread_id")
+    graph = cl.user_session.get("graph")
+    checkpointer = cl.user_session.get("checkpointer")
+
+    if not thread_id or not graph or not checkpointer:
+        await cl.Message(content="Session not initialized — reload the page.").send()
+        return
+
+    # Parse settings data
+    settings = load_settings()
+    settings.model = settings_data.get("Model")
+    settings.permission_mode = settings_data.get("Permission Mode")
+
+    # Parse allow list (newline-separated)
+    allow_list_text = settings_data.get("Allow List (newline-separated patterns)", "")
+    settings.allow_list = [
+        line.strip() for line in allow_list_text.split("\n") if line.strip()
+    ]
+
+    # Save settings
+    save_settings(settings)
+
+    # Rebuild graph with new settings
+    new_graph = build_session_graph(
+        thread_id,
+        checkpointer,
+        model=settings.model,
+        policy=policy_from_settings(settings),
+    )
+    cl.user_session.set("graph", new_graph)
+
+    logger.info(
+        "Settings updated: model=%s mode=%s", settings.model, settings.permission_mode
+    )
+    await cl.Message(content="Settings saved and graph updated.").send()
+
+
+@cl.action_callback("new_session")
+async def on_new_session(action: cl.Action) -> None:
+    """Handle new session action."""
+    thread_id = str(uuid.uuid4())
+    checkpointer, degraded = await resolve_checkpointer()
+
+    # Load settings and build new graph
+    settings = load_settings()
+    graph = build_session_graph(
+        thread_id,
+        checkpointer,
+        model=settings.model,
+        policy=policy_from_settings(settings),
+    )
+
+    # Update user session
+    cl.user_session.set("thread_id", thread_id)
+    cl.user_session.set("graph", graph)
+    cl.user_session.set("checkpointer", checkpointer)
+
+    await _safe_ensure_session(thread_id)
+
+    logger.info("New session started: thread_id=%s", thread_id)
+    await cl.Message(content=f"New session started: {thread_id[:8]}").send()
+
+    # Update sidebar
+    await _show_sidebar(thread_id)
+
+
+@cl.action_callback("switch_session")
+async def on_switch_session(action: cl.Action) -> None:
+    """Handle session switch action."""
+    thread_id = action.payload.get("thread_id")
+    if not thread_id:
+        await cl.Message(content="Invalid session ID").send()
+        return
+
+    # Get current checkpointer and build new graph for existing thread
+    checkpointer = cl.user_session.get("checkpointer")
+    if not checkpointer:
+        await cl.Message(
+            content="Cannot switch sessions: checkpointer not available"
+        ).send()
+        return
+
+    try:
+        # Build graph for existing thread_id
+        settings = load_settings()
+        graph = build_session_graph(
+            thread_id,
+            checkpointer,
+            model=settings.model,
+            policy=policy_from_settings(settings),
+        )
+
+        # Update user session
+        cl.user_session.set("thread_id", thread_id)
+        cl.user_session.set("graph", graph)
+
+        await _safe_ensure_session(thread_id)
+
+        # Load and display session history
+        await _load_session_history(graph, thread_id)
+
+        logger.info("Switched to session: thread_id=%s", thread_id)
+        await cl.Message(content=f"Switched to session: {thread_id[:8]}").send()
+
+        # Update sidebar
+        await _show_sidebar(thread_id)
+
+    except Exception as exc:
+        logger.exception("Failed to switch session: %s", thread_id)
+        await cl.Message(content=f"Failed to switch session: {exc}").send()
 
 
 @cl.on_message

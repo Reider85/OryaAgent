@@ -10,6 +10,7 @@ any infra (no Postgres, no API key, no Chainlit server).
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langchain_core.messages import (
@@ -434,3 +435,164 @@ def test_preview_caps_length() -> None:
 
     assert text.startswith("z" * 10)
     assert "+4990 chars" in text
+
+
+# --- M-17: build_session_graph overrides -------------------------------------
+
+
+def test_build_session_graph_with_model_override() -> None:
+    """Test build_session_graph passes model override to build_graph."""
+    with (
+        patch.object(ui, "build_graph") as mock_build_graph,
+        patch.object(ui, "get_llm") as mock_get_llm,
+    ):
+        mock_checkpointer = MemorySaver()
+
+        ui.build_session_graph("test123", mock_checkpointer, model="gpt-4o")
+
+        mock_build_graph.assert_called_once()
+        # model is the 2nd positional arg of build_graph
+        assert mock_build_graph.call_args[0][1] == "gpt-4o"
+        mock_get_llm.assert_not_called()
+
+
+def test_build_session_graph_with_policy_override() -> None:
+    """Test build_session_graph passes policy override to build_graph."""
+    with (
+        patch.object(ui, "build_graph") as mock_build_graph,
+        patch.object(ui, "get_llm") as mock_get_llm,
+        patch.object(ui, "get_policy") as mock_get_policy,
+    ):
+        mock_checkpointer = MemorySaver()
+        mock_policy = type("MockPolicy", (), {})()
+        mock_get_llm.return_value = type("MockLLM", (), {})()
+
+        ui.build_session_graph("test123", mock_checkpointer, policy=mock_policy)
+
+        mock_build_graph.assert_called_once()
+        # policy is the 4th positional arg of build_graph
+        assert mock_build_graph.call_args[0][3] is mock_policy
+        mock_get_policy.assert_not_called()
+
+
+def test_build_session_graph_defaults() -> None:
+    """Test build_session_graph uses defaults when no overrides given."""
+    with (
+        patch.object(ui, "build_graph") as mock_build_graph,
+        patch.object(ui, "get_llm") as mock_get_llm,
+        patch.object(ui, "get_policy") as mock_get_policy,
+    ):
+        mock_checkpointer = MemorySaver()
+        mock_llm = type("MockLLM", (), {})()
+        mock_policy = type("MockPolicy", (), {})()
+        mock_get_llm.return_value = mock_llm
+        mock_get_policy.return_value = mock_policy
+
+        ui.build_session_graph("test123", mock_checkpointer)
+
+        mock_build_graph.assert_called_once()
+        assert mock_build_graph.call_args[0][1] is mock_llm
+        assert mock_build_graph.call_args[0][3] is mock_policy
+        mock_get_llm.assert_called_once()
+        mock_get_policy.assert_called_once()
+
+
+# --- M-17: session switching helpers -------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_load_session_history_with_messages() -> None:
+    """Test _load_session_history with existing messages."""
+    mock_graph = AsyncMock()
+    mock_state = AsyncMock()
+    mock_state.values = {
+        "messages": [HumanMessage(content="Hello"), AIMessage(content="Hi there!")]
+    }
+    mock_graph.aget_state = AsyncMock(return_value=mock_state)
+
+    mock_cl = MagicMock()
+    mock_instance = MagicMock()
+    mock_instance.send = AsyncMock()
+    mock_cl.Message = MagicMock(return_value=mock_instance)
+
+    with patch.object(ui, "cl", mock_cl):
+        await ui._load_session_history(mock_graph, "test123")
+
+        assert mock_cl.Message.call_count == 2
+        mock_instance.send.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_load_session_history_empty() -> None:
+    """Test _load_session_history with no messages."""
+    mock_graph = AsyncMock()
+    mock_state = AsyncMock()
+    mock_state.values = {}
+    mock_graph.aget_state = AsyncMock(return_value=mock_state)
+
+    mock_cl = MagicMock()
+    mock_instance = MagicMock()
+    mock_instance.send = AsyncMock()
+    mock_cl.Message = MagicMock(return_value=mock_instance)
+
+    with patch.object(ui, "cl", mock_cl):
+        await ui._load_session_history(mock_graph, "test123")
+
+        mock_cl.Message.assert_not_called()
+        mock_instance.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_load_session_history_error() -> None:
+    """Test _load_session_history error handling."""
+    mock_graph = AsyncMock()
+    mock_graph.aget_state = AsyncMock(side_effect=Exception("Database error"))
+
+    mock_cl = MagicMock()
+    mock_instance = MagicMock()
+    mock_instance.send = AsyncMock()
+    mock_cl.Message = MagicMock(return_value=mock_instance)
+
+    with patch.object(ui, "cl", mock_cl):
+        await ui._load_session_history(mock_graph, "test123")
+
+        mock_cl.Message.assert_not_called()
+        mock_instance.send.assert_not_awaited()
+
+
+# --- M-17: settings integration ----------------------------------------------
+
+
+def test_settings_integration_model_choices() -> None:
+    """Test build_session_graph with model override doesn't call get_llm."""
+    with (
+        patch.object(ui, "build_graph") as mock_build,
+        patch.object(ui, "get_llm") as mock_get_llm,
+        patch.object(ui, "model_choices") as mock_choices,
+    ):
+        mock_checkpointer = MemorySaver()
+        mock_choices.return_value = ["claude-sonnet-3.5", "gpt-4o"]
+
+        ui.build_session_graph("test123", mock_checkpointer, model="claude-sonnet-3.5")
+
+        mock_build.assert_called_once()
+        mock_get_llm.assert_not_called()
+
+
+def test_settings_integration_policy_from_settings() -> None:
+    """Test build_session_graph with policy override doesn't call get_policy."""
+    with (
+        patch.object(ui, "build_graph") as mock_build,
+        patch.object(ui, "get_llm") as mock_get_llm,
+        patch.object(ui, "get_policy") as mock_get_policy,
+        patch.object(ui, "policy_from_settings") as mock_policy_fn,
+    ):
+        mock_policy = type("MockPolicy", (), {})()
+        mock_policy_fn.return_value = mock_policy
+        mock_get_llm.return_value = type("MockLLM", (), {})()
+        mock_checkpointer = MemorySaver()
+
+        ui.build_session_graph("test123", mock_checkpointer, policy=mock_policy)
+
+        mock_build.assert_called_once()
+        mock_get_policy.assert_not_called()
