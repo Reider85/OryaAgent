@@ -206,9 +206,9 @@ class Settings(BaseSettings):
         default=30.0,
         validation_alias=AliasChoices("ORIAHS_TIMEOUT_S", "ORYA_ORIAHS_TIMEOUT_S"),
     )
-    # BETA: UI ports
+    # BETA: UI ports (M-15: chainlit on 8001 — 8000 is the API server)
     chainlit_port: int = Field(
-        default=8000,
+        default=8001,
         validation_alias=AliasChoices("CHAINLIT_PORT", "ORYA_CHAINLIT_PORT"),
     )
     nextjs_port: int = Field(

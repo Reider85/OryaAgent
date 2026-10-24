@@ -1,4 +1,4 @@
-.PHONY: dev test lint clean install format check-lint check-format setup db-up db-migrate db-down
+.PHONY: dev ui test lint clean install format check-lint check-format setup db-up db-migrate db-down
 
 # Install dependencies
 install:
@@ -7,6 +7,10 @@ install:
 # Development server
 dev:
 	uv run uvicorn app.main:app --reload --port 8000
+
+# Chainlit UI (M-15) — port 8001 avoids clashing with `make dev` on 8000
+ui:
+	uv run chainlit run app/ui/chainlit_app.py --port $${CHAINLIT_PORT:-8001}
 
 # Run tests
 test:

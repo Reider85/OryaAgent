@@ -86,7 +86,7 @@ def test_defaults():
     # Future-phase placeholders
     assert s.auth_algorithm == "HS256"
     assert s.oriahs_timeout_s == 30.0
-    assert s.chainlit_port == 8000
+    assert s.chainlit_port == 8001
     assert s.nextjs_port == 3000
 
 
