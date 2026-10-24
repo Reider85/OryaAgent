@@ -19,6 +19,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Command
 
 from app.core.context import trim_messages
 from app.core.prompt import build_system_prompt
@@ -153,6 +154,120 @@ async def test_stream_graph_events_yields_nothing_for_chain_only_events() -> Non
 
     assert events == []
     assert len(graph.calls) == 1
+
+
+# --- resume_graph_events (M-16) --------------------------------------------
+
+
+async def test_resume_graph_events_sends_resume_command_payload() -> None:
+    graph = _FakeEventGraph(
+        [
+            _ev("on_chat_model_stream", data={"chunk": AIMessageChunk(content="ok")}),
+        ]
+    )
+    config = {"recursion_limit": 7}
+
+    events = [event async for event in ui.resume_graph_events(graph, "approve", config)]
+
+    assert events == [("token", {"content": "ok"})]
+    payload, seen_config, version = graph.calls[0]
+    assert version == "v2"
+    assert seen_config is config
+    assert isinstance(payload, Command)
+    assert payload.resume == "approve"
+
+
+async def test_resume_graph_events_denies_and_always() -> None:
+    for answer in ("deny", "always"):
+        graph = _FakeEventGraph([])
+        [event async for event in ui.resume_graph_events(graph, answer, {})]
+        payload, _, _ = graph.calls[0]
+        assert payload.resume == answer
+
+
+# --- _render_run (M-16) ----------------------------------------------------
+
+
+class _FakeReply:
+    def __init__(self) -> None:
+        self.tokens: list[str] = []
+
+    async def stream_token(self, content: str) -> None:
+        self.tokens.append(content)
+
+
+class _FakeStep:
+    def __init__(self, name: str = "tool", type: str = "tool") -> None:
+        self.name = name
+        self.type = type
+        self.input: Any = None
+        self.output: Any = None
+        self.sent = 0
+        self.updated = 0
+
+    async def send(self) -> None:
+        self.sent += 1
+
+    async def update(self) -> None:
+        self.updated += 1
+
+
+async def test_render_run_streams_tokens_and_manages_steps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[_FakeStep] = []
+
+    async def fake_start(data: dict[str, Any]) -> _FakeStep:
+        step = _FakeStep(name=str(data.get("tool")))
+        created.append(step)
+        return step
+
+    async def fake_end(steps: dict[str, Any], data: dict[str, Any]) -> None:
+        steps.pop(str(data.get("run_id")), None)
+
+    monkeypatch.setattr(ui, "_start_step", fake_start)
+    monkeypatch.setattr(ui, "_end_step", fake_end)
+
+    async def events():
+        yield "token", {"content": "a"}
+        yield "tool_start", {"run_id": "r1", "tool": "bash", "args": {"command": "ls"}}
+        yield "tool_end", {"run_id": "r1", "tool": "bash", "output": "ok"}
+        yield "token", {"content": "b"}
+
+    reply = _FakeReply()
+    steps: dict[str, Any] = {}
+
+    streamed = await ui._render_run(reply, steps, events())  # type: ignore[arg-type]
+
+    assert streamed is True
+    assert reply.tokens == ["a", "b"]
+    assert [s.name for s in created] == ["bash"]
+    assert steps == {}
+
+
+async def test_render_run_returns_false_without_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[_FakeStep] = []
+
+    async def fake_start(data: dict[str, Any]) -> _FakeStep:
+        step = _FakeStep(name=str(data.get("tool")))
+        created.append(step)
+        return step
+
+    monkeypatch.setattr(ui, "_start_step", fake_start)
+
+    async def events():
+        yield "tool_start", {"run_id": "r1", "tool": "bash", "args": {}}
+
+    reply = _FakeReply()
+    steps: dict[str, Any] = {}
+
+    streamed = await ui._render_run(reply, steps, events())  # type: ignore[arg-type]
+
+    assert streamed is False
+    assert reply.tokens == []
+    assert "r1" in steps
 
 
 # --- build_session_graph wiring ------------------------------------------

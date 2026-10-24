@@ -1,4 +1,4 @@
-"""Chainlit UI (M-15): on_chat_start / on_message with graph streaming.
+"""Chainlit UI (M-15/M-16): streaming chat + permission ask-prompt.
 
 Chainlit drives LangGraph directly (BACKLOG4 M-15 shape; FastAPI/SSE
 routing is a follow-up ticket): every chat session owns one compiled
@@ -9,8 +9,16 @@ version="v2")`` into three UI events (``token`` / ``tool_start`` /
 details and the event mapping stays unit-testable without a Chainlit
 runtime.
 
-Deferred to follow-up tickets: permission ask-prompt (M-16), session
-sidebar and settings (M-17), FastAPI/SSE routing (M-24).
+M-16 closes the permission gate (M-13): when a run pauses at the
+``human`` node the handler extracts the pending tool call
+(:mod:`app.ui.interrupt`), shows the Approve / Deny / don't-ask-again
+buttons and resumes the graph with ``resume_command(...)``, streaming
+the continuation (tool execution + the agent's next answer) into the
+same reply. A batch may pause several times, so the handler loops until
+the checkpoint state holds no pending interrupt.
+
+Deferred to follow-up tickets: session sidebar and settings (M-17),
+FastAPI/SSE routing (M-24).
 
 Windows note: psycopg (``AsyncPostgresSaver``) cannot run on the
 ProactorEventLoop, and the bash tool relies on running under a Selector
@@ -35,13 +43,14 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
 from app.core.context import trim_messages
-from app.core.graph import build_graph, default_run_config
+from app.core.graph import build_graph, default_run_config, resume_command
 from app.core.llm import get_llm
 from app.core.permissions import get_policy
 from app.core.prompt import build_system_prompt
 from app.core.tools import get_tools
 from app.db.checkpoints import get_checkpointer
 from app.db.session_log import ensure_session, log_message
+from app.ui.interrupt import ask_permission, get_pending_interrupt
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +63,11 @@ StreamEvent = tuple[Literal["token", "tool_start", "tool_end"], dict[str, Any]]
 #: Cap for tool input/output text rendered inside a step card.
 _STEP_PREVIEW_CHARS = 4000
 
-#: Shown when a run pauses at the permission gate (M-16 owns the UI).
+#: Shown when a run pauses but the interrupt payload cannot be read
+#: (M-16 normally resolves the pause with the ask-prompt buttons).
 _INTERRUPT_HINT = (
-    "Run paused at the permission gate: the agent is waiting for tool "
-    "approval. Approval buttons are not wired up yet (M-16). Set "
+    "Run paused at the permission gate, but the pending tool call could "
+    "not be read — reload the page to start a new session. Set "
     "`ORYA_PERMISSION_POLICY=permissive` or add allow rules in "
     "`~/.orya/permissions.yml` to let tools run without prompting."
 )
@@ -94,19 +104,17 @@ def _preview(value: Any, limit: int = _STEP_PREVIEW_CHARS) -> str:
     return text
 
 
-async def stream_graph_events(
-    graph: Any, user_input: str, config: dict[str, Any]
+async def _stream_normalized(
+    graph: Any, payload: Any, config: dict[str, Any]
 ) -> AsyncIterator[StreamEvent]:
-    """Run one user turn through the graph, yielding normalized UI events.
+    """Run ``graph.astream_events`` and normalize into UI events.
 
-    Wraps ``graph.astream_events(..., version="v2")``: chat-model token
-    chunks become ``token`` events, tool calls become ``tool_start`` /
-    ``tool_end`` pairs keyed by LangGraph ``run_id``. Internal chain
-    events are ignored — the handlers render exactly three event kinds.
-    An interrupted run simply ends the iteration; the caller probes the
-    checkpoint state afterwards (``state.next != ()``).
+    Chat-model token chunks become ``token`` events, tool calls become
+    ``tool_start`` / ``tool_end`` pairs keyed by LangGraph ``run_id``.
+    Internal chain events are ignored. An interrupted run simply ends
+    the iteration; the caller probes the checkpoint state afterwards
+    (``state.next != ()``).
     """
-    payload = {"messages": [HumanMessage(user_input)]}
     async for event in graph.astream_events(payload, config, version="v2"):
         kind = event.get("event")
         data = event.get("data") or {}
@@ -134,6 +142,29 @@ async def stream_graph_events(
                     "output": _content_text(getattr(output, "content", output)),
                 },
             )
+
+
+async def stream_graph_events(
+    graph: Any, user_input: str, config: dict[str, Any]
+) -> AsyncIterator[StreamEvent]:
+    """Run one user turn through the graph, yielding normalized UI events."""
+    payload = {"messages": [HumanMessage(user_input)]}
+    async for event in _stream_normalized(graph, payload, config):
+        yield event
+
+
+async def resume_graph_events(
+    graph: Any, answer: str, config: dict[str, Any]
+) -> AsyncIterator[StreamEvent]:
+    """Resume an interrupted run (M-16), yielding normalized UI events.
+
+    The payload is ``resume_command(answer)`` — the same contract the
+    ``human`` node (M-13) interprets (``approve`` / ``deny`` /
+    ``always``). The resumed run streams tool execution and the agent's
+    follow-up answer exactly like a normal turn.
+    """
+    async for event in _stream_normalized(graph, resume_command(answer), config):
+        yield event
 
 
 async def resolve_checkpointer() -> tuple[Any, bool]:
@@ -240,6 +271,29 @@ async def _close_steps(steps: dict[str, cl.Step]) -> None:
         await step.update()
 
 
+async def _render_run(
+    reply: cl.Message,
+    steps: dict[str, cl.Step],
+    events: AsyncIterator[StreamEvent],
+) -> bool:
+    """Render one streaming pass into ``reply``/``steps``.
+
+    Returns ``True`` when at least one token was streamed (the caller
+    sends the reply only in that case — non-streaming models fall back
+    to the checkpoint text instead).
+    """
+    streamed = False
+    async for kind, data in events:
+        if kind == "token":
+            await reply.stream_token(data["content"])
+            streamed = True
+        elif kind == "tool_start":
+            steps[data["run_id"]] = await _start_step(data)
+        else:
+            await _end_step(steps, data)
+    return streamed
+
+
 @cl.on_chat_start
 async def on_chat_start() -> None:
     """Create the session thread and compile its graph (M-15)."""
@@ -264,7 +318,7 @@ async def on_chat_start() -> None:
 
 @cl.on_message
 async def on_message(message: cl.Message) -> None:
-    """Stream one user turn through the graph into the chat (M-15)."""
+    """Stream one user turn through the graph into the chat (M-15/M-16)."""
     thread_id = cl.user_session.get("thread_id")
     graph = cl.user_session.get("graph")
     text = (message.content or "").strip()
@@ -281,14 +335,32 @@ async def on_message(message: cl.Message) -> None:
     streamed = False
 
     try:
-        async for kind, data in stream_graph_events(graph, text, config):
-            if kind == "token":
-                await reply.stream_token(data["content"])
-                streamed = True
-            elif kind == "tool_start":
-                steps[data["run_id"]] = await _start_step(data)
-            else:
-                await _end_step(steps, data)
+        streamed = await _render_run(
+            reply, steps, stream_graph_events(graph, text, config)
+        )
+        # M-16: resolve permission pauses — ask, resume, re-check. A
+        # batch may pause once per tool call, so this is a loop.
+        while await _has_pending_interrupt(graph, config):
+            state = await graph.aget_state(config)
+            pending = get_pending_interrupt(state)
+            if pending is None:
+                await cl.Message(content=_INTERRUPT_HINT).send()
+                break
+            answer = await ask_permission(pending)
+            logger.info(
+                "Permission %s: tool=%s thread_id=%s",
+                answer,
+                pending.tool,
+                thread_id,
+            )
+            await _safe_log(
+                thread_id,
+                "system",
+                f"permission {answer}: {pending.tool} {_preview(pending.args)}",
+            )
+            streamed |= await _render_run(
+                reply, steps, resume_graph_events(graph, answer, config)
+            )
     except Exception as exc:
         logger.exception("UI run failed (thread_id=%s)", thread_id)
         await _close_steps(steps)
@@ -297,8 +369,7 @@ async def on_message(message: cl.Message) -> None:
 
     await _close_steps(steps)
 
-    pending = await _has_pending_interrupt(graph, config)
-    if not streamed and not pending:
+    if not streamed and not await _has_pending_interrupt(graph, config):
         fallback = await _final_answer_text(graph, config)
         if fallback:
             await reply.stream_token(fallback)
@@ -306,5 +377,3 @@ async def on_message(message: cl.Message) -> None:
     if streamed:
         await reply.send()
         await _safe_log(thread_id, "assistant", reply.content)
-    if pending:
-        await cl.Message(content=_INTERRUPT_HINT).send()
