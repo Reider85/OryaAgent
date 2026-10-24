@@ -4,7 +4,7 @@ Senior Python coding agent with UI and long-term memory.
 
 ## Phase: MVP
 
-Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (PostgreSQL schema), M-04 (LangGraph core), M-05 (system-prompt builder), M-06 (context manager), M-07 (tool `read`), M-08 (tool `write`), M-09 (tool `edit`), M-10 (tool `bash`), M-11 (tools `grep`/`glob`), M-12 (tool-registry integration) and M-13 (permissions) are implemented.
+Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (PostgreSQL schema), M-04 (LangGraph core), M-05 (system-prompt builder), M-06 (context manager), M-07 (tool `read`), M-08 (tool `write`), M-09 (tool `edit`), M-10 (tool `bash`), M-11 (tools `grep`/`glob`), M-12 (tool-registry integration), M-13 (permissions) and M-14 (session-log) are implemented.
 
 ## Quick Start
 
@@ -169,6 +169,21 @@ deny_rules:
 
 Resuming a paused run: `resume_command("approve")` runs the call, `"deny"` refuses it, `"always"` approves and stops asking about this tool for the rest of the session; unknown answers are treated as a denial (fail-closed).
 
+## Session-log (M-14)
+
+`app/db/session_log.py` keeps two complementary views of a session:
+
+1. **Typed `messages` rows** (PostgreSQL) — `log_message(session_id, role, content, tool_calls, tool_call_id)` assigns `MAX(seq)+1` within the session and ensures the parent `sessions` row exists (M-03 schema). Query-friendly log for the UI/API layers.
+2. **JSONL projection** — an append-only `~/.orya/sessions/{session_id}.jsonl` file derived from the LangGraph `AsyncPostgresSaver` checkpoints, one event per line:
+   ```json
+   {"ts": "2026-01-01T00:00:02+00:00", "type": "tool", "payload": {"message_id": "...", "content": "echo: hi", "tool_call_id": "call_1"}}
+   ```
+   `type` is `user` / `ai` / `tool` / `system`. Used for replay, debug and audit.
+
+Projection is idempotent: each thread has a `{session_id}.meta.json` marker (`last_processed_ts`); a projection run only processes newer checkpoints and only emits messages that appeared since the previous snapshot, so re-running the worker appends nothing. The directory comes from `ORYA_SESSIONS_DIR` (default `~/.orya/sessions`).
+
+A background projection worker starts with the FastAPI app (lifespan in `app/main.py`) and periodically discovers threads from the `checkpoints` table. It soft-fails without PostgreSQL — the API stays up and retries on the next pass.
+
 ## Documentation
 
 - [Architecture v7](analytics/ARCHITECT7.md)
@@ -192,6 +207,7 @@ Resuming a paused run: `resume_command("approve")` runs the call, `"deny"` refus
 - ✅ **M-11** - Tools `grep`/`glob`: ripgrep-backed search, JSON token-efficient output (`matches`/`files` + truncation flag), injection detection, untrusted framing, path validation, cache seam
 - ✅ **M-12** - Tool-registry integration: `get_tools()` full 6-tool list, `graph.bind_tools` wiring, integration tests (full-cycle agent→tools→agent e2e + offline real-model bind/schema check)
 - ✅ **M-13** - Permissions: `PermissionPolicy` (strict/permissive), deny→session→allow→mode rule precedence, session allowlist, interrupt-driven ask via the graph's permission-review node
+- ✅ **M-14** - Session-log: typed `messages` writer (`log_message`), JSONL projection of PostgresSaver checkpoints (`~/.orya/sessions/{id}.jsonl`, ts-deduped), background projection worker (FastAPI lifespan)
 - ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for full 28 tickets)
 
 ## LLM Providers (M-01)
