@@ -3,11 +3,11 @@
 Chainlit drives LangGraph directly (BACKLOG4 M-15 shape; FastAPI/SSE
 routing is a follow-up ticket): every chat session owns one compiled
 graph and one generated ``thread_id`` stored in ``cl.user_session``.
-``stream_graph_events`` normalizes ``graph.astream_events(...,
-version="v2")`` into three UI events (``token`` / ``tool_start`` /
-``tool_end``) so the Chainlit handlers stay free of LangGraph event
-details and the event mapping stays unit-testable without a Chainlit
-runtime.
+The shared runtime lives in :mod:`app.core.agent` (M-20) — graph
+assembly, checkpointer resolution, normalized stream events and
+interrupt extraction are imported from there so the FastAPI layer
+reuses them without pulling in Chainlit; this module keeps only the
+rendering and the Chainlit handlers.
 
 M-16 closes the permission gate (M-13): when a run pauses at the
 ``human`` node the handler extracts the pending tool call
@@ -23,36 +23,46 @@ restoration. Settings persisted to ~/.orya/settings.json.
 
 Windows note: psycopg (``AsyncPostgresSaver``) cannot run on the
 ProactorEventLoop, and the bash tool relies on running under a Selector
-loop (see ``app/tools/bash.py``). Chainlit imports this module *before*
-it creates its event loop, so the policy set below applies to the whole
-server process.
+loop (see ``app/tools/bash.py``). :mod:`app.core.agent` sets the
+WindowsSelectorEventLoopPolicy at import; Chainlit imports this module
+(and thus the agent runtime) *before* it creates its event loop, so
+the policy applies to the whole server process.
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
-import sys
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any, Literal
+from typing import Any
 
 import chainlit as cl
 from langchain_core.messages import AIMessage, HumanMessage
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph.state import CompiledStateGraph
 
+from app.core.agent import (
+    StreamEvent,
+    build_session_graph,
+    get_pending_interrupt,
+    resolve_checkpointer,
+    resume_graph_events,
+    stream_graph_events,
+)
+from app.core.agent import (
+    content_text as _content_text,
+)
+from app.core.agent import (
+    final_answer_text as _final_answer_text,
+)
+from app.core.agent import (
+    has_pending_interrupt as _has_pending_interrupt,
+)
+from app.core.agent import (
+    preview as _preview,
+)
 from app.core.config import get_settings
-from app.core.context import trim_messages
-from app.core.graph import build_graph, default_run_config, resume_command
-from app.core.llm import get_llm
-from app.core.permissions import get_policy
-from app.core.prompt import build_system_prompt
-from app.core.tools import get_tools
-from app.db.checkpoints import get_checkpointer
+from app.core.graph import default_run_config
 from app.db.session_log import ensure_session, log_message
-from app.ui.interrupt import ask_permission, get_pending_interrupt
+from app.ui.interrupt import ask_permission
 from app.ui.sessions import enrich_titles_from_db, list_sessions
 from app.ui.settings import (
     load_settings,
@@ -63,15 +73,6 @@ from app.ui.settings import (
 
 logger = logging.getLogger(__name__)
 
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
-#: Normalized UI event emitted by :func:`stream_graph_events`.
-StreamEvent = tuple[Literal["token", "tool_start", "tool_end"], dict[str, Any]]
-
-#: Cap for tool input/output text rendered inside a step card.
-_STEP_PREVIEW_CHARS = 4000
-
 #: Shown when a run pauses but the interrupt payload cannot be read
 #: (M-16 normally resolves the pause with the ask-prompt buttons).
 _INTERRUPT_HINT = (
@@ -80,118 +81,6 @@ _INTERRUPT_HINT = (
     "`ORYA_PERMISSION_POLICY=permissive` or add allow rules in "
     "`~/.orya/permissions.yml` to let tools run without prompting."
 )
-
-
-def _content_text(content: Any) -> str:
-    """Flatten message/tool content (str or content blocks) into plain text."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for block in content:
-            if isinstance(block, str):
-                parts.append(block)
-            elif isinstance(block, dict) and isinstance(block.get("text"), str):
-                parts.append(block["text"])
-        return "".join(parts)
-    if content is None:
-        return ""
-    return str(content)
-
-
-def _preview(value: Any, limit: int = _STEP_PREVIEW_CHARS) -> str:
-    """Render tool input/output as bounded text for a step card."""
-    if isinstance(value, (dict, list)):
-        try:
-            text = json.dumps(value, ensure_ascii=False, default=str)
-        except (TypeError, ValueError):
-            text = str(value)
-    else:
-        text = _content_text(value)
-    if len(text) > limit:
-        return f"{text[:limit]}... (+{len(text) - limit} chars)"
-    return text
-
-
-async def _stream_normalized(
-    graph: Any, payload: Any, config: dict[str, Any]
-) -> AsyncIterator[StreamEvent]:
-    """Run ``graph.astream_events`` and normalize into UI events.
-
-    Chat-model token chunks become ``token`` events, tool calls become
-    ``tool_start`` / ``tool_end`` pairs keyed by LangGraph ``run_id``.
-    Internal chain events are ignored. An interrupted run simply ends
-    the iteration; the caller probes the checkpoint state afterwards
-    (``state.next != ()``).
-    """
-    async for event in graph.astream_events(payload, config, version="v2"):
-        kind = event.get("event")
-        data = event.get("data") or {}
-        run_id = str(event.get("run_id") or "")
-        if kind == "on_chat_model_stream":
-            text = _content_text(getattr(data.get("chunk"), "content", None))
-            if text:
-                yield "token", {"content": text}
-        elif kind == "on_tool_start":
-            yield (
-                "tool_start",
-                {
-                    "run_id": run_id,
-                    "tool": event.get("name"),
-                    "args": data.get("input"),
-                },
-            )
-        elif kind == "on_tool_end":
-            output = data.get("output")
-            yield (
-                "tool_end",
-                {
-                    "run_id": run_id,
-                    "tool": event.get("name"),
-                    "output": _content_text(getattr(output, "content", output)),
-                },
-            )
-
-
-async def stream_graph_events(
-    graph: Any, user_input: str, config: dict[str, Any]
-) -> AsyncIterator[StreamEvent]:
-    """Run one user turn through the graph, yielding normalized UI events."""
-    payload = {"messages": [HumanMessage(user_input)]}
-    async for event in _stream_normalized(graph, payload, config):
-        yield event
-
-
-async def resume_graph_events(
-    graph: Any, answer: str, config: dict[str, Any]
-) -> AsyncIterator[StreamEvent]:
-    """Resume an interrupted run (M-16), yielding normalized UI events.
-
-    The payload is ``resume_command(answer)`` — the same contract the
-    ``human`` node (M-13) interprets (``approve`` / ``deny`` /
-    ``always``). The resumed run streams tool execution and the agent's
-    follow-up answer exactly like a normal turn.
-    """
-    async for event in _stream_normalized(graph, resume_command(answer), config):
-        yield event
-
-
-async def resolve_checkpointer() -> tuple[Any, bool]:
-    """Return ``(checkpointer, degraded)`` for a new UI session.
-
-    PostgreSQL first (M-03/M-14 persistence); on any failure — no
-    database, incompatible event loop — fall back to the in-memory
-    ``MemorySaver`` so the UI still runs. ``degraded=True`` means state
-    will not survive a restart.
-    """
-    try:
-        return await get_checkpointer(), False
-    except Exception as exc:
-        logger.warning(
-            "Postgres checkpointer unavailable (%s); using in-memory MemorySaver",
-            exc,
-        )
-        return MemorySaver(), True
 
 
 async def _load_session_history(graph: Any, thread_id: str) -> None:
@@ -212,56 +101,6 @@ async def _load_session_history(graph: Any, thread_id: str) -> None:
                 await cl.Message(content=_content_text(msg.content)).send()
     except Exception as exc:
         logger.warning("Cannot load session history for %s: %s", thread_id, exc)
-
-
-def build_session_graph(
-    thread_id: str,
-    checkpointer: Any,
-    *,
-    model: str | None = None,
-    policy: Any | None = None,
-) -> CompiledStateGraph:
-    """Assemble the per-session graph through the architectural seams.
-
-    Tools (M-12), model (M-01), policy (M-13), system prompt (M-05) and
-    context trimming (M-06) are all injected — the UI never hardcodes a
-    tool list or a prompt.
-    """
-    return build_graph(
-        get_tools(thread_id),
-        model if model else get_llm(),
-        checkpointer,
-        policy if policy else get_policy(),
-        system_prompt_fn=build_system_prompt,
-        trim_fn=trim_messages,
-    )
-
-
-async def _has_pending_interrupt(graph: Any, config: dict[str, Any]) -> bool:
-    """True when the run paused at the permission gate (M-13 ``human``)."""
-    try:
-        state = await graph.aget_state(config)
-    except Exception:
-        return False
-    return bool(getattr(state, "next", None))
-
-
-async def _final_answer_text(graph: Any, config: dict[str, Any]) -> str:
-    """Latest assistant text from checkpoint state (non-streaming fallback).
-
-    Skips tool-call messages: their content is empty and would shadow
-    the real answer. Only used when the run did not pause and the model
-    emitted no token chunks.
-    """
-    try:
-        state = await graph.aget_state(config)
-    except Exception:
-        return ""
-    messages = (state.values or {}).get("messages") or []
-    for msg in reversed(messages):
-        if isinstance(msg, AIMessage) and not msg.tool_calls:
-            return _content_text(msg.content)
-    return ""
 
 
 async def _safe_ensure_session(thread_id: str) -> None:

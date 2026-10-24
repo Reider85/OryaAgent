@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI
 
 from app.api.llm import router as llm_router
+from app.api.sessions import router as sessions_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,6 +45,7 @@ app = FastAPI(
 )
 
 app.include_router(llm_router)
+app.include_router(sessions_router)
 
 
 @app.get("/health")

@@ -22,6 +22,7 @@ from langchain_core.messages import (
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
+from app.core import agent
 from app.core.context import trim_messages
 from app.core.prompt import build_system_prompt
 from app.ui import chainlit_app as ui
@@ -287,10 +288,10 @@ def test_build_session_graph_wiring(monkeypatch: pytest.MonkeyPatch) -> None:
         )
         return "GRAPH"
 
-    monkeypatch.setattr(ui, "build_graph", fake_build_graph)
-    monkeypatch.setattr(ui, "get_llm", lambda *a, **k: "MODEL")
-    monkeypatch.setattr(ui, "get_tools", lambda session_id: ["t-read"])
-    monkeypatch.setattr(ui, "get_policy", lambda mode=None, **k: "POLICY")
+    monkeypatch.setattr(agent, "build_graph", fake_build_graph)
+    monkeypatch.setattr(agent, "get_llm", lambda *a, **k: "MODEL")
+    monkeypatch.setattr(agent, "get_tools", lambda session_id: ["t-read"])
+    monkeypatch.setattr(agent, "get_policy", lambda mode=None, **k: "POLICY")
 
     graph = ui.build_session_graph("tid-1", "CP")
 
@@ -314,7 +315,7 @@ async def test_resolve_checkpointer_prefers_postgres(
     async def fake_get_checkpointer():
         return sentinel
 
-    monkeypatch.setattr(ui, "get_checkpointer", fake_get_checkpointer)
+    monkeypatch.setattr(agent, "get_checkpointer", fake_get_checkpointer)
 
     checkpointer, degraded = await ui.resolve_checkpointer()
 
@@ -328,7 +329,7 @@ async def test_resolve_checkpointer_falls_back_to_memory(
     async def boom():
         raise RuntimeError("psycopg cannot run on ProactorEventLoop")
 
-    monkeypatch.setattr(ui, "get_checkpointer", boom)
+    monkeypatch.setattr(agent, "get_checkpointer", boom)
 
     checkpointer, degraded = await ui.resolve_checkpointer()
 
@@ -443,8 +444,8 @@ def test_preview_caps_length() -> None:
 def test_build_session_graph_with_model_override() -> None:
     """Test build_session_graph passes model override to build_graph."""
     with (
-        patch.object(ui, "build_graph") as mock_build_graph,
-        patch.object(ui, "get_llm") as mock_get_llm,
+        patch.object(agent, "build_graph") as mock_build_graph,
+        patch.object(agent, "get_llm") as mock_get_llm,
     ):
         mock_checkpointer = MemorySaver()
 
@@ -459,9 +460,9 @@ def test_build_session_graph_with_model_override() -> None:
 def test_build_session_graph_with_policy_override() -> None:
     """Test build_session_graph passes policy override to build_graph."""
     with (
-        patch.object(ui, "build_graph") as mock_build_graph,
-        patch.object(ui, "get_llm") as mock_get_llm,
-        patch.object(ui, "get_policy") as mock_get_policy,
+        patch.object(agent, "build_graph") as mock_build_graph,
+        patch.object(agent, "get_llm") as mock_get_llm,
+        patch.object(agent, "get_policy") as mock_get_policy,
     ):
         mock_checkpointer = MemorySaver()
         mock_policy = type("MockPolicy", (), {})()
@@ -478,9 +479,9 @@ def test_build_session_graph_with_policy_override() -> None:
 def test_build_session_graph_defaults() -> None:
     """Test build_session_graph uses defaults when no overrides given."""
     with (
-        patch.object(ui, "build_graph") as mock_build_graph,
-        patch.object(ui, "get_llm") as mock_get_llm,
-        patch.object(ui, "get_policy") as mock_get_policy,
+        patch.object(agent, "build_graph") as mock_build_graph,
+        patch.object(agent, "get_llm") as mock_get_llm,
+        patch.object(agent, "get_policy") as mock_get_policy,
     ):
         mock_checkpointer = MemorySaver()
         mock_llm = type("MockLLM", (), {})()
@@ -566,8 +567,8 @@ async def test_load_session_history_error() -> None:
 def test_settings_integration_model_choices() -> None:
     """Test build_session_graph with model override doesn't call get_llm."""
     with (
-        patch.object(ui, "build_graph") as mock_build,
-        patch.object(ui, "get_llm") as mock_get_llm,
+        patch.object(agent, "build_graph") as mock_build,
+        patch.object(agent, "get_llm") as mock_get_llm,
         patch.object(ui, "model_choices") as mock_choices,
     ):
         mock_checkpointer = MemorySaver()
@@ -582,9 +583,9 @@ def test_settings_integration_model_choices() -> None:
 def test_settings_integration_policy_from_settings() -> None:
     """Test build_session_graph with policy override doesn't call get_policy."""
     with (
-        patch.object(ui, "build_graph") as mock_build,
-        patch.object(ui, "get_llm") as mock_get_llm,
-        patch.object(ui, "get_policy") as mock_get_policy,
+        patch.object(agent, "build_graph") as mock_build,
+        patch.object(agent, "get_llm") as mock_get_llm,
+        patch.object(agent, "get_policy") as mock_get_policy,
         patch.object(ui, "policy_from_settings") as mock_policy_fn,
     ):
         mock_policy = type("MockPolicy", (), {})()

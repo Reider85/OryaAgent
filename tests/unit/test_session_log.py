@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -125,6 +126,154 @@ async def test_log_message_rejects_invalid_role():
     with pytest.raises(ValueError, match="invalid role"):
         await log_message("s1", "narrator", "hi", pool=pool)
     assert pool.executed == []
+
+
+# --- session CRUD (M-20) -----------------------------------------------------
+
+
+class CrudPool(FakePool):
+    """FakePool variant returning session/message rows for CRUD helpers."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.session_row: dict | None = {
+            "session_id": "s9",
+            "title": "t",
+            "provider": "anthropic",
+            "model": "m",
+            "status": "active",
+            "working_dir": None,
+            "created_at": datetime(2026, 1, 1, tzinfo=UTC),
+            "last_activity_at": datetime(2026, 1, 1, tzinfo=UTC),
+            "metadata": {},
+        }
+        self.message_rows: list[dict] = []
+
+    async def fetchrow(self, query: str, *args: Any) -> dict | None:
+        self.executed.append((query, args))
+        if self.session_row is None:
+            return None
+        if "RETURNING *" in query:
+            row = dict(self.session_row)
+            if "INSERT" in query:
+                row["session_id"] = args[0]
+            if "UPDATE" in query:
+                row["status"] = args[1]
+            return row
+        return dict(self.session_row)
+
+    async def fetch(self, query: str, *args: Any) -> list[dict]:
+        self.executed.append((query, args))
+        if "FROM messages" in query:
+            return list(self.message_rows)
+        return [dict(self.session_row)] if self.session_row else []
+
+    async def fetchval(self, query: str, *args: Any) -> int:
+        self.executed.append((query, args))
+        return 7
+
+
+async def test_create_session_generates_uuid_and_returns_row():
+    from app.db.session_log import create_session
+
+    pool = CrudPool()
+    row = await create_session(title="t", metadata={"src": "ci"}, pool=pool)
+    query, args = pool.executed[0]
+    assert "INSERT INTO sessions" in query
+    assert "RETURNING *" in query
+    assert len(args[0].split("-")) == 5  # uuid4
+    assert json.loads(args[5]) == {"src": "ci"}
+    assert row["session_id"] == args[0]
+    assert row["status"] == "active"
+    assert row["created_at"] == "2026-01-01T00:00:00+00:00"
+
+
+async def test_create_session_honours_explicit_id():
+    from app.db.session_log import create_session
+
+    pool = CrudPool()
+    row = await create_session(session_id="fixed-id", pool=pool)
+    assert row["session_id"] == "fixed-id"
+    assert pool.executed[0][1][0] == "fixed-id"
+
+
+async def test_get_session_returns_none_for_unknown():
+    from app.db.session_log import get_session
+
+    pool = CrudPool()
+    pool.session_row = None
+    assert await get_session("nope", pool=pool) is None
+    query, args = pool.executed[0]
+    assert "SELECT * FROM sessions WHERE session_id = $1" in query
+    assert args == ("nope",)
+
+
+async def test_list_sessions_orders_by_activity_and_counts():
+    from app.db.session_log import list_sessions
+
+    pool = CrudPool()
+    rows, total = await list_sessions(limit=10, offset=20, pool=pool)
+    select, args = pool.executed[0]
+    assert "ORDER BY last_activity_at DESC" in select
+    assert "LIMIT $1 OFFSET $2" in select
+    assert args == (10, 20)
+    assert pool.executed[1][0] == "SELECT COUNT(*) FROM sessions"
+    assert total == 7
+    assert rows[0]["session_id"] == "s9"
+
+
+async def test_set_session_status_soft_delete_and_validation():
+    from app.db.session_log import set_session_status
+
+    pool = CrudPool()
+    row = await set_session_status("s9", "closed", pool=pool)
+    query, args = pool.executed[0]
+    assert "UPDATE sessions SET status = $2" in query
+    assert args == ("s9", "closed")
+    assert row["status"] == "closed"
+
+    with pytest.raises(ValueError, match="invalid status"):
+        await set_session_status("s9", "deleted", pool=pool)
+
+
+async def test_set_session_status_unknown_returns_none():
+    from app.db.session_log import set_session_status
+
+    pool = CrudPool()
+    pool.session_row = None
+    assert await set_session_status("nope", "closed", pool=pool) is None
+
+
+async def test_list_messages_orders_by_seq_and_isoformats():
+    from app.db.session_log import list_messages
+
+    pool = CrudPool()
+    pool.message_rows = [
+        {
+            "id": 1,
+            "seq": 2,
+            "role": "assistant",
+            "content": "hi",
+            "tool_calls": None,
+            "tool_call_id": None,
+            "created_at": datetime(2026, 1, 1, tzinfo=UTC),
+        },
+        {
+            "id": 2,
+            "seq": 1,
+            "role": "user",
+            "content": "yo",
+            "tool_calls": None,
+            "tool_call_id": None,
+            "created_at": datetime(2026, 1, 1, tzinfo=UTC),
+        },
+    ]
+    messages = await list_messages("s9", pool=pool)
+    query, args = pool.executed[0]
+    assert "ORDER BY seq" in query
+    assert args == ("s9", 1000, 0)
+    assert [m["seq"] for m in messages] == [2, 1]
+    assert messages[0]["created_at"] == "2026-01-01T00:00:00+00:00"
 
 
 # --- discover_thread_ids ----------------------------------------------------

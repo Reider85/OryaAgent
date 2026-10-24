@@ -5,10 +5,9 @@ LangGraph's dynamic ``interrupt()`` and waits for the UI to resume the
 run with ``resume_command("approve" | "deny" | "always")``. This module
 owns the Chainlit half of that contract:
 
-* :func:`get_pending_interrupt` — extract the ``{"tool", "args",
-  "reason"}`` payload a paused run carries (langgraph 1.2.x surfaces it
-  on ``state.tasks[*].interrupts[*].value``; ``state.values`` does not
-  contain ``__interrupt__`` after ``agraph.aget_state``);
+* :func:`get_pending_interrupt` / :class:`PendingInterrupt` — the
+  payload extraction lives in :mod:`app.core.agent` (shared with the
+  FastAPI layer, M-20) and is re-exported here for UI callers;
 * :func:`format_prompt` — the ask text (PROMPT_MVP M-16 wording);
 * :func:`ask_permission` — show ``cl.AskActionMessage`` with three
   buttons (Approve / Deny / Approve & don't ask again) and map the
@@ -24,10 +23,24 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
 from typing import Any
 
 import chainlit as cl
+
+from app.core.agent import PendingInterrupt, get_pending_interrupt
+
+__all__ = [
+    "ALWAYS",
+    "ANSWERS",
+    "APPROVE",
+    "DENY",
+    "PendingInterrupt",
+    "ask_permission",
+    "format_prompt",
+    "get_pending_interrupt",
+    "normalize_answer",
+    "permission_actions",
+]
 
 #: Resume answers understood by ``resume_command`` (M-13 ``app.core.graph``).
 APPROVE = "approve"
@@ -39,36 +52,6 @@ ANSWERS = (APPROVE, DENY, ALWAYS)
 
 #: Cap for the args preview inside the prompt text.
 _ARGS_PREVIEW_CHARS = 500
-
-
-@dataclass(frozen=True)
-class PendingInterrupt:
-    """One permission pause extracted from a checkpoint state snapshot."""
-
-    tool: str
-    args: dict[str, Any] = field(default_factory=dict)
-    reason: str = ""
-
-
-def get_pending_interrupt(state: Any) -> PendingInterrupt | None:
-    """Extract the permission payload from ``graph.aget_state`` output.
-
-    The human node (M-13) pauses via
-    ``interrupt({"tool", "args", "reason"})``; the paused task carries
-    that payload on ``state.tasks[*].interrupts[*].value``. Returns
-    ``None`` when no task holds a permission interrupt (finished run, a
-    pause raised elsewhere, or an unreadable state object).
-    """
-    for task in getattr(state, "tasks", None) or ():
-        for pending in getattr(task, "interrupts", None) or ():
-            value = getattr(pending, "value", None)
-            if isinstance(value, dict) and "tool" in value:
-                return PendingInterrupt(
-                    tool=str(value.get("tool", "")),
-                    args=dict(value.get("args") or {}),
-                    reason=str(value.get("reason") or ""),
-                )
-    return None
 
 
 def _args_text(args: dict[str, Any]) -> str:

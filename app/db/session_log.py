@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +56,9 @@ logger = logging.getLogger(__name__)
 
 #: Allowed ``messages.role`` values (mirrors the CHECK constraint in schema.sql).
 ROLES = frozenset({"system", "user", "assistant", "tool"})
+
+#: Allowed ``sessions.status`` values (mirrors the CHECK constraint in schema.sql).
+SESSION_STATUSES = frozenset({"active", "closed", "aborted"})
 
 #: Seconds between projection passes in :func:`projection_worker`.
 PROJECTION_INTERVAL_S = 30.0
@@ -96,6 +100,149 @@ async def ensure_session(
         model,
         working_dir,
     )
+
+
+def _session_row(row: asyncpg.Record | None) -> dict | None:
+    """Convert a ``sessions`` row to a plain JSON-safe dict."""
+    if row is None:
+        return None
+    data = dict(row)
+    for key in ("created_at", "last_activity_at"):
+        value = data.get(key)
+        if value is not None:
+            data[key] = value.isoformat()
+    return data
+
+
+async def create_session(
+    *,
+    session_id: str | None = None,
+    title: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    working_dir: str | None = None,
+    metadata: dict | None = None,
+    pool: asyncpg.Pool | None = None,
+) -> dict:
+    """Insert a new ``sessions`` row (M-20) and return it.
+
+    ``session_id`` is generated (uuid4) when not provided. The row is
+    inserted with ``status='active'``; ``metadata`` is stored as JSONB.
+    """
+    if pool is None:
+        pool = await get_asyncpg_pool()
+    sid = session_id or str(uuid.uuid4())
+    payload = json.dumps(metadata) if metadata is not None else None
+    row = await pool.fetchrow(
+        "INSERT INTO sessions (session_id, title, provider, model, working_dir, metadata) "
+        "VALUES ($1, $2, $3, $4, $5, COALESCE($6::jsonb, '{}'::jsonb)) "
+        "RETURNING *",
+        sid,
+        title,
+        provider,
+        model,
+        working_dir,
+        payload,
+    )
+    result = _session_row(row)
+    if result is None:  # pragma: no cover - INSERT..RETURNING always returns a row
+        raise RuntimeError(f"failed to create session {sid!r}")
+    return result
+
+
+async def get_session(
+    session_id: str,
+    *,
+    pool: asyncpg.Pool | None = None,
+) -> dict | None:
+    """Return one ``sessions`` row as a dict, or ``None`` when unknown."""
+    if pool is None:
+        pool = await get_asyncpg_pool()
+    row = await pool.fetchrow(
+        "SELECT * FROM sessions WHERE session_id = $1",
+        session_id,
+    )
+    return _session_row(row)
+
+
+async def list_sessions(
+    *,
+    limit: int = 20,
+    offset: int = 0,
+    pool: asyncpg.Pool | None = None,
+) -> tuple[list[dict], int]:
+    """List ``sessions`` rows (newest activity first) with a total count.
+
+    Returns ``(rows, total)`` — the total is the unpaginated row count so
+    clients can compute page counts.
+    """
+    if pool is None:
+        pool = await get_asyncpg_pool()
+    rows = await pool.fetch(
+        "SELECT * FROM sessions "
+        "ORDER BY last_activity_at DESC, created_at DESC "
+        "LIMIT $1 OFFSET $2",
+        limit,
+        offset,
+    )
+    total = await pool.fetchval("SELECT COUNT(*) FROM sessions")
+    return [_session_row(row) for row in rows], int(total or 0)
+
+
+async def set_session_status(
+    session_id: str,
+    status: str,
+    *,
+    pool: asyncpg.Pool | None = None,
+) -> dict | None:
+    """Update ``sessions.status`` (soft-delete: ``active`` → ``closed``).
+
+    Returns the updated row, or ``None`` when the session does not exist.
+    Raises ``ValueError`` for a status outside the schema CHECK constraint.
+    """
+    if status not in SESSION_STATUSES:
+        raise ValueError(
+            f"invalid status {status!r}; expected one of {sorted(SESSION_STATUSES)}"
+        )
+    if pool is None:
+        pool = await get_asyncpg_pool()
+    row = await pool.fetchrow(
+        "UPDATE sessions SET status = $2, last_activity_at = now() "
+        "WHERE session_id = $1 "
+        "RETURNING *",
+        session_id,
+        status,
+    )
+    return _session_row(row)
+
+
+async def list_messages(
+    session_id: str,
+    *,
+    limit: int = 1000,
+    offset: int = 0,
+    pool: asyncpg.Pool | None = None,
+) -> list[dict]:
+    """Return typed ``messages`` rows for a session in ``seq`` order."""
+    if pool is None:
+        pool = await get_asyncpg_pool()
+    rows = await pool.fetch(
+        "SELECT id, seq, role, content, tool_calls, tool_call_id, created_at "
+        "FROM messages WHERE session_id = $1 "
+        "ORDER BY seq "
+        "LIMIT $2 OFFSET $3",
+        session_id,
+        limit,
+        offset,
+    )
+    messages: list[dict] = []
+    for row in rows:
+        item = dict(row)
+        created = item.get("created_at")
+        if created is not None:
+            item["created_at"] = created.isoformat()
+        messages.append(item)
+    return messages
 
 
 async def log_message(
