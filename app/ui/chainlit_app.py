@@ -59,6 +59,7 @@ from app.core.agent import (
 from app.core.agent import (
     preview as _preview,
 )
+from app.core.cache import init_cache
 from app.core.config import get_settings
 from app.core.graph import default_run_config
 from app.db.session_log import ensure_session, log_message
@@ -171,6 +172,7 @@ async def _render_run(
 @cl.on_chat_start
 async def on_chat_start() -> None:
     """Create the session thread and compile its graph (M-15/M-17)."""
+    await init_cache()  # M-21: idempotent; probes Redis once per process
     thread_id = str(uuid.uuid4())
     checkpointer, degraded = await resolve_checkpointer()
 

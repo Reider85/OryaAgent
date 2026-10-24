@@ -20,8 +20,10 @@ Behaviour:
 * writing to a directory path is rejected;
 * failures raise ``ToolException`` and the temp file is cleaned up;
 * results are **never cached** (side-effect tool - see
-  ``app.core.cache``); a subsequent ``read`` sees the new content
-  automatically because the cache key includes the file mtime.
+  ``app.core.cache``); after the write the M-21 hook drops every
+  tool-result cached for this path (``app.hooks.cache_invalidation``),
+  and a subsequent ``read`` sees the new content anyway because the
+  cache key includes the file mtime.
 
 Under the strict permission policy this tool is gated by
 ``interrupt_before`` (M-13): the graph pauses for user approval before
@@ -47,6 +49,7 @@ from typing import Annotated
 
 from langchain_core.tools import ToolException, tool
 
+from app.hooks.cache_invalidation import invalidate_cache_for_path
 from app.tools._validators import validate_path
 
 logger = logging.getLogger(__name__)
@@ -128,4 +131,5 @@ async def write(
         raise ToolException(f"Cannot write {path}: {exc}") from exc
 
     logger.debug("write: %s bytes -> %s", written, resolved)
+    await invalidate_cache_for_path(str(resolved))
     return f"Wrote {written} bytes to {resolved}"

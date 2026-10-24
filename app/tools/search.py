@@ -24,11 +24,15 @@ Behaviour:
 * **Path validation**: the search root must lie inside an allowed root
   (``app/tools/_validators.py``); patterns are passed after ``--`` so a
   pattern starting with ``-`` cannot inject rg flags.
-* **Cache seam (M-21)**: results with at least one match are cached via
-  ``app.core.cache`` keyed by ``sha256(args + max-mtime-of-matched-files)``
-  - editing any matched file changes the key; empty results are not cached.
-  The rg search itself always runs (its result feeds the invalidation key);
-  pre-search caching needs the M-12 write-hook and stays out of M-11 scope.
+ * **Cache seam (M-21)**: results with at least one match are cached via
+   ``app.core.cache`` keyed by ``sha256(args + max-mtime-of-matched-files)``
+   - editing any matched file changes the key; empty results are not cached.
+   The rg search itself always runs (its result feeds the invalidation key);
+   pre-search caching needs a different key design and stays out of M-21
+   scope. A hit is marked ``from_cache`` (ToolMessage metadata) when the
+   call comes through the ToolNode. Grep/glob entries span many files, so
+   they rely on the mtime key + TTL for invalidation (the eager per-path
+   idx hook covers single-file ``read`` results).
 * **Timeout / abort**: a watchdog kills rg after ``RG_TIMEOUT`` seconds; a
   truncated search kills rg early and still returns the collected matches.
 * **rg exit codes**: 0 = matches, 1 = no matches (empty result, not an
@@ -56,9 +60,11 @@ import threading
 from pathlib import Path
 from typing import Annotated
 
-from langchain_core.tools import ToolException, tool
+from langchain_core.messages import ToolMessage
+from langchain_core.tools import InjectedToolArg, ToolException, tool
+from langgraph.prebuilt import ToolRuntime
 
-from app.core.cache import build_cache_key, get_cache
+from app.core.cache import build_cache_key, from_cache_result, get_cache
 from app.core.security import detect_injection, wrap_untrusted
 from app.tools._validators import validate_path
 
@@ -237,7 +243,12 @@ async def grep(
         int,
         "Maximum number of matches to return (default: 500).",
     ] = DEFAULT_MAX_MATCHES,
-) -> str:
+    runtime: Annotated[
+        ToolRuntime | None,
+        InjectedToolArg,
+        "Injected by the ToolNode; carries the tool_call_id for the from_cache marker.",
+    ] = None,
+) -> str | ToolMessage:
     """Search file contents for a regex pattern using ripgrep.
 
     Returns JSON: {"matches": [{"file", "line", "content"}], "count",
@@ -288,7 +299,11 @@ async def grep(
         cached = await cache.get(key)
         if cached is not None:
             logger.debug("grep cache hit: %s", cache_args)
-            return cached
+            return from_cache_result(
+                cached,
+                name="grep",
+                tool_call_id=None if runtime is None else runtime.tool_call_id,
+            )
         logger.debug("grep cache miss: %s", cache_args)
 
     payload: dict = {"matches": matches, "count": len(matches), "truncated": truncated}
@@ -316,7 +331,12 @@ async def glob(
         int,
         "Maximum number of file paths to return (default: 500).",
     ] = DEFAULT_MAX_MATCHES,
-) -> str:
+    runtime: Annotated[
+        ToolRuntime | None,
+        InjectedToolArg,
+        "Injected by the ToolNode; carries the tool_call_id for the from_cache marker.",
+    ] = None,
+) -> str | ToolMessage:
     """List file paths matching a glob pattern using ripgrep --files.
 
     Returns JSON: {"files": [...], "count": N, "truncated": bool}. Respects
@@ -351,7 +371,11 @@ async def glob(
         cached = await cache.get(key)
         if cached is not None:
             logger.debug("glob cache hit: %s", cache_args)
-            return cached
+            return from_cache_result(
+                cached,
+                name="glob",
+                tool_call_id=None if runtime is None else runtime.tool_call_id,
+            )
         logger.debug("glob cache miss: %s", cache_args)
 
     result = _render({"files": files, "count": len(files), "truncated": truncated})

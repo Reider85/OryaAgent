@@ -130,6 +130,19 @@ class Settings(BaseSettings):
         default=_DEFAULT_REDIS_URL,
         validation_alias=AliasChoices("REDIS_URL", "ORYA_REDIS_URL"),
     )
+    cache_ttl_seconds: float = Field(
+        default=300.0,
+        validation_alias=AliasChoices("ORYA_CACHE_TTL_SECONDS", "CACHE_TTL_SECONDS"),
+        description="Tool-result cache TTL (BACKLOG5 M-21: 5 minutes)",
+    )
+    cache_backend: Literal["auto", "memory", "redis"] = Field(
+        default="auto",
+        validation_alias=AliasChoices("ORYA_CACHE_BACKEND", "CACHE_BACKEND"),
+        description=(
+            "auto: probe Redis and fall back to memory; "
+            "redis: require Redis at startup; memory: never use Redis"
+        ),
+    )
 
     # --- L0 memory (M-25) ------------------------------------------------
     memory_dir: Path = Field(

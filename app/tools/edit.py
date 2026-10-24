@@ -21,9 +21,11 @@ Behaviour:
 * **atomic rewrite**: the modified content goes through the same
   temp-file + ``os.replace`` helper as ``write`` (M-08) - a crash
   mid-edit never leaves a half-written file;
-* results are **never cached** (side-effect tool); a subsequent
-  ``read`` sees the new content automatically because the read cache
-  key includes the file mtime (M-21 cache-invalidation hook).
+* results are **never cached** (side-effect tool); after the edit the
+  M-21 hook drops every tool-result cached for this path
+  (``app.hooks.cache_invalidation``), and a subsequent ``read`` sees
+  the new content anyway because the read cache key includes the file
+  mtime.
 
 Under the strict permission policy this tool is gated by
 ``interrupt_before`` (M-13): the graph pauses for user approval before
@@ -49,6 +51,7 @@ from typing import Annotated
 
 from langchain_core.tools import ToolException, tool
 
+from app.hooks.cache_invalidation import invalidate_cache_for_path
 from app.tools._validators import validate_path
 from app.tools.read import MAX_FILE_SIZE_BYTES
 from app.tools.write import _write_atomic
@@ -149,4 +152,5 @@ async def edit(
     )
 
     logger.debug("edit: %s occurrence(s) -> %s", count, resolved)
+    await invalidate_cache_for_path(str(resolved))
     return f"Edited {resolved}: replaced {count} occurrence(s)"

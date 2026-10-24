@@ -288,6 +288,83 @@ async def test_read_pagination_uses_separate_cache_entries(tmp_path: Path):
     assert cache.misses == 2
 
 
+async def test_graph_cache_hit_marks_from_cache_metadata(tmp_path: Path):
+    """BACKLOG5 M-21 AC: a repeat read through the graph carries from_cache."""
+    target = _write(tmp_path / "a.txt", "graph cached content")
+
+    def _call(call_id: str) -> AIMessage:
+        return AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "read",
+                    "args": {"path": str(target)},
+                    "id": call_id,
+                    "type": "tool_call",
+                }
+            ],
+        )
+
+    model = FakeMessagesListChatModel(
+        responses=[
+            _call("c1"),
+            AIMessage(content="first done"),
+            _call("c2"),
+            AIMessage(content="second done"),
+        ]
+    )
+    graph = build_graph([read], model)
+
+    first = await graph.ainvoke({"messages": [HumanMessage("read it")]})
+    second = await graph.ainvoke({"messages": [HumanMessage("read it again")]})
+
+    first_tool = next(m for m in first["messages"] if isinstance(m, ToolMessage))
+    second_tool = next(m for m in second["messages"] if isinstance(m, ToolMessage))
+    assert not getattr(first_tool, "metadata", None)  # miss: no marker
+    assert getattr(second_tool, "metadata", None) == {"from_cache": True}
+    assert second_tool.tool_call_id == "c2"
+    assert second_tool.content == first_tool.content  # byte-identical payload
+
+    cache = get_cache()
+    assert cache.hits == 1
+    assert cache.misses == 1
+
+
+async def test_edit_eagerly_invalidates_cached_read_entries(tmp_path: Path):
+    """BACKLOG5 M-21 AC: an edit drops the stale entries for that path."""
+    target = _write(tmp_path / "a.txt", "before edit")
+    cache = get_cache()
+    assert isinstance(cache, MemoryCache)
+
+    await read.ainvoke({"path": str(target)})
+    assert len(cache._entries) == 1
+
+    await edit.ainvoke(
+        {"path": str(target), "old_string": "before", "new_string": "after"}
+    )
+
+    assert len(cache._entries) == 0  # eager invalidation, not just TTL
+    second = await read.ainvoke({"path": str(target)})
+    assert "after" in second
+    assert cache.misses == 2
+
+
+async def test_write_eagerly_invalidates_cached_read_entries(tmp_path: Path):
+    target = _write(tmp_path / "b.txt", "old content")
+    cache = get_cache()
+    assert isinstance(cache, MemoryCache)
+
+    await read.ainvoke({"path": str(target)})
+    assert len(cache._entries) == 1
+
+    await write.ainvoke({"path": str(target), "content": "brand new"})
+
+    assert len(cache._entries) == 0
+    second = await read.ainvoke({"path": str(target)})
+    assert "brand new" in second
+    assert cache.misses == 2
+
+
 # --- tool registry + graph wiring (M-12) --------------------------------------
 
 

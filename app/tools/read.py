@@ -24,9 +24,15 @@ Behaviour:
   hit appends ``[WARNING: possible prompt injection detected in
   [pattern_id]]`` right after the untrusted block, the same wording
   bash/grep use for their ``injection_warning`` field;
-* results are cached through the ``app.core.cache`` seam keyed by
-  ``sha256(args + mtime)`` (M-21): a re-read of an unchanged file is
-  a cache hit; any edit changes the mtime and hence the key.
+ * results are cached through the ``app.core.cache`` seam keyed by
+   ``sha256(args + mtime)`` (M-21): a re-read of an unchanged file is
+   a cache hit; any edit changes the mtime and hence the key;
+ * **cache-hit marker (M-21)**: when invoked through the graph's
+   ToolNode, a hit returns a ``ToolMessage`` with
+   ``metadata={"from_cache": True}`` (the injected ``runtime`` carries
+   the ``tool_call_id``; it is hidden from the model's tool schema);
+   direct ``ainvoke()`` calls keep returning the plain ``str`` payload,
+   byte-identical to the fresh render.
 
 The file I/O runs in ``asyncio.to_thread`` so the agent-loop's event
 loop is never blocked (PROMPT_MVP 9).
@@ -46,9 +52,11 @@ import logging
 from pathlib import Path
 from typing import Annotated
 
-from langchain_core.tools import ToolException, tool
+from langchain_core.messages import ToolMessage
+from langchain_core.tools import InjectedToolArg, ToolException, tool
+from langgraph.prebuilt import ToolRuntime
 
-from app.core.cache import build_cache_key, get_cache
+from app.core.cache import build_cache_key, from_cache_result, get_cache
 from app.core.security import detect_injection, wrap_untrusted
 from app.tools._validators import validate_path
 
@@ -141,7 +149,12 @@ async def read(
         int | None,
         "1-based last line to return (default: start_line + 1999).",
     ] = None,
-) -> str:
+    runtime: Annotated[
+        ToolRuntime | None,
+        InjectedToolArg,
+        "Injected by the ToolNode; carries the tool_call_id for the from_cache marker.",
+    ] = None,
+) -> str | ToolMessage:
     """Read a text file and return its contents with line numbers.
 
     Use start_line/end_line to page through large files (the default
@@ -177,7 +190,11 @@ async def read(
     cached = await cache.get(key)
     if cached is not None:
         logger.debug("read cache hit: %s", resolved)
-        return cached
+        return from_cache_result(
+            cached,
+            name="read",
+            tool_call_id=None if runtime is None else runtime.tool_call_id,
+        )
     logger.debug("read cache miss: %s", resolved)
 
     data = await _read_bytes(resolved)
@@ -185,5 +202,5 @@ async def read(
 
     # Binary results carry no file content -> no untrusted framing.
     if not result.startswith("Binary file"):
-        await cache.set(key, result)
+        await cache.set(key, result, path=str(resolved))
     return result
