@@ -4,7 +4,7 @@ Senior Python coding agent with UI and long-term memory.
 
 ## Phase: MVP
 
-Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (PostgreSQL schema), M-04 (LangGraph core), M-05 (system-prompt builder), M-06 (context manager), M-07 (tool `read`), M-08 (tool `write`), M-09 (tool `edit`), M-10 (tool `bash`), M-11 (tools `grep`/`glob`) and M-12 (tool-registry integration) are implemented.
+Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (PostgreSQL schema), M-04 (LangGraph core), M-05 (system-prompt builder), M-06 (context manager), M-07 (tool `read`), M-08 (tool `write`), M-09 (tool `edit`), M-10 (tool `bash`), M-11 (tools `grep`/`glob`), M-12 (tool-registry integration) and M-13 (permissions) are implemented.
 
 ## Quick Start
 
@@ -141,6 +141,34 @@ The M-04 graph does not import this module: it accepts an optional `trim_fn` sea
 
 v7 BETA will replace the implementation with DFC (5 layers) — the `trim_messages(messages, max_tokens) -> list[BaseMessage]` signature is an architectural invariant and stays.
 
+## Permissions (M-13)
+
+`app/core/permissions.py::PermissionPolicy` gates every pending tool call before it reaches the tool node; the graph's `human` review node pauses on `ask` via LangGraph's dynamic `interrupt()` (M-04 wiring).
+
+Decision precedence — first match wins:
+
+1. **Deny-list** — catastrophic bash patterns (`rm -rf /`, fork bombs, `dd` to disk, piped remote scripts); wins over everything, including the session allowlist.
+2. **Session allowlist** — tools approved with "don't ask again" (`resume_command("always")`, `record_session_allow`).
+3. **Allow-list** — safe calls bypass the mode: `read`/`grep`/`glob`, read-only bash (`ls`, `cat`, `pwd`, `git status|diff|log|branch`, `head`, `tail`, `wc`, ...).
+4. **Mode** — `strict` (default) asks on `write`/`edit`/`bash`; `permissive` asks only on `bash` containing `rm`/`mv`/`sudo`.
+
+Explicit user commands (`/learn`, `/memory/*`) never interrupt. When a batch mixes refused and allowed calls, the whole batch is refused (providers require exactly one `ToolMessage` per tool-call id). Without a checkpointer, `ask` is denied (fail-closed).
+
+Mode is selected with `ORYA_PERMISSION_POLICY=strict|permissive`; rules are overridden per user in `~/.orya/permissions.yml` (a present key replaces the built-in list for that section):
+
+```yaml
+allow_rules:
+  - tool: bash
+    pattern: '^npm(\s+|$).*'
+    description: npm commands
+deny_rules:
+  - tool: bash
+    pattern: 'rm\s+-rf?\s+/(\s|$)'
+    description: rm -rf on filesystem root
+```
+
+Resuming a paused run: `resume_command("approve")` runs the call, `"deny"` refuses it, `"always"` approves and stops asking about this tool for the rest of the session; unknown answers are treated as a denial (fail-closed).
+
 ## Documentation
 
 - [Architecture v7](analytics/ARCHITECT7.md)
@@ -163,6 +191,7 @@ v7 BETA will replace the implementation with DFC (5 layers) — the `trim_messag
 - ✅ **M-10** - Tool `bash`: JSON output (stdout/stderr/exit_code/duration_ms/truncated), char-based truncation, line dedup, injection detection, allowlist-env, timeout/cancel process kill
 - ✅ **M-11** - Tools `grep`/`glob`: ripgrep-backed search, JSON token-efficient output (`matches`/`files` + truncation flag), injection detection, untrusted framing, path validation, cache seam
 - ✅ **M-12** - Tool-registry integration: `get_tools()` full 6-tool list, `graph.bind_tools` wiring, integration tests (full-cycle agent→tools→agent e2e + offline real-model bind/schema check)
+- ✅ **M-13** - Permissions: `PermissionPolicy` (strict/permissive), deny→session→allow→mode rule precedence, session allowlist, interrupt-driven ask via the graph's permission-review node
 - ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for full 28 tickets)
 
 ## LLM Providers (M-01)
