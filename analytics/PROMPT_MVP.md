@@ -27,7 +27,7 @@
 1. **Нормальным UI с первого дня** (Chainlit поверх FastAPI) — сессии, настройки, interrupt_before-диалог для permission-prompts.
 2. **Базовой долговременной памятью в MD-файлах** (L0: 4 файла — `PROJECT.md`, `LEARNED.md`, `PREFERENCES.md`, `MEMORY_INDEX.md`) с atomic-append.
 3. **Командой `/learn`** — пользователь явно добавляет знание в LEARNED.md.
-4. **Инструментами кодинга:** `read`, `write`, `edit`, `bash`, `grep`/`glob` — 5 базовых tools.
+4. **Инструментами кодинга:** `read`, `write`, `edit`, `bash`, `grep`, `glob` — 6 базовых tools.
 5. **Permission-policy** — `interrupt_before` для dangerous tools (write/edit/bash) с подтверждением через UI.
 6. **Session-log** — каждый ход персистится в PostgreSQL + дублируется в JSONL projection.
 7. **CacheWrapper (Redis)** — для `read`/`grep` результатов по hash + mtime-invalidation.
@@ -301,7 +301,7 @@ OryaAgent MVP должен уметь читать конфиги провайд
 
 **M-12 — Tool-registry integration**
 - `app/core/tools.py::get_tools(session_id) -> list[BaseTool]`.
-- Все 5 tools зарегистрированы и привязаны к LangGraph через `graph.bind_tools(tools)`.
+- Все 6 tools (read, write, edit, bash, grep, glob) зарегистрированы и привязаны к LangGraph через `graph.bind_tools(tools)`.
 - Готовность к расширению: v6 BETA добавит `oriahs_search`, v7 BETA — `lsp_*` (7 tools) и `ukb.lookup`.
 
 ### 3.4. Безопасность и persistence (M-13 … M-14, M-21, M-22)
@@ -454,7 +454,7 @@ OryaAgent MVP должен уметь читать конфиги провайд
 - ✅ **`/llm/health/{provider}`** endpoint возвращает status 200 если провайдер доступен.
 - ✅ **`/llm/providers`** и **`/llm/models`** endpoints возвращают declarative registries.
 - ✅ **Importers:** `orya import --from opencode` читает `~/.config/opencode/auth.json` и заполняет `~/.orya/config.yaml`.
-- ✅ Все 5 tools (read, write, edit, bash, grep) работают на всех поддерживаемых провайдерах с tool-calling:
+- ✅ Все 6 tools (read, write, edit, bash, grep, glob) работают на всех поддерживаемых провайдерах с tool-calling:
   - `read` возвращает file-content.
   - `write` создаёт/обновляет файл atomically.
   - `edit` делает string-replace с uniqueness-check.
@@ -635,7 +635,7 @@ tests/
 ## 11. Порядок реализации (рекомендуемый)
 
 1. **Неделя 1:** M-00 (bootstrap), M-02 (config), M-03 (DB schema), M-01 (LLM-seam), M-04 (graph skeleton), M-07 (read), M-12 (tool-registry). Демонстрация: LLM-call с одним tool.
-2. **Неделя 2:** M-05 (system-prompt), M-06 (context-manager), M-08 (write), M-09 (edit), M-10 (bash), M-11 (grep/glob), M-13 (permissions), M-14 (session-log). Демонстрация: 5 tools работают, session-log пишется.
+2. **Неделя 2:** M-05 (system-prompt), M-06 (context-manager), M-08 (write), M-09 (edit), M-10 (bash), M-11 (grep/glob), M-13 (permissions), M-14 (session-log). Демонстрация: 6 tools работают, session-log пишется.
 3. **Неделя 3:** M-15 (Chainlit UI), M-16 (interrupt), M-17 (sidebar), M-20 (FastAPI /sessions), M-21 (CacheWrapper), M-22 (prompt-injection defense). Демонстрация: end-to-end UI с permissions.
 4. **Неделя 3.5:** M-25 (MDStore L0), M-26 (/learn), M-27 (Compactor + /memory/stats, /memory/compact), M-18 (smoke-тесты), M-19 (README). Демонстрация: /learn работает, smoke-тесты 5/5.
 
@@ -647,7 +647,7 @@ tests/
 - ✅ Memory-audit log пишется.
 - ✅ Periodic compaction запускается раз в 24 часа (через APScheduler).
 - ✅ Smoke-тест: /learn после успешного tool-call sequence → запись в LEARNED.md → видна в следующем turn'е.
-- ✅ Все 5 tools работают end-to-end в UI.
+- ✅ Все 6 tools работают end-to-end в UI.
 - ✅ Permission-policy работает (interrupt_before на write/edit/bash).
 - ✅ Session-log восстанавливается после restart.
 - ✅ README + 5 smoke-тестов в CI green.

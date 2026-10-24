@@ -251,7 +251,7 @@ async def test_read_pagination_uses_separate_cache_entries(tmp_path: Path):
     assert cache.misses == 2
 
 
-# --- tool registry + graph wiring (partial M-12) -----------------------------
+# --- tool registry + graph wiring (M-12) --------------------------------------
 
 
 def test_get_tools_returns_read_write_edit_bash_grep_glob():
@@ -1264,6 +1264,37 @@ async def test_graph_executes_grep_tool_end_to_end(
     payload = _parse_search_json(tool_messages[0].content)
     assert payload["matches"][0]["file"] == "sample.py"
     assert payload["matches"][0]["line"] == 7
+
+
+async def test_graph_executes_glob_tool_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _mock_rg(monkeypatch, ["src/app.py"])
+    model = FakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "glob",
+                        "args": {"pattern": "*.py"},
+                        "id": "call_gl1",
+                    }
+                ],
+            ),
+            AIMessage(content="done"),
+        ]
+    )
+    graph = build_graph(get_tools(), model)
+
+    result = await graph.ainvoke({"messages": [HumanMessage(content="list files")]})
+
+    tool_messages = [m for m in result["messages"] if isinstance(m, ToolMessage)]
+    assert len(tool_messages) == 1
+    payload = _parse_search_json(tool_messages[0].content)
+    assert payload["files"] == ["src/app.py"]
+    assert payload["count"] == 1
+    assert payload["truncated"] is False
 
 
 # --- real ripgrep (skipped when rg is absent) --------------------------------
