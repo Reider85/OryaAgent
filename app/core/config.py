@@ -55,6 +55,10 @@ _YAML_FALLBACKS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
         ("ORYA_PERMISSION_POLICY", "PERMISSION_POLICY"),
         ("permission_policy",),
     ),
+    "permissions_path": (
+        ("ORYA_PERMISSIONS_PATH", "PERMISSIONS_PATH"),
+        ("permissions_path",),
+    ),
     "recursion_limit": (
         ("ORYA_RECURSION_LIMIT", "RECURSION_LIMIT"),
         ("recursion_limit",),
@@ -137,6 +141,11 @@ class Settings(BaseSettings):
         default="strict",
         validation_alias=AliasChoices("ORYA_PERMISSION_POLICY", "PERMISSION_POLICY"),
     )
+    permissions_path: Path = Field(
+        default=Path.home() / ".orya" / "permissions.yml",
+        validation_alias=AliasChoices("ORYA_PERMISSIONS_PATH", "PERMISSIONS_PATH"),
+        description="User allow/deny rule overrides (ADR-004); absent -> defaults",
+    )
 
     # --- Agent loop (M-04) ------------------------------------------------
     recursion_limit: int = Field(
@@ -206,10 +215,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    @field_validator("memory_dir", mode="before")
+    @field_validator("memory_dir", "permissions_path", mode="before")
     @classmethod
-    def _expand_memory_dir(cls, value: Any) -> Any:
-        """Expand ``~`` in memory_dir (env values arrive as plain strings)."""
+    def _expand_paths(cls, value: Any) -> Any:
+        """Expand ``~`` in path fields (env values arrive as plain strings)."""
         if isinstance(value, str):
             return Path(value).expanduser()
         return value

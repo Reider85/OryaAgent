@@ -20,6 +20,7 @@ from langchain_core.tools import tool
 
 from app.core.config import get_settings
 from app.core.graph import build_graph, default_run_config, resume_command
+from app.core.permissions import Decision
 from app.db import apply_migrations, close_pool, get_asyncpg_pool
 from app.db.checkpoints import close_checkpointer, get_checkpointer
 
@@ -31,12 +32,13 @@ def echo(text: str) -> str:
 
 
 class AskPolicy:
-    """Ask-mode policy: the graph pauses before the tool node."""
+    """Ask-mode policy: the human node interrupts before the tools node."""
 
-    ask_mode = True
+    def check(self, tool_call) -> Decision:
+        return Decision("ask", "test policy")
 
-    async def review(self, tool_calls) -> str:
-        return "allow"
+    def record_session_allow(self, tool_name: str) -> None:
+        return None
 
 
 async def _database_reachable() -> bool:
@@ -82,9 +84,9 @@ def test_graph_checkpoints_in_postgres():
             await graph.ainvoke({"messages": [HumanMessage("hi")]}, config)
 
             state = await graph.aget_state(config)
-            assert state.next == ("tools",)
+            assert state.next == ("human",)
 
-            result = await graph.ainvoke(resume_command(), config)
+            result = await graph.ainvoke(resume_command("approve"), config)
             assert result["messages"][-1].content == "done"
 
             rows = await pool.fetch(
