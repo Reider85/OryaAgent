@@ -4,7 +4,7 @@ Senior Python coding agent with UI and long-term memory.
 
 ## Phase: MVP
 
-Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (PostgreSQL schema), M-04 (LangGraph core), M-05 (system-prompt builder), M-06 (context manager), M-07 (tool `read`), M-08 (tool `write`), M-09 (tool `edit`), M-10 (tool `bash`), M-11 (tools `grep`/`glob`), M-12 (tool-registry integration), M-13 (permissions) and M-14 (session-log) are implemented.
+Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (PostgreSQL schema), M-04 (LangGraph core), M-05 (system-prompt builder), M-06 (context manager), M-07 (tool `read`), M-08 (tool `write`), M-09 (tool `edit`), M-10 (tool `bash`), M-11 (tools `grep`/`glob`), M-12 (tool-registry integration), M-13 (permissions), M-14 (session-log), M-15 (Chainlit UI), M-16 (permission ask-prompt), M-17 (sidebar/settings), M-18 (smoke tests) and M-20 (sessions API) are implemented.
 
 ## Quick Start
 
@@ -184,6 +184,47 @@ Projection is idempotent: each thread has a `{session_id}.meta.json` marker (`la
 
 A background projection worker starts with the FastAPI app (lifespan in `app/main.py`) and periodically discovers threads from the `checkpoints` table. It soft-fails without PostgreSQL — the API stays up and retries on the next pass.
 
+## Sessions API (M-20)
+
+`app/api/sessions.py` exposes the session lifecycle for non-UI clients (CI, batch jobs, future HTTP frontends). The Chainlit UI still drives the graph directly (M-15 decision; SSE streaming is the separate M-24 ticket); both layers share the session-agent runtime in `app/core/agent.py` (graph assembly, checkpointer fallback, `run_turn`/`run_resume`).
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /sessions` | Create a session (server-side uuid4) → `{session_id, created_at, status, ...}` |
+| `GET /sessions?page=1&size=20` | Paginated list, newest activity first → `{items, total, page, size}` |
+| `GET /sessions/{id}` | Metadata + typed `messages` (M-14 log), 404 when unknown |
+| `POST /sessions/{id}/messages` | Run one full turn, JSON response (see below) |
+| `POST /sessions/{id}/resume` | Answer a pending permission interrupt: `{decision: "allow"\|"deny"\|"always"}`, 409 when nothing is pending |
+| `DELETE /sessions/{id}` | Soft-delete — flips `sessions.status` to `closed`, history kept for audit |
+
+`POST /sessions/{id}/messages` accepts `{"content": "..."}` and returns:
+
+```json
+{
+  "session_id": "...",
+  "status": "ok",
+  "reply": "final answer text",
+  "tool_steps": [{"run_id": "...", "tool": "read", "args": {"path": "..."}, "output": "..."}],
+  "pending_interrupt": null,
+  "degraded": false
+}
+```
+
+- `status: "interrupted"` — the run paused at the M-13 permission gate; `pending_interrupt` carries `{tool, args, reason}` and the client answers via `POST /sessions/{id}/resume`. A resumed batch may pause again (one tool call per interrupt).
+- `degraded: true` — PostgreSQL checkpointer was unavailable, state lives in memory (mirrors the UI fallback).
+- DB failures return `503 {"detail": "database unavailable"}`; a failed run returns `502`.
+- The permission policy is cached per session process-wide, so «Approve & don't ask again» (M-13 session allowlist) survives across API calls within the process lifetime.
+- Interactive docs: `http://localhost:8000/docs` (OpenAPI).
+
+Example:
+
+```bash
+SID=$(curl -s -X POST localhost:8000/sessions -H 'content-type: application/json' \
+  -d '{"title":"ci run"}' | python -c "import sys,json;print(json.load(sys.stdin)['session_id'])")
+curl -s -X POST localhost:8000/sessions/$SID/messages \
+  -H 'content-type: application/json' -d '{"content":"run the tests"}'
+```
+
 ## Documentation
 
 - [Architecture v7](analytics/ARCHITECT7.md)
@@ -208,6 +249,11 @@ A background projection worker starts with the FastAPI app (lifespan in `app/mai
 - ✅ **M-12** - Tool-registry integration: `get_tools()` full 6-tool list, `graph.bind_tools` wiring, integration tests (full-cycle agent→tools→agent e2e + offline real-model bind/schema check)
 - ✅ **M-13** - Permissions: `PermissionPolicy` (strict/permissive), deny→session→allow→mode rule precedence, session allowlist, interrupt-driven ask via the graph's permission-review node
 - ✅ **M-14** - Session-log: typed `messages` writer (`log_message`), JSONL projection of PostgresSaver checkpoints (`~/.orya/sessions/{id}.jsonl`, ts-deduped), background projection worker (FastAPI lifespan)
+- ✅ **M-15** - Chainlit UI: `on_chat_start` / `on_message`, normalized streaming (`token`/`tool_start`/`tool_end`), Postgres checkpointer with in-memory fallback
+- ✅ **M-16** - Permission ask-prompt: `cl.AskActionMessage` with Approve / Deny / don't-ask-again, resume loop until the batch completes
+- ✅ **M-17** - Sidebar & settings: session list from JSONL + DB titles, session switching with history restore, model/permission/allow-list panel (`~/.orya/settings.json`)
+- ✅ **M-18** - Smoke tests: 5 canonical tasks (read/explain, atomic edit, bash+pytest, grep report, `/learn`) + cache/injection/JSON checks
+- ✅ **M-20** - Sessions API: `/sessions` CRUD (create, paginated list, metadata+messages, soft-delete), full-turn `POST /sessions/{id}/messages` (JSON with `tool_steps`/`pending_interrupt`), `POST /sessions/{id}/resume` for the M-13 permission gate; shared session-agent runtime (`app/core/agent.py`) reused by Chainlit
 - ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for full 28 tickets)
 
 ## LLM Providers (M-01)
