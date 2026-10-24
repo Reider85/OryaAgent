@@ -51,6 +51,7 @@ _YAML_FALLBACKS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     ),
     "redis_url": (("REDIS_URL", "ORYA_REDIS_URL"), ("redis_url",)),
     "memory_dir": (("ORYA_MEMORY_DIR",), ("memory_dir",)),
+    "sessions_dir": (("ORYA_SESSIONS_DIR",), ("sessions_dir",)),
     "permission_policy": (
         ("ORYA_PERMISSION_POLICY", "PERMISSION_POLICY"),
         ("permission_policy",),
@@ -136,6 +137,13 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("ORYA_MEMORY_DIR"),
     )
 
+    # --- Session log (M-14) ----------------------------------------------
+    sessions_dir: Path = Field(
+        default=Path.home() / ".orya" / "sessions",
+        validation_alias=AliasChoices("ORYA_SESSIONS_DIR"),
+        description="JSONL projection directory ({session_id}.jsonl + .meta.json)",
+    )
+
     # --- Security (M-13) -------------------------------------------------
     permission_policy: Literal["strict", "permissive"] = Field(
         default="strict",
@@ -215,7 +223,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    @field_validator("memory_dir", "permissions_path", mode="before")
+    @field_validator("memory_dir", "permissions_path", "sessions_dir", mode="before")
     @classmethod
     def _expand_paths(cls, value: Any) -> Any:
         """Expand ``~`` in path fields (env values arrive as plain strings)."""

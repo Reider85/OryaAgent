@@ -82,6 +82,7 @@ def test_defaults():
     assert s.context_max_tokens == 120_000
     assert s.log_level == "INFO"
     assert s.memory_dir == Path.home() / ".orya" / "memory"
+    assert s.sessions_dir == Path.home() / ".orya" / "sessions"
     # Future-phase placeholders
     assert s.auth_algorithm == "HS256"
     assert s.oriahs_timeout_s == 30.0
@@ -166,6 +167,7 @@ def test_yaml_top_level_fallbacks(tmp_path: Path):
             "recursion_limit": 40,
             "context_max_tokens": 64_000,
             "memory_dir": str(Path("~/.orya/custom-memory").expanduser()),
+            "sessions_dir": str(Path("~/.orya/custom-sessions").expanduser()),
         },
         tmp_path,
     )
@@ -177,6 +179,7 @@ def test_yaml_top_level_fallbacks(tmp_path: Path):
     assert s.recursion_limit == 40
     assert s.context_max_tokens == 64_000
     assert s.memory_dir == Path.home() / ".orya" / "custom-memory"
+    assert s.sessions_dir == Path.home() / ".orya" / "custom-sessions"
 
 
 def test_yaml_fallback_applies_when_no_yaml(tmp_path: Path):
@@ -236,6 +239,12 @@ def test_memory_dir_tilde_expansion(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ORYA_MEMORY_DIR", "~/memory-override")
     clear_settings_cache()
     assert get_settings().memory_dir == Path.home() / "memory-override"
+
+
+def test_sessions_dir_tilde_expansion(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ORYA_SESSIONS_DIR", "~/sessions-override")
+    clear_settings_cache()
+    assert get_settings().sessions_dir == Path.home() / "sessions-override"
 
 
 # --- helpers / shim -------------------------------------------------------

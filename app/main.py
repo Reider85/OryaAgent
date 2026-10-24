@@ -2,7 +2,10 @@
 OryaAgent v7.0 — FastAPI entry point.
 """
 
+import asyncio
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 
@@ -13,10 +16,31 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Start the M-14 session-log projection worker; cancel it on shutdown.
+
+    The worker soft-fails without PostgreSQL (logged warning, retried on
+    the next pass) so ``/health`` and unit tests keep working with no
+    database running.
+    """
+    from app.db.session_log import projection_worker
+
+    task = asyncio.create_task(projection_worker())
+    try:
+        yield
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+
 app = FastAPI(
     title="OryaAgent",
     description="Senior Python coding agent with UI and long-term memory",
     version="7.0.0",
+    lifespan=_lifespan,
 )
 
 app.include_router(llm_router)
