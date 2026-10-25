@@ -9,6 +9,7 @@ from langchain_core.messages import SystemMessage
 from langchain_core.tools import tool
 
 from app.core.config import clear_settings_cache
+from app.core.memory import get_md_store
 from app.core.prompt import (
     MEMORY_BLOCK_MAX_CHARS,
     behavior_rules_block,
@@ -141,7 +142,37 @@ def test_memory_block_empty_when_files_missing(_isolated_memory_dir: Path):
     block = format_memory_block(_isolated_memory_dir)
 
     assert "# Long-term Memory" in block
-    assert block.count("(empty)") == 2
+    for name in ("LEARNED.md", "PREFERENCES.md", "FACTS.md", "DECISIONS.md"):
+        assert f"## {name}\n(empty)" in block
+
+
+def test_memory_block_injects_facts_and_decisions(_isolated_memory_dir: Path):
+    (_isolated_memory_dir / "FACTS.md").write_text(
+        "- [fact] PostgreSQL 16 in docker compose.", encoding="utf-8"
+    )
+    (_isolated_memory_dir / "DECISIONS.md").write_text(
+        "- [decision] MCP as the tool contract.", encoding="utf-8"
+    )
+
+    block = format_memory_block(_isolated_memory_dir)
+
+    assert "## FACTS.md\n- [fact] PostgreSQL 16" in block
+    assert "## DECISIONS.md\n- [decision] MCP as the tool contract." in block
+
+
+def test_memory_block_reads_through_md_store_seam(_isolated_memory_dir: Path):
+    """Entries appended via MDStore reach the prompt on the next build (M-26)."""
+    store = get_md_store(_isolated_memory_dir)
+    store.append(
+        "LEARNED.md",
+        "- [learned] id=learn_001 | confidence=1.0 | source=/learn"
+        " | ts=2026-10-20T10:05:00Z\n  `grep` before `edit`.",
+    )
+
+    block = format_memory_block(_isolated_memory_dir)
+
+    assert "id=learn_001" in block
+    assert "`grep` before `edit`." in block
 
 
 def test_memory_block_truncated_above_budget(_isolated_memory_dir: Path):

@@ -14,8 +14,9 @@ Sections (each a separately testable function, joined with blank lines):
    (``convert_to_openai_function``; the spec's historical
    ``format_tool_to_openai_function`` was removed from langchain_core 1.6).
 3. Project context — cwd, best-effort git status, ``PROJECT.md``.
-4. Long-term memory (L0) — ``LEARNED.md`` + ``PREFERENCES.md`` from
-   ``settings.memory_dir``, size-capped at 8 KB (full compaction is M-27).
+4. Long-term memory (L0) — ``LEARNED.md`` + ``PREFERENCES.md`` +
+   ``FACTS.md`` + ``DECISIONS.md`` through the ``MDStore`` seam
+   (M-25), size-capped at 8 KB (full compaction is M-27).
 5. Behavior rules — workspace hygiene, atomic edits, destructive-op policy.
 6. Untrusted-content policy — tool results / file content are data, never
    instructions (M-22 injection defense, prompt side).
@@ -38,6 +39,7 @@ from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_function
 
 from app.core.config import get_settings
+from app.core.memory import MDStore, get_md_store
 
 logger = logging.getLogger(__name__)
 
@@ -91,16 +93,15 @@ def tool_descriptions(tools: Sequence[BaseTool] | None) -> str:
     return "# Available Tools\n" + "\n".join(rendered)
 
 
-def _read_memory_file(name: str, memory_dir: Path) -> str | None:
-    """Read an L0 memory file; ``None`` when missing or unreadable."""
-    path = memory_dir / name
-    try:
-        return path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return None
-    except OSError as exc:
-        logger.warning("Cannot read memory file %s: %s", path, exc)
-        return None
+def _memory_store(memory_dir: Path | None = None) -> MDStore:
+    """The L0 store for ``memory_dir`` (defaults to ``settings.memory_dir``).
+
+    Going through ``MDStore`` (M-25) keeps a single seam: ``/learn`` (M-26)
+    appends and the prompt reads the same files, created on first use.
+    """
+    if memory_dir is None:
+        memory_dir = get_settings().memory_dir
+    return get_md_store(memory_dir)
 
 
 def _git_status_line() -> str:
@@ -123,11 +124,10 @@ def _git_status_line() -> str:
 
 def project_context_block(memory_dir: Path | None = None) -> str:
     """Working directory, git status and the project's ``PROJECT.md``."""
-    settings = get_settings()
-    memory_dir = memory_dir or settings.memory_dir
-    project_md = _read_memory_file("PROJECT.md", memory_dir)
-    if project_md is None:
-        project_md = f"(no PROJECT.md — create {memory_dir / 'PROJECT.md'})"
+    store = _memory_store(memory_dir)
+    project_md = store.read("PROJECT.md")
+    if not project_md.strip():
+        project_md = f"(no PROJECT.md — create {store.memory_dir / 'PROJECT.md'})"
     return (
         "# Project Context\n"
         f"Working directory: {Path.cwd()}\n"
@@ -137,20 +137,20 @@ def project_context_block(memory_dir: Path | None = None) -> str:
 
 
 def format_memory_block(memory_dir: Path | None = None) -> str:
-    """L0 long-term memory: ``LEARNED.md`` + ``PREFERENCES.md`` (M-25 files).
+    """L0 long-term memory: LEARNED + PREFERENCES + FACTS + DECISIONS (M-25).
 
+    Read through ``MDStore``; blank/absent files render as ``(empty)``.
     Capped at ``MEMORY_BLOCK_MAX_CHARS``; compaction itself is M-27. Named
     per PROMPT_MVP M-26 (``format_memory_block`` is refreshed on /learn).
+    ``PROJECT.md`` travels in ``project_context_block`` and
+    ``MEMORY_INDEX.md`` stays an empty BETA placeholder, so neither is here.
     """
-    settings = get_settings()
-    memory_dir = memory_dir or settings.memory_dir
-    learned = _read_memory_file("LEARNED.md", memory_dir)
-    preferences = _read_memory_file("PREFERENCES.md", memory_dir)
-    block = (
-        "# Long-term Memory\n\n"
-        f"## LEARNED.md\n{learned if learned is not None else '(empty)'}\n\n"
-        f"## PREFERENCES.md\n{preferences if preferences is not None else '(empty)'}"
-    )
+    store = _memory_store(memory_dir)
+    sections = []
+    for name in ("LEARNED.md", "PREFERENCES.md", "FACTS.md", "DECISIONS.md"):
+        content = store.read(name)
+        sections.append(f"## {name}\n{content if content.strip() else '(empty)'}")
+    block = "# Long-term Memory\n\n" + "\n\n".join(sections)
     if len(block) > MEMORY_BLOCK_MAX_CHARS:
         block = (
             block[:MEMORY_BLOCK_MAX_CHARS] + "\n[... truncated — run /memory/compact]"
