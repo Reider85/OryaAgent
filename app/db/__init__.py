@@ -25,6 +25,7 @@ __all__ = [
     "apply_migrations",
     "close_pool",
     "get_asyncpg_pool",
+    "get_pool_if_created",
     "load_migrations",
 ]
 
@@ -62,6 +63,24 @@ async def get_asyncpg_pool() -> asyncpg.Pool:
     )
     _pool_loop = loop
     return _pool
+
+
+def get_pool_if_created() -> asyncpg.Pool | None:
+    """Return the shared pool when it already exists on this loop.
+
+    Unlike :func:`get_asyncpg_pool` this never connects: callers that
+    only *want* to write when the database is already in use (the M-22
+    security-incident audit) use it as a non-blocking probe. Returns
+    ``None`` outside a running event loop or when the pool was built on
+    a different loop.
+    """
+    if _pool is None:
+        return None
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    return _pool if _pool_loop is loop else None
 
 
 async def close_pool() -> None:

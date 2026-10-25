@@ -18,9 +18,10 @@ Behaviour:
 * **Untrusted framing (M-22)**: the JSON payload is wrapped with
   ``[UNTRUSTED_CONTENT_START/END]`` markers; matched line content is data,
   never instructions.
-* **Injection detection (M-22)**: matched content is scanned with
-  ``detect_injection``; a suspected hit adds ``injection_warning`` to the
-  JSON object (same shape as bash M-10).
+* **Injection detection (M-22)**: matched content goes through
+  ``check_injection``; a suspected hit adds ``injection_warning`` to the
+  JSON object (same shape as bash M-10) and is audited into
+  ``memory_audit_log``.
 * **Path validation**: the search root must lie inside an allowed root
   (``app/tools/_validators.py``); patterns are passed after ``--`` so a
   pattern starting with ``-`` cannot inject rg flags.
@@ -65,7 +66,12 @@ from langchain_core.tools import InjectedToolArg, ToolException, tool
 from langgraph.prebuilt import ToolRuntime
 
 from app.core.cache import build_cache_key, from_cache_result, get_cache
-from app.core.security import detect_injection, wrap_untrusted
+from app.core.security import (
+    check_injection,
+    injection_warning,
+    session_id_from_config,
+    wrap_untrusted,
+)
 from app.tools._validators import validate_path
 
 logger = logging.getLogger(__name__)
@@ -187,14 +193,6 @@ async def _max_mtime_ns(files: list[str]) -> int:
     return await asyncio.to_thread(_scan)
 
 
-def _injection_warning(content: str) -> str | None:
-    """M-22: same warning shape as bash (M-10)."""
-    pattern = detect_injection(content)
-    if pattern is None:
-        return None
-    return f"WARNING: possible prompt injection detected in [{pattern}]"
-
-
 def _render(payload: dict) -> str:
     """Serialize + frame the JSON payload with untrusted markers (M-22)."""
     return wrap_untrusted(json.dumps(payload, ensure_ascii=False))
@@ -307,9 +305,13 @@ async def grep(
         logger.debug("grep cache miss: %s", cache_args)
 
     payload: dict = {"matches": matches, "count": len(matches), "truncated": truncated}
-    warning = _injection_warning("\n".join(m["content"] for m in matches))
-    if warning:
-        payload["injection_warning"] = warning
+    pattern = check_injection(
+        "\n".join(m["content"] for m in matches),
+        source="grep",
+        session_id=session_id_from_config(getattr(runtime, "config", None)),
+    )
+    if pattern:
+        payload["injection_warning"] = injection_warning(pattern)
 
     result = _render(payload)
     if key is not None:

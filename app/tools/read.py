@@ -18,12 +18,13 @@ Behaviour:
 * output is framed with the untrusted-content markers of M-22
   (``app/core/security.py``) so file content is never mistaken for
   instructions;
-* **injection detection (M-18/M-22)**: the returned window is scanned
-  with ``detect_injection`` (on the raw text, before line numbering -
-  a ``cat -n`` prefix would break the ``^role:`` patterns); a suspected
-  hit appends ``[WARNING: possible prompt injection detected in
-  [pattern_id]]`` right after the untrusted block, the same wording
-  bash/grep use for their ``injection_warning`` field;
+ * **injection detection (M-18/M-22)**: the returned window is framed by
+   ``sanitize_untrusted`` — a detected pattern (scanned on the raw text,
+   before line numbering, so a ``cat -n`` prefix would not break the
+   ``^role:`` patterns) appends ``[WARNING: possible prompt injection
+   detected in [pattern_id]]`` right after the untrusted block, the same
+   wording bash/grep use for their ``injection_warning`` field; a hit is
+   also audited into ``memory_audit_log``;
  * results are cached through the ``app.core.cache`` seam keyed by
    ``sha256(args + mtime)`` (M-21): a re-read of an unchanged file is
    a cache hit; any edit changes the mtime and hence the key;
@@ -57,7 +58,7 @@ from langchain_core.tools import InjectedToolArg, ToolException, tool
 from langgraph.prebuilt import ToolRuntime
 
 from app.core.cache import build_cache_key, from_cache_result, get_cache
-from app.core.security import detect_injection, wrap_untrusted
+from app.core.security import sanitize_untrusted, session_id_from_config
 from app.tools._validators import validate_path
 
 logger = logging.getLogger(__name__)
@@ -100,15 +101,19 @@ def _format_numbered(lines: list[str], start: int) -> str:
     )
 
 
-def _render(data: bytes, size: int, start: int, end: int, path: Path) -> str:
+def _render(
+    data: bytes,
+    size: int,
+    start: int,
+    end: int,
+    path: Path,
+    session_id: str | None = None,
+) -> str:
     """Turn raw bytes into the paginated, line-numbered tool output."""
     if b"\x00" in data[:BINARY_SNIFF_BYTES]:
         return f"Binary file, {size} bytes"
 
     text = data.decode("utf-8", errors="replace")
-    # Detect on the raw text: line numbers ("   1\\tsystem:") would hide
-    # the ^role: patterns, and a hit outside the window still poisons the file.
-    injection = detect_injection(text)
     all_lines = text.splitlines()
     total = len(all_lines)
 
@@ -117,9 +122,9 @@ def _render(data: bytes, size: int, start: int, end: int, path: Path) -> str:
 
     window = all_lines[start - 1 : end]
     body = _format_numbered(window, start)
-    rendered = wrap_untrusted(body)
-    if injection:
-        rendered += f"\n[WARNING: possible prompt injection detected in [{injection}]]"
+    # Detection runs on the raw file (a hit outside the window still
+    # poisons the file) while only the visible window is framed.
+    rendered = sanitize_untrusted(body, source="read", session_id=session_id, scan=text)
 
     shown_end = start + len(window) - 1
     if shown_end < total:
@@ -198,7 +203,14 @@ async def read(
     logger.debug("read cache miss: %s", resolved)
 
     data = await _read_bytes(resolved)
-    result = _render(data, stat_result.st_size, start, end, resolved)
+    result = _render(
+        data,
+        stat_result.st_size,
+        start,
+        end,
+        resolved,
+        session_id_from_config(getattr(runtime, "config", None)),
+    )
 
     # Binary results carry no file content -> no untrusted framing.
     if not result.startswith("Binary file"):

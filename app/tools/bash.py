@@ -66,9 +66,15 @@ import time
 from pathlib import Path
 from typing import Annotated
 
-from langchain_core.tools import ToolException, tool
+from langchain_core.tools import InjectedToolArg, ToolException, tool
+from langgraph.prebuilt import ToolRuntime
 
-from app.core.security import detect_injection, wrap_untrusted
+from app.core.security import (
+    check_injection,
+    injection_warning,
+    session_id_from_config,
+    wrap_untrusted,
+)
 from app.tools._validators import validate_path
 
 logger = logging.getLogger(__name__)
@@ -397,6 +403,11 @@ async def bash(
         dict[str, str] | None,
         "Additional environment variables to set (merged with allowlist).",
     ] = None,
+    runtime: Annotated[
+        ToolRuntime | None,
+        InjectedToolArg,
+        "Injected by the ToolNode; carries the session id for the M-22 audit.",
+    ] = None,
 ) -> str:
     """Execute a shell command and return structured JSON output.
 
@@ -450,13 +461,13 @@ async def bash(
     processed_stderr = _truncate_stream(_dedup_lines(stderr))
 
     # Injection detection runs on the raw output so a pattern is never
-    # lost inside a truncated region
-    pattern = detect_injection(stdout) or detect_injection(stderr)
-    injection_warning = (
-        f"WARNING: possible prompt injection detected in [{pattern}]"
-        if pattern
-        else None
+    # lost inside a truncated region; a hit is audited (M-22) and the
+    # warning travels in the JSON payload.
+    session_id = session_id_from_config(getattr(runtime, "config", None))
+    pattern = check_injection(stdout, source="bash", session_id=session_id) or (
+        check_injection(stderr, source="bash", session_id=session_id)
     )
+    warning = injection_warning(pattern) if pattern else None
 
     return _build_output(
         processed_stdout,
@@ -464,5 +475,5 @@ async def bash(
         exit_code,
         duration_ms,
         truncated,
-        injection_warning,
+        warning,
     )

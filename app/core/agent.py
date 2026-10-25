@@ -47,6 +47,7 @@ from app.core.graph import build_graph, resume_command
 from app.core.llm import get_llm
 from app.core.permissions import get_policy
 from app.core.prompt import build_system_prompt
+from app.core.security import check_injection, session_id_from_config
 from app.core.tools import get_tools
 from app.db.checkpoints import get_checkpointer
 
@@ -136,7 +137,18 @@ async def _stream_normalized(
 async def stream_graph_events(
     graph: Any, user_input: str, config: dict[str, Any]
 ) -> AsyncIterator[StreamEvent]:
-    """Run one user turn through the graph, yielding normalized UI events."""
+    """Run one user turn through the graph, yielding normalized UI events.
+
+    The user text is scanned for prompt-injection patterns first (M-22):
+    a suspected hit is audited into ``memory_audit_log`` and counted, but
+    the message itself is never blocked or rewritten (BACKLOG5 M-22:
+    «запретить нельзя — только warn»).
+    """
+    check_injection(
+        user_input,
+        source="user_input",
+        session_id=session_id_from_config(config),
+    )
     payload = {"messages": [HumanMessage(user_input)]}
     async for event in _stream_normalized(graph, payload, config):
         yield event

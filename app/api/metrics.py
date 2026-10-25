@@ -1,4 +1,4 @@
-"""Metrics API (M-21): /metrics (Prometheus text) + /tools/cache-stats.
+"""Metrics API (M-21/M-22): /metrics (Prometheus text) + /tools/cache-stats.
 
 Exposes the per-tool cache hit/miss counters of the active backend
 (``app.core.cache``): the hand-rolled Prometheus exposition carries
@@ -8,6 +8,10 @@ dependency - the formal Prometheus/Grafana setup (hit-rate gauge, daily
 ``cache_stats`` aggregation) is the separate A-15 ticket. Counters are
 process-local for both backends; the Redis mirror keys
 ``orya:cache_stats:{date}:{tool}`` exist for cross-process tooling.
+
+M-22 adds ``orya_prompt_injection_warnings_total{source,pattern}`` —
+the injection-detection counter of ``app.core.security``
+(BACKLOG5 M-22 AC), fed by read/bash/grep/user-input detections.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ from typing import Any
 from fastapi import APIRouter, Response
 
 from app.core.cache import get_cache_stats
+from app.core.security import get_injection_stats
 
 router = APIRouter(tags=["metrics"])
 
@@ -49,15 +54,32 @@ def _render_prometheus(stats: dict[str, Any]) -> str:
         for tool in sorted(stats.get("tools", {})):
             value = stats["tools"][tool][field]
             lines.append(f'{metric}{{tool="{_escape_label(tool)}"}} {value}')
-    return "\n".join(lines) + "\n"
+    return lines
+
+
+def _render_injection_counters() -> list[str]:
+    """Render the M-22 injection-detection counter (always one HELP/TYPE)."""
+    metric = "orya_prompt_injection_warnings_total"
+    lines = [
+        f"# HELP {metric} Suspected prompt-injection detections (M-22).",
+        f"# TYPE {metric} counter",
+    ]
+    stats = get_injection_stats()
+    for source in sorted(stats["by_source"]):
+        patterns = stats["by_source"][source]
+        for pattern in sorted(patterns):
+            labels = (
+                f'source="{_escape_label(source)}",pattern="{_escape_label(pattern)}"'
+            )
+            lines.append(f"{metric}{{{labels}}} {patterns[pattern]}")
+    return lines
 
 
 @router.get("/metrics")
 async def metrics() -> Response:
-    """Prometheus exposition of the tool-cache counters (M-21 AC)."""
-    return Response(
-        content=_render_prometheus(get_cache_stats()), media_type=PROMETHEUS_MEDIA_TYPE
-    )
+    """Prometheus exposition: cache counters (M-21) + injection counter (M-22)."""
+    lines = _render_prometheus(get_cache_stats()) + _render_injection_counters()
+    return Response(content="\n".join(lines) + "\n", media_type=PROMETHEUS_MEDIA_TYPE)
 
 
 @router.get("/tools/cache-stats")
