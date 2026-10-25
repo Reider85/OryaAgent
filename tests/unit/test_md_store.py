@@ -230,7 +230,7 @@ def test_append_500_bytes_completes_within_latency_budget(store, monkeypatch) ->
     )
 
 
-# --- compaction hook (real compaction = M-27) -------------------------------
+# --- compaction (M-25 hook -> M-27 Compactor) ---------------------------------
 
 
 async def test_over_budget_append_schedules_compaction(tmp_path, monkeypatch):
@@ -263,14 +263,65 @@ async def test_under_budget_append_schedules_nothing(tmp_path, monkeypatch):
     assert calls == []
 
 
-async def test_compact_if_needed_is_a_non_destructive_stub(store):
+def _learned_block(index: int, fill: str) -> str:
+    """One ARCHITECT6 §3.1.1 record with a stable id."""
+    return (
+        f"- [learned] id=learn_{index:03d} | confidence=0.95 | source=/learn"
+        f" | ts=2026-10-20T10:00:00Z\n  pattern {index}: {fill}"
+    )
+
+
+async def test_compact_if_needed_runs_the_real_compactor(store):
+    """M-25's stub is gone: an over-budget file is compacted into the archive."""
     assert await store.compact_if_needed("LEARNED.md") is False
 
-    store.append("LEARNED.md", "z" * (MDStore.MAX_BYTES["LEARNED.md"] + 10))
+    for index in range(20):
+        store.append("LEARNED.md", _learned_block(index, "x" * 250))
+    assert store.needs_compaction("LEARNED.md")
 
     assert await store.compact_if_needed("LEARNED.md") is True
-    assert store.needs_compaction("LEARNED.md") is True
-    assert store.read("LEARNED.md").count("z") == MDStore.MAX_BYTES["LEARNED.md"] + 10
+
+    assert not store.needs_compaction("LEARNED.md")
+    content = store.read("LEARNED.md")
+    assert content.count("- [learned]") < 20, "the oldest entries moved out"
+    assert "pattern 19:" in content, "the newest entry survived"
+    archive_dir = store.memory_dir / "archive"
+    assert archive_dir.is_dir()
+    archived = next(archive_dir.glob("LEARNED_*.md")).read_text(encoding="utf-8")
+    assert "pattern 0:" in archived
+
+
+async def test_scheduled_hook_eventually_compacts_the_file(store):
+    """``_maybe_compact`` (M-25) now performs the real compaction asynchronously."""
+    for index in range(20):
+        store.append("LEARNED.md", _learned_block(index, "y" * 250))
+    assert store.needs_compaction("LEARNED.md")
+
+    deadline = time.monotonic() + 10
+    while store.needs_compaction("LEARNED.md") and time.monotonic() < deadline:
+        await asyncio.sleep(0.02)
+    await asyncio.sleep(0.05)  # let any trailing scheduled pass finish
+
+    assert not store.needs_compaction("LEARNED.md"), "the scheduled task compacted it"
+    assert store.read("LEARNED.md").count("- [learned]") < 20
+
+
+def test_rewrite_is_atomic_and_locked(store):
+    """The compaction primitive: tmp + os.replace under the per-file lock."""
+    store.append("LEARNED.md", "old")
+
+    def transform(old: str) -> str:
+        return old.replace("old", "new")
+
+    body = store.rewrite("LEARNED.md", transform)
+
+    assert body == "new\n\n"
+    assert store.read("LEARNED.md") == body
+    assert list(store.memory_dir.glob(".*.tmp")) == []
+    # a transform that returns the input unchanged must not write at all
+    before = store.mtime("LEARNED.md")
+    assert store.rewrite("LEARNED.md", lambda old: old) == body
+    assert store.mtime("LEARNED.md") == before
 
 
 # --- audit trail (best-effort, M-25 decision) --------------------------------

@@ -51,6 +51,10 @@ _YAML_FALLBACKS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     ),
     "redis_url": (("REDIS_URL", "ORYA_REDIS_URL"), ("redis_url",)),
     "memory_dir": (("ORYA_MEMORY_DIR",), ("memory_dir",)),
+    "memory_compact_interval_s": (
+        ("ORYA_MEMORY_COMPACT_INTERVAL_SECONDS",),
+        ("memory_compact_interval_s",),
+    ),
     "sessions_dir": (("ORYA_SESSIONS_DIR",), ("sessions_dir",)),
     "permission_policy": (
         ("ORYA_PERMISSION_POLICY", "PERMISSION_POLICY"),
@@ -144,10 +148,15 @@ class Settings(BaseSettings):
         ),
     )
 
-    # --- L0 memory (M-25) ------------------------------------------------
+    # --- L0 memory (M-25, M-27) -------------------------------------------
     memory_dir: Path = Field(
         default=Path.home() / ".orya" / "memory",
         validation_alias=AliasChoices("ORYA_MEMORY_DIR"),
+    )
+    memory_compact_interval_s: int = Field(
+        default=86400,
+        validation_alias=AliasChoices("ORYA_MEMORY_COMPACT_INTERVAL_SECONDS"),
+        description="L0 compaction period in seconds (M-27); 0 disables the worker",
     )
 
     # --- Session log (M-14) ----------------------------------------------

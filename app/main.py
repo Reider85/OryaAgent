@@ -11,6 +11,7 @@ from fastapi import FastAPI
 
 from app.api.learn import router as learn_router
 from app.api.llm import router as llm_router
+from app.api.memory import router as memory_router
 from app.api.metrics import router as metrics_router
 from app.api.sessions import router as sessions_router
 
@@ -22,26 +23,38 @@ logging.basicConfig(
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """Wire the M-21 cache backend and the M-14 projection worker.
+    """Wire the M-21 cache backend, the M-14 projection worker and M-27 compaction.
 
     ``init_cache`` probes Redis per ``settings.cache_backend`` (``auto``
     falls back to the in-memory backend with a warning) and
     ``close_cache`` releases the client on shutdown. The worker
     soft-fails without PostgreSQL (logged warning, retried on the next
     pass) so ``/health`` and unit tests keep working with no database
-    running.
+    running. The compaction worker sleeps
+    ``settings.memory_compact_interval_s`` between passes (0 disables it)
+    and never lets a failed pass kill the loop.
     """
     from app.core.cache import close_cache, init_cache
+    from app.core.config import get_settings
+    from app.core.memory.compactor import compaction_worker
     from app.db.session_log import projection_worker
 
     await init_cache()
     task = asyncio.create_task(projection_worker())
+    interval = get_settings().memory_compact_interval_s
+    compact_task: asyncio.Task | None = None
+    if interval > 0:
+        compact_task = asyncio.create_task(compaction_worker(interval))
     try:
         yield
     finally:
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
+        if compact_task is not None:
+            compact_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await compact_task
         await close_cache()
 
 
@@ -55,6 +68,7 @@ app = FastAPI(
 app.include_router(llm_router)
 app.include_router(sessions_router)
 app.include_router(learn_router)
+app.include_router(memory_router)
 app.include_router(metrics_router)
 
 

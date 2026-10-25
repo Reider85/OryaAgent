@@ -760,6 +760,156 @@ async def test_on_message_learn_without_a_session_explains(
     assert "No active session" in fake_cl.messages[-1].content
 
 
+# --- /memory slash-commands (M-27) ----------------------------------------------
+
+
+def test_memory_action_classifies_every_spelling() -> None:
+    assert ui._memory_action("/memory") == "cat"
+    assert ui._memory_action("/memory cat") == "cat"
+    assert ui._memory_action("/memory show") == "cat"
+    assert ui._memory_action("/memory stats") == "stats"
+    assert ui._memory_action("/memory compact") == "compact"
+    assert ui._memory_action("/memory/stats") == "stats"
+    assert ui._memory_action("/memory/compact") == "compact"
+    assert ui._memory_action("/memory list") == "help"
+    # not a memory command — the text still reaches the model
+    assert ui._memory_action("/learn") is None
+    assert ui._memory_action("what is /memory?") is None
+    assert ui._memory_action("/memoryless chatter") is None
+
+
+async def test_on_message_memory_stats_renders_the_table(
+    fake_cl: _FakeCl, patch_client
+) -> None:
+    fake_cl.user_session.set("thread_id", "sess-1")
+    requests = patch_client(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "files": [
+                    {
+                        "name": "LEARNED.md",
+                        "size_bytes": 120,
+                        "entries_count": 2,
+                        "line_count": 5,
+                        "token_count": 30,
+                        "last_write_ts": "2026-10-26T10:00:00Z",
+                        "max_bytes": 4096,
+                        "over_limit": False,
+                    }
+                ],
+                "total_size_bytes": 120,
+                "line_counts": {"LEARNED.md": 5},
+                "token_counts": {"LEARNED.md": 30},
+                "last_compacted": None,
+            },
+        )
+    )
+
+    await ui.on_message(ui.cl.Message(content="/memory stats"))  # type: ignore[arg-type]
+
+    assert len(requests) == 1  # a read, never a chat turn
+    assert requests[0].method == "GET"
+    assert requests[0].url.path == "/sessions/sess-1/memory/stats"
+    body = fake_cl.messages[-1].content
+    assert "| `LEARNED.md` | 120 B | 2 | 5 | 30 |" in body
+    assert "last compacted: never" in body
+
+
+async def test_on_message_memory_compact_posts_and_reports(
+    fake_cl: _FakeCl, patch_client
+) -> None:
+    fake_cl.user_session.set("thread_id", "sess-1")
+    requests = patch_client(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "status": "ok",
+                "results": [
+                    {
+                        "file": "LEARNED.md",
+                        "changed": True,
+                        "before_bytes": 5120,
+                        "after_bytes": 3840,
+                        "kept": 9,
+                        "archived": 3,
+                        "archive_path": "/tmp/archive/LEARNED_20261026.md",
+                        "over_limit": False,
+                    },
+                    {
+                        "file": "FACTS.md",
+                        "changed": False,
+                        "before_bytes": 200,
+                        "after_bytes": 200,
+                        "kept": 4,
+                        "archived": 0,
+                        "archive_path": None,
+                        "over_limit": False,
+                    },
+                ],
+                "total_archived": 3,
+            },
+        )
+    )
+
+    await ui.on_message(ui.cl.Message(content="/memory compact"))  # type: ignore[arg-type]
+
+    assert len(requests) == 1
+    assert requests[0].method == "POST"
+    assert requests[0].url.path == "/sessions/sess-1/memory/compact"
+    body = fake_cl.messages[-1].content
+    assert "✅ Compacted 3 entries:" in body
+    assert "`LEARNED.md`: 5120 → 3840 B (kept 9, archived 3)" in body
+    assert "nothing to archive (4 kept)" in body
+
+
+async def test_on_message_memory_cat_renders_the_markdown(
+    fake_cl: _FakeCl, patch_client
+) -> None:
+    fake_cl.user_session.set("thread_id", "sess-1")
+    requests = patch_client(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "files": {"LEARNED.md": "- [learned] id=learn_001"},
+                "markdown": "# Long-term Memory\n\n## LEARNED.md\n- [learned]",
+            },
+        )
+    )
+
+    await ui.on_message(ui.cl.Message(content="/memory"))  # type: ignore[arg-type]
+
+    assert requests[0].url.path == "/sessions/sess-1/memory"
+    assert fake_cl.messages[-1].content.startswith("# Long-term Memory")
+
+
+async def test_on_message_memory_unknown_subcommand_shows_the_usage(
+    fake_cl: _FakeCl, patch_client
+) -> None:
+    fake_cl.user_session.set("thread_id", "sess-1")
+    requests = patch_client(lambda request: httpx.Response(200, json={}))
+
+    await ui.on_message(ui.cl.Message(content="/memory list"))  # type: ignore[arg-type]
+
+    assert requests == [], "an unknown subcommand never reaches the API"
+    assert fake_cl.messages[-1].content.startswith("Usage:")
+
+
+async def test_on_message_memory_reports_an_unreachable_api(
+    fake_cl: _FakeCl, patch_client
+) -> None:
+    fake_cl.user_session.set("thread_id", "sess-1")
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    patch_client(refuse)
+
+    await ui.on_message(ui.cl.Message(content="/memory stats"))  # type: ignore[arg-type]
+
+    assert "FastAPI server unreachable" in fake_cl.messages[-1].content
+
+
 # --- settings / sidebar ----------------------------------------------------------
 
 

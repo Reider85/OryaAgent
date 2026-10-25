@@ -35,6 +35,12 @@ sequence into ``LEARNED.md``) and renders the
 Chainlit 2.x has no ``on_slash_command`` hook, so the command is parsed
 at the top of ``on_message``.
 
+M-27 adds the ``/memory*`` family the same way: ``/memory`` (cat the four
+L0 files), ``/memory stats`` / ``/memory/stats`` and ``/memory compact`` /
+``/memory/compact`` call the session-scoped endpoints and render a stats
+table, a per-file compaction report or the markdown content — again never
+a chat turn.
+
 Failure modes: an unreachable API server (``ORYA_API_URL``) leaves the
 chat with an explanatory message instead of a session; a database outage
 degrades to a locally generated ``thread_id`` and ``degraded: true`` in
@@ -381,6 +387,119 @@ async def _handle_learn(thread_id: str, text: str) -> None:
     ).send()
 
 
+# --- /memory slash-commands (M-27) -------------------------------------------
+
+
+#: Usage hint for an unrecognised ``/memory`` subcommand.
+_MEMORY_USAGE = (
+    "Usage: `/memory` (show the L0 files), `/memory stats`, "
+    "`/memory compact` — the `/memory/…` spellings work too."
+)
+
+#: Accepted subcommands per spelling (defaults to ``cat``).
+_MEMORY_ACTIONS = {
+    "": "cat",
+    "cat": "cat",
+    "show": "cat",
+    "view": "cat",
+    "stats": "stats",
+    "compact": "compact",
+}
+
+
+def _memory_action(text: str) -> str | None:
+    """Classify a ``/memory*`` command (M-27) — ``None`` when it is not one.
+
+    Returns ``cat`` / ``stats`` / ``compact`` for ``/memory [sub]`` and
+    ``/memory/{stats,compact}``, ``help`` for an unknown subcommand, and
+    ``None`` for anything else (so the message still reaches the model).
+    """
+    token = text.split(maxsplit=1)[0]
+    if token == "/memory":
+        rest = text.split(maxsplit=2)
+        sub = rest[1] if len(rest) > 1 else ""
+    elif token.startswith("/memory/"):
+        sub = token.split("/", 2)[2]
+    else:
+        return None
+    return _MEMORY_ACTIONS.get(sub.lower(), "help")
+
+
+async def _handle_memory(thread_id: str, action: str) -> None:
+    """Run a ``/memory*`` command against the session-scoped endpoints (M-27)."""
+    if action == "help":
+        await cl.Message(content=_MEMORY_USAGE).send()
+        return
+
+    path = f"/sessions/{thread_id}/memory"
+    if action in {"stats", "compact"}:
+        path = f"{path}/{action}"
+    try:
+        async with make_client() as client:
+            if action == "compact":
+                response = await client.post(path)
+            else:
+                response = await client.get(path)
+    except httpx.HTTPError as exc:
+        logger.exception("memory %s request failed (thread_id=%s)", action, thread_id)
+        await cl.Message(
+            content=(
+                f"FastAPI server unreachable at `{api_url()}` ({exc}) — "
+                "start it with `make dev` and retry."
+            )
+        ).send()
+        return
+
+    if response.status_code != 200:
+        try:
+            detail = str(response.json().get("detail") or response.text)
+        except ValueError:
+            detail = response.text
+        await cl.Message(content=f"/memory {action} failed: {detail}").send()
+        return
+
+    await cl.Message(content=_render_memory(action, response.json())).send()
+
+
+def _render_memory(action: str, data: dict[str, Any]) -> str:
+    """Render an endpoint payload as one Chainlit message."""
+    if action == "stats":
+        rows = [
+            "| File | Size | Entries | Lines | Tokens | Last write |",
+            "|---|---:|---:|---:|---:|---|",
+        ]
+        for entry in data.get("files") or []:
+            rows.append(
+                f"| `{entry.get('name')}` | {entry.get('size_bytes')} B "
+                f"| {entry.get('entries_count')} | {entry.get('line_count')} "
+                f"| {entry.get('token_count')} | {entry.get('last_write_ts')} |"
+            )
+        rows.append("")
+        rows.append(
+            f"Total: **{data.get('total_size_bytes')} B** · last compacted: "
+            f"{data.get('last_compacted') or 'never'}"
+        )
+        return "\n".join(rows)
+
+    if action == "compact":
+        rows = []
+        for result in data.get("results") or []:
+            if result.get("changed"):
+                rows.append(
+                    f"- `{result.get('file')}`: {result.get('before_bytes')} → "
+                    f"{result.get('after_bytes')} B (kept {result.get('kept')}, "
+                    f"archived {result.get('archived')})"
+                )
+            else:
+                rows.append(
+                    f"- `{result.get('file')}`: nothing to archive "
+                    f"({result.get('kept')} kept)"
+                )
+        return f"✅ Compacted {data.get('total_archived')} entries:\n" + "\n".join(rows)
+
+    return str(data.get("markdown") or "")
+
+
 # --- handlers ----------------------------------------------------------------
 
 
@@ -541,6 +660,11 @@ async def on_message(message: cl.Message) -> None:
     if text == "/learn" or text.startswith("/learn "):
         # M-26: slash-command — a memory write, never a chat turn.
         await _handle_learn(str(thread_id), text)
+        return
+    memory_action = _memory_action(text)
+    if memory_action is not None:
+        # M-27: slash-command — reads/compacts L0, never a chat turn.
+        await _handle_memory(str(thread_id), memory_action)
         return
 
     settings = load_settings()

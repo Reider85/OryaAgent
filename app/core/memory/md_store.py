@@ -25,11 +25,13 @@ single writes under 4096 bytes, and a crash can never interleave two entries.
 Concurrency inside the process is serialized by a per-file
 ``threading.Lock``; cross-process writers take an advisory ``fcntl.flock``
 where available (POSIX only — Windows relies on the atomic append itself).
-Full-file rewrites (compaction, M-27) use ``tmp`` + ``os.replace``.
+Full-file rewrites (the M-27 Compactor) go through :meth:`MDStore.rewrite` —
+a locked read-modify-write ending in tmp + ``fsync`` + ``os.replace``.
 
 Every append is recorded best-effort in ``memory_audit_log`` (M-25 audit),
-and files over their size budget get ``compact_if_needed`` scheduled — the
-real compaction lands with M-27.
+and files over their size budget schedule ``compact_if_needed`` — the real
+compaction lives in :mod:`app.core.memory.compactor` (M-27) and is called
+through this seam.
 """
 
 from __future__ import annotations
@@ -38,8 +40,11 @@ import asyncio
 import logging
 import os
 import threading
+from collections.abc import Callable
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import mkstemp
 
 from app.core.memory.audit import record_memory_op
 from app.core.memory.models import kind_for, parse_entries
@@ -194,8 +199,17 @@ class MDStore:
 
     @staticmethod
     def _write_append(path: Path, payload: bytes) -> None:
-        """One O_APPEND descriptor: write (retrying only a short write) + fsync."""
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        """One O_APPEND descriptor: write (retrying only a short write) + fsync.
+
+        ``O_BINARY`` matters on Windows: without it the descriptor is opened
+        in text mode and every ``\\n`` would land as ``\\r\\n``, inflating the
+        byte budget stats and breaking the exact-payload contract.
+        """
+        fd = os.open(
+            path,
+            os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0),
+            0o600,
+        )
         try:
             if fcntl is not None:
                 fcntl.flock(fd, fcntl.LOCK_EX)
@@ -210,7 +224,7 @@ class MDStore:
         finally:
             os.close(fd)
 
-    # -- compaction (M-25 hook, real work in M-27) ----------------------------
+    # -- compaction (M-27: the real work lives in app.core.memory.compactor) --
 
     def max_bytes(self, file: str) -> int:
         """Compaction budget for ``file``."""
@@ -224,19 +238,63 @@ class MDStore:
             return False
 
     async def compact_if_needed(self, file: str) -> bool:
-        """Compaction stub (M-27 owns the real L0 -> L1 move).
+        """Run the M-27 Compactor when ``file`` is over budget.
 
-        Returns ``True`` when ``file`` is over budget, ``False`` otherwise.
+        Returns ``True`` when the file was over budget and a compaction ran
+        (the budget itself may still be exceeded afterwards — everything left
+        is protected by the strategy). Files without a strategy, and files
+        within budget, are a no-op. Never raises: it is scheduled from a
+        background task by :meth:`_maybe_compact`.
         """
         if not self.needs_compaction(file):
             return False
-        logger.info(
-            "compaction deferred to M-27: %s is %d bytes (budget %d)",
-            file,
-            self._resolve(file).stat().st_size,
-            self.max_bytes(file),
+        from app.core.memory.compactor import (
+            get_compactor,
+        )  # local: md_store <-> compactor
+
+        try:
+            return await get_compactor(self.memory_dir).compact_if_needed(file)
+        except Exception:  # noqa: BLE001 - a scheduled task must never blow up
+            logger.exception("compaction of %s failed", file)
+            return True
+
+    def rewrite(self, file: str, transform: Callable[[str], str]) -> str:
+        """Atomically rewrite ``file`` through ``transform`` (M-27 compaction).
+
+        The whole read-modify-write runs under the file's lock, so a
+        concurrent :meth:`append` can neither interleave nor be lost; the new
+        body lands via tmp + ``fsync`` + ``os.replace`` (a crash leaves either
+        the old or the new file, never a partial one). Returning the input
+        unchanged skips the write. Returns the resulting body.
+        """
+        path = self._resolve(file)
+        with self._lock(file):
+            try:
+                current = path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                current = ""
+            updated = transform(current)
+            if updated == current:
+                return current
+            self._write_atomic(path, updated)
+            return updated
+
+    @staticmethod
+    def _write_atomic(path: Path, body: str) -> None:
+        """tmp (same dir) + fsync + os.replace; clean the tmp up on failure."""
+        fd, tmp_name = mkstemp(
+            dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
         )
-        return True
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(body)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_name, path)
+        except BaseException:
+            with suppress(OSError):
+                os.unlink(tmp_name)
+            raise
 
     def _maybe_compact(self, file: str) -> None:
         """Schedule ``compact_if_needed`` after an append that broke the budget."""

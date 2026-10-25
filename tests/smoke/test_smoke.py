@@ -9,12 +9,13 @@ mini-project built by the ``mini_project`` fixture:
 2. edit a function signature + its call-site (atomic rewrite);
 3. run ``pytest`` through ``bash`` and parse the JSON output;
 4. grep a symbol across the project and report the matches;
-5. ``/learn`` a fact -> use it next turn (**skipped**: blocked on
-   M-25 MDStore / M-26 /learn / M-27 Compactor).
+5. ``/learn`` a fact -> use it next turn (memory persistence, unblocked
+   by M-25 MDStore / M-26 /learn / M-27 Compactor).
 
 Plus the three BACKLOG5 checks: cache-hit on a repeat read, an
 injection warning in the read ToolMessage, and bash returning a JSON
-document rather than plain text.
+document rather than plain text. M-27 also closes the M-18 leftovers:
+the ``/memory/stats`` endpoint and atomic-append durability (BACKLOG6).
 """
 
 from __future__ import annotations
@@ -22,15 +23,27 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 from pathlib import Path
 
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from pydantic import Field
 
+from app.api.learn import LearnContentRequest, learn_content
 from app.core.cache import MemoryCache, get_cache, set_cache
 from app.core.config import clear_settings_cache
 from app.core.graph import build_graph, default_run_config
+from app.core.memory import (
+    FILES,
+    MDStore,
+    MemoryItem,
+    drain_memory_audits,
+    get_md_store,
+    parse_entries,
+)
+from app.core.prompt import build_system_prompt
 from app.core.security import UNTRUSTED_CONTENT_END, UNTRUSTED_CONTENT_START
 from app.core.tools import get_tools
 from app.tools import read
@@ -266,14 +279,135 @@ async def test_smoke_grep_symbol_across_project(
     assert "injection_warning" not in payload
 
 
-# --- canonical task 5: /learn a fact -> use it next turn (blocked) -----------
+# --- canonical task 5: /learn a fact -> use it next turn ------------------------
 
 
-async def test_smoke_learn_fact_used_next_turn() -> None:
-    pytest.skip(
-        "blocked on M-25 (MDStore) / M-26 (/learn) / M-27 (Compactor): "
-        "no memory layer to persist the fact yet"
-    )
+#: The fact learned through the M-26 endpoint (M-18 canonical task 5).
+_SMOKE_FACT = "The test suite lives in tests/ and runs with pytest."
+
+
+class _RecordingModel(FakeMessagesListChatModel):
+    """Fake model that also remembers every message list the graph handed it."""
+
+    seen: list = Field(default_factory=list)
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):  # noqa: ANN001
+        self.seen.append(list(messages))
+        return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+
+async def test_smoke_learn_fact_used_next_turn(
+    mini_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """M-18 task 5: a fact learned via ``/learn`` shows up in the next turn."""
+    monkeypatch.setenv("ORYA_MEMORY_DIR", str(mini_project / "memory"))
+    clear_settings_cache()
+    try:
+        learned = await learn_content(
+            LearnContentRequest(content=_SMOKE_FACT, category="fact")
+        )
+        await drain_memory_audits()
+        assert learned.status == "ok"
+        assert learned.file == "FACTS.md"
+
+        model = _RecordingModel(responses=[AIMessage(content="pytest")])
+        graph = build_graph(get_tools(), model, system_prompt_fn=build_system_prompt)
+        result = await graph.ainvoke(
+            {
+                "messages": [
+                    HumanMessage(content="Which test runner does this project use?")
+                ]
+            },
+            default_run_config("smoke-m18-learn"),
+        )
+
+        system_text = "\n".join(
+            str(message.content)
+            for message in model.seen[0]
+            if isinstance(message, SystemMessage)
+        )
+        assert _SMOKE_FACT in system_text, (
+            "the fact learned last turn must reach the model this turn"
+        )
+        assert result["messages"][-1].content == "pytest"
+    finally:
+        clear_settings_cache()
+
+
+# --- M-18 leftovers closed by M-27: /memory/stats + append durability ----------
+
+
+def test_smoke_memory_stats_reports_the_store(
+    client, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """BACKLOG6 M-18: ``GET /memory/stats`` carries sizes, counts and last-write."""
+    monkeypatch.setenv("ORYA_MEMORY_DIR", str(tmp_path / "memory"))
+    clear_settings_cache()
+    try:
+        store = get_md_store()
+        store.append(
+            "LEARNED.md",
+            "- [learned] id=learn_001 | confidence=0.9 | source=/learn"
+            " | ts=2026-10-26T00:00:00Z\n  smoke fact",
+        )
+        content = store.read("LEARNED.md")
+
+        response = client.get("/memory/stats")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert {entry["name"] for entry in payload["files"]} == set(FILES)
+        learned = next(e for e in payload["files"] if e["name"] == "LEARNED.md")
+        assert learned["size_bytes"] == len(content.encode("utf-8"))
+        assert learned["entries_count"] == 1
+        assert learned["line_count"] == len(content.splitlines())
+        assert learned["token_count"] == len(content) // 4
+        assert learned["last_write_ts"].endswith("Z")
+        assert learned["over_limit"] is False
+        assert payload["total_size_bytes"] == sum(
+            entry["size_bytes"] for entry in payload["files"]
+        )
+        assert payload["last_compacted"] is None
+    finally:
+        clear_settings_cache()
+
+
+def test_smoke_atomic_append_keeps_every_entry(tmp_path: Path) -> None:
+    """BACKLOG6 M-18: concurrent appends never tear or lose a record."""
+    store = MDStore(tmp_path / "memory")
+    errors: list[BaseException] = []
+
+    def writer(tag: str) -> None:
+        try:
+            for index in range(10):
+                store.append(
+                    "LEARNED.md",
+                    MemoryItem.create(
+                        kind="learned",
+                        text=f"{tag}-{index}",
+                        id=f"learn_{tag}{index:02d}",
+                    ).to_markdown(),
+                )
+        except BaseException as exc:  # noqa: BLE001 - surfaced below
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=writer, args=(tag,)) for tag in ("a", "b", "c", "d")
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors
+    entries = parse_entries(store.read("LEARNED.md"), default_kind="learned")
+    assert len(entries) == 40, "every append landed as one complete block"
+    assert {entry.id for entry in entries} == {
+        f"learn_{tag}{index:02d}" for tag in "abcd" for index in range(10)
+    }
+    assert {entry.text for entry in entries} == {
+        f"{tag}-{index}" for tag in "abcd" for index in range(10)
+    }
 
 
 # --- BACKLOG5 check #6: cache-hit on a repeat read ----------------------------

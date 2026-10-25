@@ -312,7 +312,7 @@ store.stats()  # bytes / entries / last_write / over_limit
 ```
 
 - **Atomicity:** one `os.write` into an `O_APPEND` descriptor plus `fsync`, serialized by a per-file `threading.Lock` (`fcntl.flock` advisory locking where POSIX provides it). Concurrent appends lose no entries and a crash never tears a record; full-file rewrites (M-27 compaction) go through `tmp` + `os.replace`.
-- **Budget:** an append that pushes a file past its budget schedules `compact_if_needed()`; the L0 → L1 move itself lands with M-27.
+- **Budget:** an append that pushes a file past its budget schedules `compact_if_needed()`, which the M-27 Compactor executes asynchronously (see below).
 - **Audit:** every append is recorded best-effort in `memory_audit_log`, falling back to `{memory_dir}/audit/memory_audit.jsonl` when PostgreSQL is unreachable.
 - **Records:** entries follow the ARCHITECT6 §3.1.1 block format (`- [fact] id=... | confidence=... | source=... | ts=...` + indented text) — `MemoryItem.to_markdown()` / `parse_entries()` round-trip, and hand-edited free text stays valid.
 - **Prompt:** `format_memory_block()` injects LEARNED / PREFERENCES / FACTS / DECISIONS through the same seam, capped at 8 KB.
@@ -326,9 +326,26 @@ Two endpoints write into the L0 files through the `MDStore` seam:
 | `POST /sessions/{id}/learn` | `{pattern_name?, description?, scope?}` | Extracts the session's **last successful tool-call sequence** from the JSONL projection (M-14), renders a `[learned]` block in the ARCHITECT6 §3.1.1 format and appends it to `LEARNED.md`. `pattern_name` defaults to the auto-name `grep_read_edit`; `400 "No successful tool-call sequence to learn"` when the last turn has no successful tool call (error, non-zero bash exit, permission refusal). |
 | `POST /learn` | `{content, category: "fact"\|"preference"\|"project"}` | Appends `content` to `FACTS.md` / `PREFERENCES.md` / `LEARNED.md` (PROMPT_MVP contract for CI/batch clients). |
 
-Both answer `{status, learned_id, file, compacted, line_count}`; `compacted` reports that the file is over budget — compaction itself is scheduled asynchronously and lands with M-27. Every call additionally writes an `action="learn"` audit record carrying `memory_id` / `source` / `trace_id` (own fields in the JSONL fallback, folded into `reason` for the PostgreSQL row).
+Both answer `{status, learned_id, file, compacted, line_count}`; `compacted` reports that the file is over budget — the compaction itself runs asynchronously through the M-27 Compactor. Every call additionally writes an `action="learn"` audit record carrying `memory_id` / `source` / `trace_id` (own fields in the JSONL fallback, folded into `reason` for the PostgreSQL row).
 
 In the Chainlit UI, `/learn [name] [description]` calls the session endpoint and replies ``✅ Learned: `learn_001` → LEARNED.md (compacted: false)`` — no confirmation prompt, and the entry is visible to the model from the next turn (`format_memory_block()` reads the same files).
+
+## Compactor (M-27)
+
+`app/core/memory/compactor.py` keeps the L0 files within budget with strategy-based *soft* compaction: rejected blocks move to `~/.orya/memory/archive/{stem}_{YYYYMMDD}.md` (append-only — same-day runs append to the same file) and the L0 file is rewritten atomically under its per-file lock. Nothing is ever deleted — with no L1 store in the MVP (that is B-21), the archive is the cold tier.
+
+| Endpoint | Effect |
+|---|---|
+| `POST /memory/compact` · `POST /sessions/{id}/memory/compact` | Synchronously compacts the four strategy files: `{status, results: [{file, changed, before_bytes, after_bytes, kept, archived, archive_path, over_limit}], total_archived}`. |
+| `GET /memory/stats` · `GET /sessions/{id}/memory/stats` | `{files: [{name, size_bytes, entries_count, line_count, token_count, last_write_ts, max_bytes, over_limit}], total_size_bytes, line_counts, token_counts, last_compacted}` — the union of the PROMPT_MVP and BACKLOG6 shapes (tokens are the `chars/4` approximation). |
+| `GET /memory` · `GET /sessions/{id}/memory` | The four files as `{files, markdown}` — `markdown` is the concatenation the AC asks for. |
+
+Strategies (ARCHITECT6 §4.2.2): `PREFERENCES.md` archives only `agent_inferred` entries with confidence < 0.8; `LEARNED.md` keeps the last 10 entries and everything with confidence ≥ 0.9, then archives the oldest kept entries until the file fits its 4 KB budget; `FACTS.md` keeps confidence ≥ 0.9; `DECISIONS.md` archives blocks carrying a superseded marker (`superseded_by=` / `[superseded]` / `superseded:`). `PROJECT.md` and `MEMORY_INDEX.md` have no strategy — they appear in stats but are never compacted (they are context, not scored records).
+
+- **Triggers:** an append over budget (`MDStore._maybe_compact`, async), the endpoints above, and a periodic worker started by the FastAPI lifespan every `ORYA_MEMORY_COMPACT_INTERVAL_SECONDS` (default 86400; `0` disables it).
+- **Crash safety:** the archived blocks land in the archive *first*, then the rewrite goes tmp + `fsync` + `os.replace` — a crash can only duplicate, never lose, and never leaves a partial file.
+- **Audit:** every run writes a `memory.compact` row (trigger / kept / archived / byte delta in `reason`) and stamps `{memory_dir}/compaction.json`, the `last_compacted` field of `/memory/stats`.
+- **UI:** `/memory`, `/memory stats`, `/memory compact` (and the `/memory/…` spellings) render the content, a stats table or the per-file report — never a chat turn.
 
 ## Documentation
 
@@ -365,6 +382,7 @@ In the Chainlit UI, `/learn [name] [description]` calls the session endpoint and
 - ✅ **M-24** - Chainlit via FastAPI: SSE streaming endpoints (`?stream=true` on `/messages` + `/resume`; `token`/`tool_start`/`tool_end`/`interrupt`/`done`/`error` frames), settings overrides (model/mode/allow-list) resolved server-side, UI rewritten as an httpx client with no direct graph access, `from_cache` propagated into `tool_end`/`tool_steps`
 - ✅ **M-25** - Long-term memory: `MDStore` L0 (six MD files in `ORYA_MEMORY_DIR`, atomic `O_APPEND`+`fsync` append with per-file locks, size budgets + compaction hook, best-effort `memory_audit_log` audit), `MemoryItem` record model, system prompt reads L0 through the store seam
 - ✅ **M-26** - `/learn`: `POST /sessions/{id}/learn` (last successful tool sequence from the M-14 JSONL projection → `[learned]` block in `LEARNED.md`, auto pattern names, 400 on a failed last call), `POST /learn` content contract (`fact|preference|project`), Chainlit `/learn [name] [description]` slash-command, `learn` audit records (`memory_id`/`source`/`trace_id`)
+- ✅ **M-27** - Compactor: strategy-based soft compaction into `memory/archive/` (4 strategies + LEARNED size-guard, archive-first crash ordering, locked atomic rewrite), union endpoints `POST /memory/compact` + `GET /memory/stats` + `GET /memory` (and their `/sessions/{id}/memory*` twins), `memory.compact` audit + `compaction.json`, periodic worker (`ORYA_MEMORY_COMPACT_INTERVAL_SECONDS`), Chainlit `/memory [stats|compact]` commands, M-18 memory-AC unblocked (smoke task 5, `/memory/stats`, append durability)
 - ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for full 28 tickets)
 
 ## LLM Providers (M-01)

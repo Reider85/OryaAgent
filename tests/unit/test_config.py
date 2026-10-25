@@ -82,6 +82,7 @@ def test_defaults():
     assert s.context_max_tokens == 120_000
     assert s.log_level == "INFO"
     assert s.memory_dir == Path.home() / ".orya" / "memory"
+    assert s.memory_compact_interval_s == 86400  # M-27 periodic compaction
     assert s.sessions_dir == Path.home() / ".orya" / "sessions"
     # UI (M-17/M-24)
     assert s.api_url == "http://127.0.0.1:8000"
