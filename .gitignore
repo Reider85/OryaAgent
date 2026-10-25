@@ -144,3 +144,6 @@ memory/
 
 # Docker
 .dockerignore
+
+# Background process runtime (scripts/start.* + stop.*): logs + PID files
+logs/
