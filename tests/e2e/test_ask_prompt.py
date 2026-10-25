@@ -22,9 +22,9 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 
+from app.core.agent import resume_graph_events, stream_graph_events
 from app.core.graph import build_graph, default_run_config
 from app.core.permissions import PermissionConfig, PermissionPolicy, Rule
-from app.ui import chainlit_app as ui
 from app.ui.interrupt import ask_permission, get_pending_interrupt
 
 
@@ -99,7 +99,7 @@ def _ask_policy() -> PermissionPolicy:
 
 async def _run_until_interrupt(graph, config):
     """Stream one turn; return ``(events, pending)`` like on_message does."""
-    events = [event async for event in ui.stream_graph_events(graph, "run it", config)]
+    events = [event async for event in stream_graph_events(graph, "run it", config)]
     state = await graph.aget_state(config)
     return events, get_pending_interrupt(state)
 
@@ -119,7 +119,7 @@ async def test_approve_runs_the_tool_and_finishes() -> None:
 
     answer = await ask_permission(pending, ask=fake_ask)
     resume_events = [
-        event async for event in ui.resume_graph_events(graph, answer, config)
+        event async for event in resume_graph_events(graph, answer, config)
     ]
 
     assert answer == "approve"
@@ -144,7 +144,7 @@ async def test_deny_refuses_and_agent_continues() -> None:
 
     answer = await ask_permission(pending, ask=fake_ask)
     resume_events = [
-        event async for event in ui.resume_graph_events(graph, answer, config)
+        event async for event in resume_graph_events(graph, answer, config)
     ]
 
     assert answer == "deny"

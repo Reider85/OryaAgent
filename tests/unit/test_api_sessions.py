@@ -8,6 +8,7 @@ message/resume handlers against a fake graph emitting canned
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,7 +17,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 
 import app.api.sessions as api_sessions
@@ -233,22 +234,47 @@ def fake_graph(monkeypatch: pytest.MonkeyPatch):
     """Install a fake graph runtime: ok-turn by default.
 
     Returns a holder whose ``events``/``state`` can be replaced per test
-    before the HTTP call.
+    before the HTTP call; ``built`` records every ``build_session_graph``
+    call (thread, model, policy) for the M-24 override assertions.
     """
     holder = SimpleNamespace(
         events=_tool_turn_events(),
         states=[_ok_state()],
+        built=[],
     )
 
     async def _resolve():
         return MemorySaver(), True
 
     def _build(thread_id, checkpointer, *, model=None, policy=None):
+        holder.built.append({"thread_id": thread_id, "model": model, "policy": policy})
         return FakeGraph(holder.events, holder.states)
 
     monkeypatch.setattr(api_sessions, "resolve_checkpointer", _resolve)
     monkeypatch.setattr(api_sessions, "build_session_graph", _build)
     return holder
+
+
+def _sse_frames(text: str) -> list[tuple[str, Any]]:
+    """Parse an SSE body into ``(event, data)`` frames."""
+    frames: list[tuple[str, Any]] = []
+    event, data = "message", []
+    for line in text.split("\n"):
+        line = line.rstrip("\r")
+        if line == "":
+            if data:
+                frames.append((event, json.loads("\n".join(data))))
+            event, data = "message", []
+            continue
+        if line.startswith(":"):
+            continue
+        if line.startswith("event:"):
+            event = line[6:].strip()
+        elif line.startswith("data:"):
+            data.append(line[5:].lstrip())
+    if data:
+        frames.append((event, json.loads("\n".join(data))))
+    return frames
 
 
 # --- router registration ---------------------------------------------------
@@ -562,7 +588,287 @@ def test_delete_session_db_down_503(client: TestClient, fake_pool: FakePool) -> 
 
 
 def test_delete_clears_cached_policy(client: TestClient, fake_pool: FakePool) -> None:
-    api_sessions._session_policies["s-1"] = api_sessions.get_policy()
+    api_sessions._policy_for("s-1")
     assert "s-1" in api_sessions._session_policies
     client.delete("/sessions/s-1")
     assert "s-1" not in api_sessions._session_policies
+
+
+# --- SSE streaming (?stream=true, M-24) --------------------------------------
+
+
+def test_post_message_stream_returns_event_frames(
+    client: TestClient, fake_pool: FakePool, fake_graph
+) -> None:
+    response = client.post(
+        "/sessions/s-1/messages",
+        params={"stream": "true"},
+        json={"content": "read main"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.headers["x-accel-buffering"] == "no"
+
+    frames = _sse_frames(response.text)
+    assert [kind for kind, _ in frames] == [
+        "token",
+        "tool_start",
+        "tool_end",
+        "token",
+        "done",
+    ]
+    assert frames[0][1] == {"content": "Let me check. "}
+    assert frames[2][1]["tool"] == "read"
+    assert frames[2][1]["from_cache"] is False
+
+    done = frames[-1][1]
+    assert done["status"] == "ok"
+    assert done["reply"] == "Let me check. Done."
+    assert done["tool_steps"][0]["output"] == "file contents"
+    assert done["degraded"] is True
+    assert done["pending_interrupt"] is None
+    assert done["session_id"] == "s-1"
+
+    # the assistant reply is still logged (M-14) in stream mode
+    roles = [
+        args[1]
+        for kind, q, args in fake_pool.executed
+        if kind == "fetchrow" and "INSERT INTO messages" in q
+    ]
+    assert "user" in roles and "assistant" in roles
+
+
+def test_post_message_stream_emits_interrupt_and_done(
+    client: TestClient, fake_pool: FakePool, fake_graph
+) -> None:
+    fake_graph.events = [
+        _ev("on_chat_model_stream", data={"chunk": AIMessageChunk(content="Running ")})
+    ]
+    fake_graph.states = [
+        _interrupted_state(tool="bash", args={"command": "rm x"}, reason="strict mode")
+    ]
+
+    response = client.post(
+        "/sessions/s-1/messages",
+        params={"stream": "true"},
+        json={"content": "rm x"},
+    )
+
+    assert response.status_code == 200
+    frames = _sse_frames(response.text)
+    kinds = [kind for kind, _ in frames]
+    assert kinds == ["token", "interrupt", "done"]
+
+    interrupt = next(data for kind, data in frames if kind == "interrupt")
+    assert interrupt == {
+        "tool": "bash",
+        "args": {"command": "rm x"},
+        "reason": "strict mode",
+    }
+    done = frames[-1][1]
+    assert done["status"] == "interrupted"
+    assert done["reply"] == "Running "
+    assert done["pending_interrupt"]["tool"] == "bash"
+
+    # no assistant log on pause (same rule as the JSON path)
+    roles = [
+        args[1]
+        for kind, q, args in fake_pool.executed
+        if kind == "fetchrow" and "INSERT INTO messages" in q
+    ]
+    assert roles == ["user"]
+
+
+def test_post_message_stream_soft_fails_when_the_db_is_down(
+    client: TestClient, fake_pool: FakePool, fake_graph
+) -> None:
+    """Stream mode keeps the UI semantics: degrade, don't abort (M-24)."""
+    fake_pool.fail = True
+
+    response = client.post(
+        "/sessions/s-1/messages",
+        params={"stream": "true"},
+        json={"content": "hi"},
+    )
+
+    assert response.status_code == 200
+    frames = _sse_frames(response.text)
+    assert frames[-1][0] == "done"
+    assert frames[-1][1]["status"] == "ok"
+    assert frames[-1][1]["degraded"] is True
+
+
+def test_post_message_stream_marks_cache_hits(
+    client: TestClient, fake_pool: FakePool, fake_graph
+) -> None:
+    """M-21 follow-up: ``from_cache`` reaches the ``tool_end`` frame."""
+    fake_graph.events = [
+        _ev(
+            "on_tool_start",
+            tool="read",
+            data={"input": {"path": "app/main.py"}},
+        ),
+        _ev(
+            "on_tool_end",
+            tool="read",
+            data={
+                "output": ToolMessage(
+                    content="cached body",
+                    tool_call_id="t1",
+                    metadata={"from_cache": True},
+                )
+            },
+        ),
+    ]
+
+    response = client.post(
+        "/sessions/s-1/messages",
+        params={"stream": "true"},
+        json={"content": "read main"},
+    )
+
+    frames = _sse_frames(response.text)
+    tool_end = next(data for kind, data in frames if kind == "tool_end")
+    assert tool_end["from_cache"] is True
+    assert frames[-1][1]["tool_steps"][0]["from_cache"] is True
+
+
+def test_post_message_json_reports_from_cache(
+    client: TestClient, fake_pool: FakePool, fake_graph
+) -> None:
+    fake_graph.events = [
+        _ev(
+            "on_tool_end",
+            tool="read",
+            data={
+                "output": ToolMessage(
+                    content="cached body",
+                    tool_call_id="t1",
+                    metadata={"from_cache": True},
+                )
+            },
+        ),
+    ]
+
+    response = client.post("/sessions/s-1/messages", json={"content": "read main"})
+
+    assert response.status_code == 200
+    assert response.json()["tool_steps"][0]["from_cache"] is True
+
+
+def test_post_message_stream_passes_settings_overrides(
+    client: TestClient, fake_pool: FakePool, fake_graph
+) -> None:
+    response = client.post(
+        "/sessions/s-1/messages",
+        params={"stream": "true"},
+        json={
+            "content": "hi",
+            "model": "gpt-4o",
+            "permission_mode": "permissive",
+            "allow_list": ["read /tmp/*"],
+        },
+    )
+
+    assert response.status_code == 200
+    built = fake_graph.built[-1]
+    assert built["model"] == "gpt-4o"
+    policy = built["policy"]
+    assert policy.mode == "permissive"
+    assert any(r.pattern == "read /tmp/*" for r in policy.config.allow_rules)
+
+
+def test_post_message_json_passes_settings_overrides(
+    client: TestClient, fake_pool: FakePool, fake_graph
+) -> None:
+    response = client.post(
+        "/sessions/s-1/messages",
+        json={"content": "hi", "model": "claude-haiku"},
+    )
+
+    assert response.status_code == 200
+    assert fake_graph.built[-1]["model"] == "claude-haiku"
+
+
+def test_policy_cache_reuses_and_carries_the_session_allowlist(
+    client: TestClient, fake_pool: FakePool, fake_graph
+) -> None:
+    """M-13 session allowlist survives a settings change (M-24 cache)."""
+    body = {"content": "a", "permission_mode": "strict", "allow_list": []}
+    client.post("/sessions/s-1/messages", json=body)
+    first = fake_graph.built[-1]["policy"]
+    first.record_session_allow("bash")
+
+    # same settings key -> the same policy instance (allowlist intact)
+    client.post("/sessions/s-1/messages", json=body)
+    assert fake_graph.built[-1]["policy"] is first
+
+    # changed settings -> rebuilt, but the session allowlist carries over
+    client.post(
+        "/sessions/s-1/messages",
+        json={
+            "content": "b",
+            "permission_mode": "strict",
+            "allow_list": ["read /tmp/*"],
+        },
+    )
+    second = fake_graph.built[-1]["policy"]
+    assert second is not first
+    assert second.session_allowed_tools() == {"bash"}
+    assert second.mode == "strict"
+
+
+def test_resume_stream_returns_event_frames(
+    client: TestClient, fake_pool: FakePool, fake_graph
+) -> None:
+    fake_graph.states = [
+        _interrupted_state(tool="bash"),
+        _interrupted_state(tool="bash"),
+        _ok_state(),
+    ]
+    fake_graph.events = [
+        _ev(
+            "on_chat_model_stream",
+            data={"chunk": AIMessageChunk(content="Command ran.")},
+        )
+    ]
+
+    response = client.post(
+        "/sessions/s-1/resume",
+        params={"stream": "true"},
+        json={"decision": "always", "permission_mode": "permissive"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    frames = _sse_frames(response.text)
+    assert [kind for kind, _ in frames] == ["token", "done"]
+    assert frames[-1][1]["status"] == "ok"
+    assert frames[-1][1]["reply"] == "Command ran."
+
+    # the permission decision is still logged (soft-fail in stream mode)
+    system_logs = [
+        args[2]
+        for kind, q, args in fake_pool.executed
+        if kind == "fetchrow" and "INSERT INTO messages" in q and args[1] == "system"
+    ]
+    assert system_logs and system_logs[0].startswith("permission always: bash")
+
+    # and the resume ran under the requested mode
+    assert fake_graph.built[-1]["policy"].mode == "permissive"
+
+
+def test_resume_stream_without_pending_is_409(
+    client: TestClient, fake_pool: FakePool, fake_graph
+) -> None:
+    fake_graph.states = [_ok_state()]
+
+    response = client.post(
+        "/sessions/s-1/resume",
+        params={"stream": "true"},
+        json={"decision": "allow"},
+    )
+
+    assert response.status_code == 409

@@ -1,38 +1,48 @@
-"""Sessions API (M-20): /sessions CRUD + full-turn messages + resume.
+"""Sessions API (M-20/M-24): /sessions CRUD, JSON turns and SSE streaming.
 
-REST endpoints for non-UI clients (CI, batch jobs, future Next.js/HTTP
-frontends). Chainlit keeps driving the graph directly (M-15 decision;
-the SSE migration is the separate M-24 ticket) — this router reuses the
-shared runtime in :mod:`app.core.agent` (graph assembly, checkpointer
-resolution, ``run_turn``/``run_resume``) so nothing is duplicated.
-
-Endpoints:
+REST endpoints for every client — the Chainlit UI (M-24), CI, batch jobs
+and the future Next.js frontend. Both layers reuse the shared runtime in
+:mod:`app.core.agent` (graph assembly, checkpointer resolution,
+``stream_turn``/``run_turn``) so nothing is duplicated.
 
 * ``POST   /sessions``               — create a session (server-side uuid);
 * ``GET    /sessions``               — paginated list (``?page=1&size=20``);
 * ``GET    /sessions/{id}``          — metadata + typed messages;
-* ``POST   /sessions/{id}/messages`` — run one full turn, JSON response
-  (``status`` is ``ok`` or ``interrupted`` at the M-13 permission gate);
+* ``POST   /sessions/{id}/messages`` — run one full turn. Default: JSON
+  response (``status`` is ``ok`` or ``interrupted`` at the M-13
+  permission gate); ``?stream=true``: ``text/event-stream`` with
+  ``token`` / ``tool_start`` / ``tool_end`` / ``interrupt`` / ``done``
+  (``error`` on a mid-run failure) — the transport the Chainlit UI uses;
 * ``POST   /sessions/{id}/resume``   — answer a pending interrupt
-  (``decision``: ``allow`` / ``deny`` / ``always``);
+  (``decision``: ``allow`` / ``deny`` / ``always``), JSON or SSE with
+  the same flag;
 * ``DELETE /sessions/{id}``          — soft-delete (``status='closed'``).
+
+Settings overrides: ``messages``/``resume`` accept the UI settings-panel
+state (``model``, ``permission_mode``, ``allow_list``) so the server —
+not the client — assembles the graph with the chosen model and policy.
 
 Permission policy note: each session caches one :class:`PermissionPolicy`
 process-wide so the M-13 session allowlist («Approve & don't ask again»)
 survives across ``/messages`` and ``/resume`` calls — the same lifetime
-the Chainlit UI gives it via ``cl.user_session``.
+the Chainlit UI gave it via ``cl.user_session``. Changing the settings
+overrides rebuilds the policy and carries the allowlist over.
 
-Database failures surface as 503 (soft-fail only in the UI layer); an
-unreachable Postgres checkpointer degrades to in-memory state with
-``"degraded": true`` in the response (mirrors the UI fallback).
+Database failures surface as 503 in JSON mode (soft-fail only in the UI
+layer); the SSE mode mirrors the UI's best-effort logging and reports
+``degraded: true`` in ``done`` instead. An unreachable Postgres
+checkpointer degrades to in-memory state everywhere.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import AsyncIterator
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.core.agent import (
@@ -44,9 +54,11 @@ from app.core.agent import (
     resolve_checkpointer,
     run_resume,
     run_turn,
+    stream_resume,
+    stream_turn,
 )
 from app.core.graph import default_run_config
-from app.core.permissions import PermissionPolicy, get_policy
+from app.core.permissions import PermissionPolicy, build_policy
 from app.db.session_log import (
     create_session,
     ensure_session,
@@ -62,8 +74,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 #: Process-wide per-session permission policies (M-13 session allowlist
-#: lifetime). Keyed by session_id; recreated on process restart.
-_session_policies: dict[str, PermissionPolicy] = {}
+#: lifetime). Keyed by session_id → ``(settings key, policy)``; recreated
+#: on process restart. The settings key is ``(mode, allow_list)`` — a
+#: change rebuilds the policy and carries the session allowlist over.
+_session_policies: dict[str, tuple[tuple[Any, ...], PermissionPolicy]] = {}
+
+#: SSE response headers: no buffering anywhere in the chain (M-24).
+_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
 
 
 class SessionCreate(BaseModel):
@@ -76,36 +97,59 @@ class SessionCreate(BaseModel):
     metadata: dict[str, Any] | None = None
 
 
-class MessageCreate(BaseModel):
+class TurnSettings(BaseModel):
+    """UI settings-panel overrides applied to the graph of this request."""
+
+    model: str | None = None
+    permission_mode: Literal["strict", "permissive"] | None = None
+    allow_list: list[str] = Field(default_factory=list)
+
+
+class MessageCreate(TurnSettings):
     """Request body for ``POST /sessions/{id}/messages``."""
 
     content: str = Field(min_length=1)
 
 
-class ResumeRequest(BaseModel):
+class ResumeRequest(TurnSettings):
     """Request body for ``POST /sessions/{id}/resume``."""
 
     decision: Literal["allow", "deny", "always"]
 
 
-def _policy_for(session_id: str) -> PermissionPolicy:
-    """Return the cached per-session policy (created on first use)."""
-    policy = _session_policies.get(session_id)
-    if policy is None:
-        policy = get_policy()
-        _session_policies[session_id] = policy
+def _policy_for(
+    session_id: str,
+    mode: str | None = None,
+    allow_list: list[str] | None = None,
+) -> PermissionPolicy:
+    """Return the cached per-session policy for the requested settings.
+
+    Created on first use; rebuilt when the client changes the permission
+    mode or allow-list, with the M-13 session allowlist carried over so
+    «don't ask again» decisions survive a settings edit.
+    """
+    key: tuple[Any, ...] = (mode, tuple(allow_list or ()))
+    cached = _session_policies.get(session_id)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+
+    policy = build_policy(mode, allow_patterns=allow_list or ())
+    if cached is not None:
+        for tool in cached[1].session_allowed_tools():
+            policy.record_session_allow(tool)
+    _session_policies[session_id] = (key, policy)
     return policy
 
 
 def _pending_dict(pending: PendingInterrupt | None) -> dict[str, Any] | None:
-    """Serialize a :class:`PendingInterrupt` for the JSON response."""
+    """Serialize a :class:`PendingInterrupt` for the JSON/SSE payload."""
     if pending is None:
         return None
     return {"tool": pending.tool, "args": pending.args, "reason": pending.reason}
 
 
 def _result_dict(session_id: str, result: TurnResult, degraded: bool) -> dict[str, Any]:
-    """Build the shared response shape of /messages and /resume."""
+    """Build the shared response shape of the JSON /messages and /resume."""
     return {
         "session_id": session_id,
         "status": result.status,
@@ -116,6 +160,12 @@ def _result_dict(session_id: str, result: TurnResult, degraded: bool) -> dict[st
     }
 
 
+def _sse(event: str, data: Any) -> str:
+    """Serialize one Server-Sent Event frame (BACKLOG5 M-20/M-24 shape)."""
+    payload = json.dumps(data, ensure_ascii=False, default=str)
+    return f"event: {event}\ndata: {payload}\n\n"
+
+
 async def _db(coro: Any) -> Any:
     """Await a session_log coroutine, mapping DB failures to HTTP 503."""
     try:
@@ -123,6 +173,81 @@ async def _db(coro: Any) -> Any:
     except Exception as exc:
         logger.warning("sessions API database failure: %s", exc)
         raise HTTPException(status_code=503, detail="database unavailable") from exc
+
+
+async def _soft_db(coro: Any) -> bool:
+    """Best-effort session_log write for the SSE path (UI semantics).
+
+    Returns ``True`` when the write failed — the caller reports the turn
+    as ``degraded`` instead of aborting a chat the UI already started.
+    """
+    try:
+        await coro
+        return False
+    except Exception as exc:
+        logger.warning("stream session log skipped (database): %s", exc)
+        return True
+
+
+async def _sse_turn(
+    session_id: str,
+    events: AsyncIterator[Any],
+    degraded: bool,
+) -> AsyncIterator[str]:
+    """Forward a turn stream as SSE frames and log the assistant reply.
+
+    Events flow through unchanged; the terminal ``done`` carries the
+    aggregated outcome (plus ``degraded``), and a pause additionally
+    emits the ``interrupt`` frame the UI asks the user about (M-16).
+    Failures after the response started surface as ``error`` + a final
+    ``done`` with ``status="error"`` so the client always sees an end.
+    """
+    reply = ""
+    status = "ok"
+    finished = False
+    try:
+        async for kind, data in events:
+            if kind != "done":
+                yield _sse(kind, data)
+                continue
+            finished = True
+            status = str(data.get("status", "ok"))
+            reply = str(data.get("reply") or "")
+            pending = _pending_dict(data.get("pending"))
+            if status == "interrupted" and pending is not None:
+                yield _sse("interrupt", pending)
+            yield _sse(
+                "done",
+                {
+                    "session_id": session_id,
+                    "status": status,
+                    "reply": reply,
+                    "tool_steps": data.get("tool_steps") or [],
+                    "pending_interrupt": pending,
+                    "degraded": degraded,
+                },
+            )
+    except Exception as exc:
+        logger.exception("SSE run failed (session_id=%s)", session_id)
+        yield _sse("error", {"detail": str(exc)})
+        yield _sse(
+            "done",
+            {
+                "session_id": session_id,
+                "status": "error",
+                "reply": reply,
+                "tool_steps": [],
+                "pending_interrupt": None,
+                "degraded": degraded,
+            },
+        )
+        return
+
+    if not finished:
+        yield _sse("error", {"detail": "turn stream ended without a done event"})
+        return
+    if status == "ok" and reply:
+        await _soft_db(log_message(session_id, "assistant", reply))
 
 
 def _require_session(session: dict | None, session_id: str) -> dict:
@@ -168,24 +293,48 @@ async def get_session_endpoint(session_id: str) -> dict:
 
 
 @router.post("/{session_id}/messages")
-async def post_message(session_id: str, body: MessageCreate) -> dict:
-    """Run one full agent turn for a non-UI client (M-20).
+async def post_message(
+    session_id: str,
+    body: MessageCreate,
+    stream: bool = Query(False),
+) -> Any:
+    """Run one full agent turn (M-20 JSON, M-24 SSE with ``?stream=true``).
 
     The turn is driven through the shared runtime: the user message is
-    logged (M-14), the graph is assembled per session, and the run is
-    aggregated into JSON. When the M-13 permission gate pauses the run
-    the response is ``status="interrupted"`` with the pending tool call;
-    the client answers via ``POST /sessions/{id}/resume``.
+    logged (M-14), the graph is assembled per session from the request's
+    settings overrides, and the run is either aggregated into JSON or
+    forwarded as an SSE stream (``token`` / ``tool_start`` / ``tool_end``
+    / ``interrupt`` / ``done``). When the M-13 permission gate pauses the
+    run the response reports ``status="interrupted"`` with the pending
+    tool call; the client answers via ``POST /sessions/{id}/resume``.
     """
-    # Lenient auto-create: CI/batch clients may write into a fresh id.
-    await _db(ensure_session(session_id))
-    await _db(log_message(session_id, "user", body.content))
+    degraded = False
+    if stream:
+        # UI semantics: the chat already started — report, don't abort.
+        degraded |= await _soft_db(ensure_session(session_id))
+        degraded |= await _soft_db(log_message(session_id, "user", body.content))
+    else:
+        # Lenient auto-create: CI/batch clients may write into a fresh id.
+        await _db(ensure_session(session_id))
+        await _db(log_message(session_id, "user", body.content))
 
-    checkpointer, degraded = await resolve_checkpointer()
+    checkpointer, ck_degraded = await resolve_checkpointer()
+    degraded = bool(degraded or ck_degraded)
     graph = build_session_graph(
-        session_id, checkpointer, policy=_policy_for(session_id)
+        session_id,
+        checkpointer,
+        model=body.model,
+        policy=_policy_for(session_id, body.permission_mode, body.allow_list),
     )
     config = default_run_config(session_id)
+
+    if stream:
+        events = stream_turn(graph, body.content, config)
+        return StreamingResponse(
+            _sse_turn(session_id, events, degraded),
+            media_type="text/event-stream",
+            headers=_SSE_HEADERS,
+        )
 
     try:
         result = await run_turn(graph, body.content, config)
@@ -200,18 +349,28 @@ async def post_message(session_id: str, body: MessageCreate) -> dict:
 
 
 @router.post("/{session_id}/resume")
-async def post_resume(session_id: str, body: ResumeRequest) -> dict:
+async def post_resume(
+    session_id: str,
+    body: ResumeRequest,
+    stream: bool = Query(False),
+) -> Any:
     """Answer a pending permission interrupt (M-20, BACKLOG5 /resume).
 
     ``decision`` maps to the M-13/M-16 resume contract: ``allow`` →
     approve the tool call, ``deny`` → refuse it, ``always`` → approve and
     record the tool in the session allowlist. 409 when nothing is pending.
+    ``?stream=true`` (M-24) forwards the continuation (tool execution +
+    the agent's answer) as SSE instead of aggregating it.
     """
     _require_session(await _db(get_session(session_id)), session_id)
 
-    checkpointer, degraded = await resolve_checkpointer()
+    checkpointer, ck_degraded = await resolve_checkpointer()
+    degraded = bool(ck_degraded)
     graph = build_session_graph(
-        session_id, checkpointer, policy=_policy_for(session_id)
+        session_id,
+        checkpointer,
+        model=body.model,
+        policy=_policy_for(session_id, body.permission_mode, body.allow_list),
     )
     config = default_run_config(session_id)
 
@@ -223,16 +382,25 @@ async def post_resume(session_id: str, body: ResumeRequest) -> dict:
     pending = get_pending_interrupt(state)
 
     answer = {"allow": "approve", "deny": "deny", "always": "always"}[body.decision]
+    tool_name = pending.tool if pending else "batch"
+    permission_log = f"permission {body.decision}: {tool_name}"
+
+    if stream:
+        degraded |= await _soft_db(log_message(session_id, "system", permission_log))
+        events = stream_resume(graph, answer, config)
+        return StreamingResponse(
+            _sse_turn(session_id, events, degraded),
+            media_type="text/event-stream",
+            headers=_SSE_HEADERS,
+        )
+
     try:
         result = await run_resume(graph, answer, config)
     except Exception as exc:
         logger.exception("API resume failed (session_id=%s)", session_id)
         raise HTTPException(status_code=502, detail=f"resume failed: {exc}") from exc
 
-    tool_name = pending.tool if pending else "batch"
-    await _db(
-        log_message(session_id, "system", f"permission {body.decision}: {tool_name}")
-    )
+    await _db(log_message(session_id, "system", permission_log))
     if result.status == "ok" and result.reply:
         await _db(log_message(session_id, "assistant", result.reply))
 

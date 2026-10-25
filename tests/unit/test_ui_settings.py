@@ -11,12 +11,13 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+from app.core.config import clear_settings_cache
 from app.ui.settings import (
     UISettings,
     load_settings,
     model_choices,
-    policy_from_settings,
     save_settings,
+    settings_path,
 )
 
 
@@ -168,98 +169,18 @@ class TestModelChoices:
         assert choices == ["a-model", "m-model", "z-model"]
 
 
-class TestPolicyFromSettings:
-    """Test building PermissionConfig from UI settings."""
+class TestSettingsPath:
+    """The settings file location comes from the config (M-24 bugfix)."""
 
-    def test_policy_from_settings_basic(self) -> None:
-        """Test basic policy building with mode."""
-        from app.core.permissions import PermissionConfig, Rule
-
-        settings = UISettings(
-            model="claude-sonnet-3.5",
-            permission_mode="strict",
-            allow_list=[],
-        )
-        base = PermissionConfig(
-            allow_rules=[Rule(tool="read", pattern="*.md", action="allow")],
-            deny_rules=[],
-        )
-
-        with (
-            patch.object(PermissionConfig, "load", return_value=base),
-            patch("app.ui.settings.get_settings") as mock_gs,
-        ):
-            mock_gs.return_value.permission_policy = "strict"
-            result = policy_from_settings(settings)
-
-        # Base rules preserved, no extra rules added
-        assert len(result.allow_rules) == 1
-        assert result.allow_rules[0].pattern == "*.md"
-        assert result.deny_rules == []
-
-    def test_policy_from_settings_with_allow_list(self) -> None:
-        """Test policy building with allow_list rules."""
-        from app.core.permissions import PermissionConfig
-
-        settings = UISettings(
-            model="gpt-4o",
-            permission_mode="permissive",
-            allow_list=["read /tmp/*", "write *.py"],
-        )
-        base = PermissionConfig(allow_rules=[], deny_rules=[])
-
-        with (
-            patch.object(PermissionConfig, "load", return_value=base),
-            patch("app.ui.settings.get_settings") as mock_gs,
-        ):
-            mock_gs.return_value.permission_policy = "permissive"
-            result = policy_from_settings(settings)
-
-        # Should have original rules + allow_list rules
-        assert len(result.allow_rules) == 2
-        assert result.allow_rules[0].pattern == "read /tmp/*"
-        assert result.allow_rules[0].tool == "*"
-        assert result.allow_rules[1].pattern == "write *.py"
-        assert result.allow_rules[1].tool == "*"
-
-    def test_policy_from_settings_mode_fallback(self) -> None:
-        """Test mode fallback to config default."""
-        from app.core.permissions import PermissionConfig
-
-        settings = UISettings(
-            model="claude-haiku-3.5",
-            permission_mode=None,  # Use default
-            allow_list=[],
-        )
-        base = PermissionConfig(allow_rules=[], deny_rules=[])
-
-        with (
-            patch.object(PermissionConfig, "load", return_value=base),
-            patch("app.ui.settings.get_settings") as mock_gs,
-        ):
-            mock_gs.return_value.permission_policy = "permissive"
-            result = policy_from_settings(settings)
-
-        assert result.allow_rules == []
-        assert result.deny_rules == []
-
-    def test_policy_from_settings_invalid_mode(self) -> None:
-        """Test invalid mode falls back to strict."""
-        from app.core.permissions import PermissionConfig
-
-        settings = UISettings(
-            model="gpt-4o-mini",
-            permission_mode="invalid_mode",  # Should fallback to strict
-            allow_list=[],
-        )
-        base = PermissionConfig(allow_rules=[], deny_rules=[])
-
-        with (
-            patch.object(PermissionConfig, "load", return_value=base),
-            patch("app.ui.settings.get_settings") as mock_gs,
-        ):
-            mock_gs.return_value.permission_policy = "strict"
-            result = policy_from_settings(settings)
-
-        assert result.allow_rules == []
-        assert result.deny_rules == []
+    def test_settings_path_uses_ui_settings_path(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("ORYA_UI_SETTINGS_PATH", str(tmp_path / "settings.json"))
+        clear_settings_cache()
+        try:
+            assert settings_path() == tmp_path / "settings.json"
+            # Missing file must yield defaults ? before M-24 this raised
+            # AttributeError (``Settings`` had no ``home_dir``).
+            assert load_settings() == UISettings.default()
+        finally:
+            clear_settings_cache()

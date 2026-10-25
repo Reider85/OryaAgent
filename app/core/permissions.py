@@ -43,7 +43,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -383,6 +383,14 @@ class PermissionPolicy:
         if tool_name:
             self._session_allowed.add(tool_name)
 
+    def session_allowed_tools(self) -> set[str]:
+        """Tools approved through the session allowlist (M-13).
+
+        Lets a caller move the allowlist onto a freshly built policy when
+        the settings change (M-24 ``/sessions`` policy cache).
+        """
+        return set(self._session_allowed)
+
 
 def get_policy(
     mode: str | None = None,
@@ -393,3 +401,46 @@ def get_policy(
     settings = get_settings()
     config = PermissionConfig.load(config_path or settings.permissions_path)
     return PermissionPolicy(mode or settings.permission_policy, config=config)
+
+
+def build_policy(
+    mode: str | None = None,
+    *,
+    allow_patterns: Sequence[str] = (),
+    config_path: Path | None = None,
+) -> PermissionPolicy:
+    """Build a policy from settings plus per-client overrides (M-17/M-24).
+
+    The API accepts the UI's settings panel state (model aside) with each
+    request: ``mode`` selects ``strict``/``permissive`` (``None`` or an
+    unknown value falls back to the configured default / ``strict``, the
+    rule the M-17 panel applied) and ``allow_patterns`` adds extra
+    ``tool="*"`` allow rules on top of ``~/.orya/permissions.yml`` — the
+    «Allow List» textarea of the settings panel.
+
+    Returns a full :class:`PermissionPolicy` (the ``PolicyLike`` the
+    graph consumes).
+    """
+    settings = get_settings()
+    resolved = mode or settings.permission_policy
+    if resolved not in {"strict", "permissive"}:
+        logger.warning("Unknown permission mode %r; using 'strict'", resolved)
+        resolved = "strict"
+
+    config = PermissionConfig.load(config_path or settings.permissions_path)
+    extra = [
+        Rule(
+            tool="*",
+            pattern=pattern.strip(),
+            action="allow",
+            description="UI allow-list rule",
+        )
+        for pattern in allow_patterns
+        if pattern.strip()
+    ]
+    if extra:
+        config = PermissionConfig(
+            allow_rules=[*config.allow_rules, *extra],
+            deny_rules=config.deny_rules,
+        )
+    return PermissionPolicy(resolved, config=config)

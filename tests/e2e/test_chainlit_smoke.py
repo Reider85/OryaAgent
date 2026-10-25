@@ -14,6 +14,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.tools import tool
 
+from app.core.agent import stream_graph_events
 from app.core.graph import build_graph, default_run_config
 from app.ui import chainlit_app as ui
 
@@ -82,9 +83,7 @@ async def test_stream_turn_renders_tokens_and_tool_steps() -> None:
     graph = build_graph([_echo], _ScriptedModel())
     config = default_run_config("smoke-m15")
 
-    events = [
-        event async for event in ui.stream_graph_events(graph, "echo orya", config)
-    ]
+    events = [event async for event in stream_graph_events(graph, "echo orya", config)]
 
     kinds = [kind for kind, _ in events]
     assert "tool_start" in kinds

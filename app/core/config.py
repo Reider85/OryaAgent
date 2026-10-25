@@ -157,6 +157,18 @@ class Settings(BaseSettings):
         description="JSONL projection directory ({session_id}.jsonl + .meta.json)",
     )
 
+    # --- UI (M-15/M-17, M-24) ---------------------------------------------
+    api_url: str = Field(
+        default="http://127.0.0.1:8000",
+        validation_alias=AliasChoices("ORYA_API_URL"),
+        description="FastAPI base URL the Chainlit UI calls over HTTP/SSE (M-24)",
+    )
+    ui_settings_path: Path = Field(
+        default=Path.home() / ".orya" / "settings.json",
+        validation_alias=AliasChoices("ORYA_UI_SETTINGS_PATH"),
+        description="Settings-panel state: model, permission mode, allow-list (M-17)",
+    )
+
     # --- Security (M-13) -------------------------------------------------
     permission_policy: Literal["strict", "permissive"] = Field(
         default="strict",
@@ -236,7 +248,13 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    @field_validator("memory_dir", "permissions_path", "sessions_dir", mode="before")
+    @field_validator(
+        "memory_dir",
+        "permissions_path",
+        "sessions_dir",
+        "ui_settings_path",
+        mode="before",
+    )
     @classmethod
     def _expand_paths(cls, value: Any) -> Any:
         """Expand ``~`` in path fields (env values arrive as plain strings)."""

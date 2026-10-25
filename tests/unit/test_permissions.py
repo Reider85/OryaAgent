@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -13,6 +14,7 @@ from app.core.permissions import (
     PermissionConfig,
     PermissionPolicy,
     Rule,
+    build_policy,
     get_policy,
 )
 
@@ -242,3 +244,92 @@ def test_decision_is_immutable():
     assert decision.action == "ask"
     with pytest.raises(dataclasses.FrozenInstanceError):
         decision.action = "allow"  # type: ignore[misc]
+
+
+# --- build_policy (M-17 panel overrides, M-24 API seam) --------------------
+
+
+def test_build_policy_keeps_base_rules_without_overrides():
+    base = PermissionConfig(
+        allow_rules=[Rule(tool="read", pattern="*.md", action="allow")],
+        deny_rules=[],
+    )
+    with (
+        patch.object(PermissionConfig, "load", return_value=base),
+        patch("app.core.permissions.get_settings") as mock_settings,
+    ):
+        mock_settings.return_value.permission_policy = "strict"
+        policy = build_policy("strict")
+
+    assert isinstance(policy, PermissionPolicy)
+    assert policy.mode == "strict"
+    assert len(policy.config.allow_rules) == 1
+    assert policy.config.allow_rules[0].pattern == "*.md"
+    assert policy.config.deny_rules == []
+
+
+def test_build_policy_appends_allow_list_patterns():
+    base = PermissionConfig(allow_rules=[], deny_rules=[])
+    with (
+        patch.object(PermissionConfig, "load", return_value=base),
+        patch("app.core.permissions.get_settings") as mock_settings,
+    ):
+        mock_settings.return_value.permission_policy = "permissive"
+        policy = build_policy(
+            "permissive", allow_patterns=["read /tmp/*", "  ", "write *.py"]
+        )
+
+    assert policy.mode == "permissive"
+    assert [r.pattern for r in policy.config.allow_rules] == [
+        "read /tmp/*",
+        "write *.py",
+    ]
+    assert all(r.tool == "*" for r in policy.config.allow_rules)
+
+
+def test_build_policy_falls_back_to_configured_mode():
+    base = PermissionConfig(allow_rules=[], deny_rules=[])
+    with (
+        patch.object(PermissionConfig, "load", return_value=base),
+        patch("app.core.permissions.get_settings") as mock_settings,
+    ):
+        mock_settings.return_value.permission_policy = "permissive"
+        policy = build_policy(None)
+
+    assert policy.mode == "permissive"
+
+
+def test_build_policy_unknown_mode_falls_back_to_strict():
+    base = PermissionConfig(allow_rules=[], deny_rules=[])
+    with (
+        patch.object(PermissionConfig, "load", return_value=base),
+        patch("app.core.permissions.get_settings") as mock_settings,
+    ):
+        mock_settings.return_value.permission_policy = "strict"
+        policy = build_policy("invalid_mode")
+
+    assert policy.mode == "strict"
+
+
+def test_build_policy_returns_a_usable_policy():
+    """M-24 regression: the panel overrides must produce a PolicyLike.
+
+    The old ``policy_from_settings`` handed the graph a bare
+    ``PermissionConfig`` (no ``check()``), so every UI session died with
+    ``AttributeError`` on its first tool call.
+    """
+    base = PermissionConfig(allow_rules=[], deny_rules=[])
+    with patch.object(PermissionConfig, "load", return_value=base):
+        policy = build_policy("strict", allow_patterns=["ls -la"])
+
+    decision = policy.check({"name": "bash", "args": {"command": "ls -la"}})
+    assert decision.action == "allow"  # matched the appended allow rule
+    assert policy.check({"name": "write", "args": {"path": "a.py"}}).action == "ask"
+
+
+def test_session_allowed_tools_roundtrip():
+    policy = _policy("strict")
+    assert policy.session_allowed_tools() == set()
+    policy.record_session_allow("bash")
+    policy.record_session_allow("bash")
+    assert policy.session_allowed_tools() == {"bash"}

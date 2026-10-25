@@ -1,7 +1,6 @@
-"""UI components (M-15/M-16/M-17): Chainlit interface with sidebar and settings."""
+"""UI components (M-15/M-16/M-17, M-24): Chainlit over the FastAPI SSE API."""
 
 from app.ui.chainlit_app import (
-    build_session_graph,
     on_chat_start,
     on_message,
     on_new_session,
@@ -14,7 +13,6 @@ from app.ui.settings import UISettings, load_settings, model_choices, save_setti
 
 __all__ = [
     # Chainlit handlers
-    "build_session_graph",
     "on_chat_start",
     "on_message",
     "on_settings_update",

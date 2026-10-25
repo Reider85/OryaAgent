@@ -1,12 +1,13 @@
 """Shared session-agent runtime (M-20): one turn of the agent-loop for any client.
 
-The Chainlit UI (M-15/M-16) and the FastAPI ``/sessions`` endpoints
-(M-20) both need the same pieces: resolve a checkpointer, assemble the
-per-session graph through the architectural seams, normalize LangGraph
+The FastAPI ``/sessions`` endpoints (M-20/M-24) own every consumer of
+this runtime — the Chainlit UI reaches them over HTTP/SSE and no longer
+assembles a graph itself (BACKLOG5 M-24). The pieces shared by the JSON
+and SSE paths are: resolve a checkpointer, assemble the per-session
+graph through the architectural seams, normalize LangGraph
 ``astream_events`` into UI-agnostic events, and detect the M-13
-permission pause. That logic lives here so neither layer duplicates the
-other (PROMPT_MVP §9: «не дублировать logic между Chainlit UI и
-FastAPI — общий app/core/ layer»).
+permission pause (PROMPT_MVP §9: «не дублировать logic между Chainlit
+UI и FastAPI — общий app/core/ layer»).
 
 * :func:`resolve_checkpointer` — Postgres first, in-memory fallback
   (``degraded=True`` when state will not survive a restart);
@@ -19,10 +20,12 @@ FastAPI — общий app/core/ layer»).
 * :func:`get_pending_interrupt` — extract the ``{"tool", "args",
   "reason"}`` payload a paused run carries (langgraph 1.2.x surfaces it
   on ``state.tasks[*].interrupts[*].value``);
-* :func:`run_turn` / :func:`run_resume` — non-interactive (API) drivers
-  that aggregate one full turn into a :class:`TurnResult` (reply text,
-  tool steps, pending interrupt). The Chainlit handlers stream events
-  directly and keep their own rendering.
+* :func:`stream_turn` / :func:`stream_resume` — one full turn as an
+  event stream (M-24): normalized events plus a terminal ``done``
+  event holding the aggregated :class:`TurnResult` payload. The SSE
+  endpoints forward the events as they arrive; :func:`run_turn` /
+  :func:`run_resume` are thin wrappers that return only ``done``
+  (JSON contract, M-20).
 
 This module must stay free of Chainlit imports — it is imported by the
 FastAPI layer.
@@ -59,8 +62,28 @@ if sys.platform == "win32":
 #: Normalized stream event emitted by :func:`stream_graph_events`.
 StreamEvent = tuple[Literal["token", "tool_start", "tool_end"], dict[str, Any]]
 
+#: One full turn as a stream (M-24): the normalized events followed by a
+#: terminal ``done`` event carrying the aggregated :class:`TurnResult`
+#: payload (``status`` / ``reply`` / ``tool_steps`` / ``pending``).
+TurnStreamEvent = tuple[
+    Literal["token", "tool_start", "tool_end", "done"], dict[str, Any]
+]
+
 #: Cap for tool input/output text rendered inside a step card.
 STEP_PREVIEW_CHARS = 4000
+
+
+def _from_cache(output: Any) -> bool:
+    """True when a tool result came from the M-21 cache.
+
+    ``ToolMessage.metadata`` carries ``{"from_cache": True}`` on a hit
+    (``from_cache_result()``); non-ToolMessage outputs (plain strings,
+    test doubles) are misses.
+    """
+    metadata = getattr(output, "metadata", None)
+    if not isinstance(metadata, dict):
+        return False
+    return bool(metadata.get("from_cache"))
 
 
 def content_text(content: Any) -> str:
@@ -130,6 +153,7 @@ async def _stream_normalized(
                     "run_id": run_id,
                     "tool": event.get("name"),
                     "output": content_text(getattr(output, "content", output)),
+                    "from_cache": _from_cache(output),
                 },
             )
 
@@ -216,7 +240,7 @@ def build_session_graph(
     thread_id: str,
     checkpointer: Any,
     *,
-    model: str | None = None,
+    model: Any = None,
     policy: Any | None = None,
 ) -> CompiledStateGraph:
     """Assemble the per-session graph through the architectural seams.
@@ -224,10 +248,20 @@ def build_session_graph(
     Tools (M-12), model (M-01), policy (M-13), system prompt (M-05) and
     context trimming (M-06) are all injected — callers never hardcode a
     tool list or a prompt.
+
+    ``model`` is a model alias from ``models.yaml`` (resolved through
+    the ``get_llm`` seam) or an already-built chat-model instance;
+    ``policy`` is a :class:`~app.core.permissions.PermissionPolicy`.
     """
+    if model is None:
+        llm = get_llm()
+    elif isinstance(model, str):
+        llm = get_llm(model=model)
+    else:
+        llm = model
     return build_graph(
         get_tools(thread_id),
-        model if model else get_llm(),
+        llm,
         checkpointer,
         policy if policy else get_policy(),
         system_prompt_fn=build_system_prompt,
@@ -275,23 +309,27 @@ class TurnResult:
     pending: PendingInterrupt | None = None
 
 
-async def run_turn(graph: Any, user_input: str, config: dict[str, Any]) -> TurnResult:
-    """Drive one user turn to completion (or permission pause) for API clients.
+async def _aggregate_turn(
+    events: AsyncIterator[StreamEvent],
+    graph: Any,
+    config: dict[str, Any],
+) -> AsyncIterator[TurnStreamEvent]:
+    """Forward one turn's events and finish with a terminal ``done``.
 
-    Streams events internally, accumulating token text into ``reply``
-    and tool calls into ``tool_steps`` (``{run_id, tool, args, output}``).
-    After the stream ends the checkpoint state is probed: a pending
-    permission interrupt yields ``status="interrupted"`` with the
-    extracted :class:`PendingInterrupt` (the caller answers via
-    :func:`run_resume`); otherwise the run is ``ok`` — falling back to
-    the latest checkpointed assistant text when the model emitted no
-    token chunks (same rule as the Chainlit handler).
+    Accumulates token text into ``reply`` and tool calls into
+    ``tool_steps`` (``{run_id, tool, args, output, from_cache}``) on the
+    way, so the JSON (M-20) and SSE (M-24) paths share a single
+    aggregation. The checkpoint state then decides the status: a pending
+    permission interrupt yields ``interrupted`` plus the extracted
+    payload (answered via ``/sessions/{id}/resume``); otherwise ``ok``,
+    falling back to the latest checkpointed assistant text when the
+    model emitted no token chunks.
     """
     reply_parts: list[str] = []
     tool_steps: list[dict[str, Any]] = []
     steps_by_run: dict[str, dict[str, Any]] = {}
 
-    async for kind, data in stream_graph_events(graph, user_input, config):
+    async for kind, data in events:
         if kind == "token":
             reply_parts.append(data["content"])
         elif kind == "tool_start":
@@ -300,6 +338,7 @@ async def run_turn(graph: Any, user_input: str, config: dict[str, Any]) -> TurnR
                 "tool": data.get("tool"),
                 "args": data.get("args"),
                 "output": "",
+                "from_cache": False,
             }
             tool_steps.append(step)
             steps_by_run[data["run_id"]] = step
@@ -311,23 +350,90 @@ async def run_turn(graph: Any, user_input: str, config: dict[str, Any]) -> TurnR
                     "tool": data.get("tool"),
                     "args": None,
                     "output": "",
+                    "from_cache": False,
                 }
                 tool_steps.append(step)
             step["output"] = data.get("output") or ""
+            step["from_cache"] = bool(data.get("from_cache"))
+        yield kind, data
 
     if await has_pending_interrupt(graph, config):
         state = await graph.aget_state(config)
-        return TurnResult(
-            status="interrupted",
-            reply="".join(reply_parts),
-            tool_steps=tool_steps,
-            pending=get_pending_interrupt(state),
+        yield (
+            "done",
+            {
+                "status": "interrupted",
+                "reply": "".join(reply_parts),
+                "tool_steps": tool_steps,
+                "pending": get_pending_interrupt(state),
+            },
         )
+        return
 
     reply = "".join(reply_parts)
     if not reply:
         reply = await final_answer_text(graph, config)
-    return TurnResult(status="ok", reply=reply, tool_steps=tool_steps)
+    yield (
+        "done",
+        {
+            "status": "ok",
+            "reply": reply,
+            "tool_steps": tool_steps,
+            "pending": None,
+        },
+    )
+
+
+async def stream_turn(
+    graph: Any, user_input: str, config: dict[str, Any]
+) -> AsyncIterator[TurnStreamEvent]:
+    """One user turn as an event stream (M-24): tokens, tool steps, ``done``.
+
+    The SSE endpoint forwards every event as it arrives; the terminal
+    ``done`` event carries the aggregated outcome (``status``, ``reply``,
+    ``tool_steps``, ``pending``).
+    """
+    stream = stream_graph_events(graph, user_input, config)
+    async for event in _aggregate_turn(stream, graph, config):
+        yield event
+
+
+async def stream_resume(
+    graph: Any, answer: str, config: dict[str, Any]
+) -> AsyncIterator[TurnStreamEvent]:
+    """Resume an interrupted run as an event stream (M-24 ``/resume``).
+
+    Same contract as :func:`stream_turn`, starting from
+    ``resume_command(answer)``; a batch may pause again, so the caller
+    must handle another ``interrupted`` ``done``.
+    """
+    stream = resume_graph_events(graph, answer, config)
+    async for event in _aggregate_turn(stream, graph, config):
+        yield event
+
+
+async def _final_done(events: AsyncIterator[TurnStreamEvent]) -> TurnResult:
+    """Consume a turn stream and return only its ``done`` payload."""
+    async for kind, data in events:
+        if kind == "done":
+            return TurnResult(
+                status=data["status"],
+                reply=data["reply"],
+                tool_steps=data["tool_steps"],
+                pending=data["pending"],
+            )
+    raise RuntimeError("turn stream ended without a 'done' event")
+
+
+async def run_turn(graph: Any, user_input: str, config: dict[str, Any]) -> TurnResult:
+    """Drive one user turn to completion (or permission pause) for API clients.
+
+    Thin wrapper over :func:`stream_turn`: same aggregation, no event
+    forwarding ? the JSON contract of ``POST /sessions/{id}/messages``
+    (M-20). ``status="interrupted"`` carries the pending tool call the
+    client answers via ``POST /sessions/{id}/resume``.
+    """
+    return await _final_done(stream_turn(graph, user_input, config))
 
 
 async def run_resume(graph: Any, answer: str, config: dict[str, Any]) -> TurnResult:
@@ -337,44 +443,4 @@ async def run_resume(graph: Any, answer: str, config: dict[str, Any]) -> TurnRes
     ``resume_command(answer)``; a batch may pause again (one tool call
     per interrupt), so the result may be ``interrupted`` once more.
     """
-    reply_parts: list[str] = []
-    tool_steps: list[dict[str, Any]] = []
-    steps_by_run: dict[str, dict[str, Any]] = {}
-
-    async for kind, data in resume_graph_events(graph, answer, config):
-        if kind == "token":
-            reply_parts.append(data["content"])
-        elif kind == "tool_start":
-            step = {
-                "run_id": data["run_id"],
-                "tool": data.get("tool"),
-                "args": data.get("args"),
-                "output": "",
-            }
-            tool_steps.append(step)
-            steps_by_run[data["run_id"]] = step
-        else:  # tool_end
-            step = steps_by_run.get(str(data.get("run_id")))
-            if step is None:
-                step = {
-                    "run_id": data.get("run_id"),
-                    "tool": data.get("tool"),
-                    "args": None,
-                    "output": "",
-                }
-                tool_steps.append(step)
-            step["output"] = data.get("output") or ""
-
-    if await has_pending_interrupt(graph, config):
-        state = await graph.aget_state(config)
-        return TurnResult(
-            status="interrupted",
-            reply="".join(reply_parts),
-            tool_steps=tool_steps,
-            pending=get_pending_interrupt(state),
-        )
-
-    reply = "".join(reply_parts)
-    if not reply:
-        reply = await final_answer_text(graph, config)
-    return TurnResult(status="ok", reply=reply, tool_steps=tool_steps)
+    return await _final_done(stream_resume(graph, answer, config))

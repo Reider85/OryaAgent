@@ -83,6 +83,9 @@ def test_defaults():
     assert s.log_level == "INFO"
     assert s.memory_dir == Path.home() / ".orya" / "memory"
     assert s.sessions_dir == Path.home() / ".orya" / "sessions"
+    # UI (M-17/M-24)
+    assert s.api_url == "http://127.0.0.1:8000"
+    assert s.ui_settings_path == Path.home() / ".orya" / "settings.json"
     # Future-phase placeholders
     assert s.auth_algorithm == "HS256"
     assert s.oriahs_timeout_s == 30.0

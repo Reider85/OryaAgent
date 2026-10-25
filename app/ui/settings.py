@@ -1,8 +1,10 @@
-"""UI settings persistence (M-17): load/save ~/.orya/settings.json.
+"""UI settings persistence (M-17): load/save the settings-panel state.
 
 Provides the UI state (model, permission mode, allow-list) that persists
-across Chainlit restarts and is used to rebuild the graph with custom
-provider/model/policy settings.
+across Chainlit restarts. Since M-24 the Chainlit UI does not build a
+graph itself: it sends this state with every ``POST /sessions/{id}/``
+request and the FastAPI layer turns it into the model/policy overrides
+(``app.core.permissions.build_policy``).
 
 The settings JSON file is separate from the main config.yaml (M-02):
 - config.yaml: global config (env/.env → defaults)
@@ -27,14 +29,13 @@ from typing import Any
 
 from app.core.config import get_settings
 from app.core.llm.registry import load_models
-from app.core.permissions import PermissionConfig, Rule
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class UISettings:
-    """UI state persisted to ~/.orya/settings.json."""
+    """UI state persisted to ``settings.ui_settings_path`` (M-17)."""
 
     model: str | None = None
     permission_mode: str | None = None  # "strict" or "permissive"
@@ -70,15 +71,15 @@ class UISettings:
 
 
 def settings_path() -> Path:
-    """Path of the UI settings file (~/.orya/settings.json)."""
-    return get_settings().home_dir / "settings.json"
+    """Path of the UI settings file (``ui_settings_path`` setting)."""
+    return get_settings().ui_settings_path
 
 
 def load_settings(path: Path | None = None) -> UISettings:
     """Load settings from JSON file; return defaults on missing/corrupt.
 
     Args:
-        path: Override path for testing; defaults to ~/.orya/settings.json.
+        path: Override path for testing; defaults to ``settings.ui_settings_path``.
 
     Returns:
         UISettings instance with defaults for missing fields.
@@ -108,7 +109,7 @@ def save_settings(settings: UISettings, path: Path | None = None) -> None:
 
     Args:
         settings: UISettings instance to save.
-        path: Override path for testing; defaults to ~/.orya/settings.json.
+        path: Override path for testing; defaults to ``settings.ui_settings_path``.
     """
     if path is None:
         path = settings_path()
@@ -131,41 +132,3 @@ def model_choices() -> list[str]:
     """
     models = load_models()
     return sorted(alias for alias, spec in models.items() if spec.supports_tools)
-
-
-def policy_from_settings(settings: UISettings) -> PermissionConfig:
-    """Build PermissionConfig from UI settings.
-
-    Args:
-        settings: UISettings with permission_mode and allow_list.
-
-    Returns:
-        PermissionConfig with mode + extra allow rules from allow_list.
-    """
-    # Load base rules from ~/.orya/permissions.yml (or defaults)
-    config = PermissionConfig.load()
-
-    # Override the permission mode
-    mode = settings.permission_mode or get_settings().permission_policy
-    if mode not in {"strict", "permissive"}:
-        logger.warning("Unknown permission mode %r; using 'strict'", mode)
-        mode = "strict"
-
-    # Add allow_list patterns as extra allow rules
-    extra_rules = []
-    for pattern in settings.allow_list:
-        if pattern.strip():
-            extra_rules.append(
-                Rule(
-                    tool="*",  # Apply to all tools
-                    pattern=pattern.strip(),
-                    action="allow",
-                    description="UI allow-list rule",
-                )
-            )
-
-    # Create new config with mode + extra allow rules
-    return PermissionConfig(
-        allow_rules=config.allow_rules + extra_rules,
-        deny_rules=config.deny_rules,
-    )
