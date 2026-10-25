@@ -289,14 +289,14 @@ OryaAgent MVP должен уметь читать конфиги провайд
 **M-10 — Tool: bash (с Token-efficient output)**
 - `app/tools/bash.py::bash(command, timeout=30) -> str`.
 - `asyncio.create_subprocess_exec`, capturing stdout/stderr.
-- **Token-efficient output (M-23):** если output > 10K chars → truncate + JSON-structure (`{"summary": "...", "stdout_head": "...", "stderr_tail": "...", "exit_code": ...}`).
+- **Token-efficient output (M-23):** JSON-structure (`{"stdout": "...", "stderr": "...", "exit_code": 0, "duration_ms": 123, "truncated": false}`); stream > 5000 chars → head 2500 + `... [N chars truncated] ...` + tail 2500; ≥100 identical consecutive lines → `... [N identical lines] ...` (dedup before truncation).
 - Triggers permission-policy.
 
 **M-11 — Tool: grep/glob (с Token-efficient output)**
 - `app/tools/grep.py::grep(pattern, path, glob_pattern="*") -> list[dict]`.
 - `app/tools/glob.py::glob(pattern, path) -> list[str]`.
 - Использует `ripgrep` (subprocess) — fast, .gitignore-aware.
-- **Token-efficient output (M-23):** structured JSON (`[{"file": "...", "line": N, "match": "..."}]`), max 50 matches per call.
+- **Token-efficient output (M-23):** structured JSON (`{"matches": [{"file": "...", "line": N, "content": "..."}], "count": N, "truncated": false}`; glob → `{"files": [...], "count", "truncated"}`), max 500 matches per call (`max_matches`).
 - Интеграция с CacheWrapper.
 
 **M-12 — Tool-registry integration**

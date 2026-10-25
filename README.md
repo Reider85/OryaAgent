@@ -4,7 +4,7 @@ Senior Python coding agent with UI and long-term memory.
 
 ## Phase: MVP
 
-Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (PostgreSQL schema), M-04 (LangGraph core), M-05 (system-prompt builder), M-06 (context manager), M-07 (tool `read`), M-08 (tool `write`), M-09 (tool `edit`), M-10 (tool `bash`), M-11 (tools `grep`/`glob`), M-12 (tool-registry integration), M-13 (permissions), M-14 (session-log), M-15 (Chainlit UI), M-16 (permission ask-prompt), M-17 (sidebar/settings), M-18 (smoke tests), M-20 (sessions API) and M-21 (Redis cache) are implemented.
+Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (PostgreSQL schema), M-04 (LangGraph core), M-05 (system-prompt builder), M-06 (context manager), M-07 (tool `read`), M-08 (tool `write`), M-09 (tool `edit`), M-10 (tool `bash`), M-11 (tools `grep`/`glob`), M-12 (tool-registry integration), M-13 (permissions), M-14 (session-log), M-15 (Chainlit UI), M-16 (permission ask-prompt), M-17 (sidebar/settings), M-18 (smoke tests), M-20 (sessions API), M-21 (Redis cache), M-22 (prompt-injection defense) and M-23 (token-efficient output) are implemented.
 
 ## Quick Start
 
@@ -244,6 +244,21 @@ curl -s localhost:8000/tools/cache-stats  # {"backend": "...", "tools": {"read":
 
 Host port conflicts can be resolved with `REDIS_PORT=6381 make redis-up` (plus a matching `REDIS_URL`).
 
+## Token-efficient output (M-23)
+
+Every tool returns the smallest document that still carries the information (TRIZ #28, mechanics substitution); `tests/unit/test_token_efficiency.py` locks the contract in and measures the savings (aggregate ≈73%, every typical fixture ≥30%):
+
+| Tool | Output contract |
+|---|---|
+| `read` | line-numbered window (2 000 lines), `[truncated: lines X-Y hidden ...]` marker, 10 MB size cap |
+| `write` | `Wrote {n} bytes to {path}` |
+| `edit` | `Edited {path}: replaced {n} occurrence(s)` |
+| `bash` | JSON `{stdout, stderr, exit_code, duration_ms, truncated}` — streams capped at 5 000 chars (2 500 head + `... [N chars truncated] ...` + 2 500 tail), ≥100 identical consecutive lines collapse to `... [N identical lines] ...` |
+| `grep` | JSON `{matches: [{file, line, content}], count, truncated}` — max 500 matches per call (`max_matches`) |
+| `glob` | JSON `{files: [...], count, truncated}` — max 500 paths per call |
+
+The second layer sits in the context manager: any `ToolMessage` over 5 000 chars is cut to the first 100 / last 50 lines before it reaches the model (M-06 pipeline, M-23 marker).
+
 ## Documentation
 
 - [Architecture v7](analytics/ARCHITECT7.md)
@@ -274,6 +289,8 @@ Host port conflicts can be resolved with `REDIS_PORT=6381 make redis-up` (plus a
 - ✅ **M-18** - Smoke tests: 5 canonical tasks (read/explain, atomic edit, bash+pytest, grep report, `/learn`) + cache/injection/JSON checks
 - ✅ **M-20** - Sessions API: `/sessions` CRUD (create, paginated list, metadata+messages, soft-delete), full-turn `POST /sessions/{id}/messages` (JSON with `tool_steps`/`pending_interrupt`), `POST /sessions/{id}/resume` for the M-13 permission gate; shared session-agent runtime (`app/core/agent.py`) reused by Chainlit
 - ✅ **M-21** - CacheWrapper: Redis backend (`ORYA_CACHE_BACKEND=auto|memory|redis`, TTL `ORYA_CACHE_TTL_SECONDS`), per-path invalidation hook on write/edit, `from_cache` ToolMessage metadata, `/metrics` (Prometheus text) + `/tools/cache-stats`
+- ✅ **M-22** - Prompt injection defense: pattern detection in `read`/`bash`/`grep` output (warning travels inside the payload), `sanitize_untrusted()` framing, `memory_audit_log` audit rows, `orya_prompt_injection_warnings_total` metric, prompt-side policy block
+- ✅ **M-23** - Token-efficient output: compact structured contracts for all six tools (JSON bash/grep/glob, capped windows, dedup), `truncate_tool_messages()` second layer, token-count tests proving ≥30% savings on typical tool-results
 - ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for full 28 tickets)
 
 ## LLM Providers (M-01)
