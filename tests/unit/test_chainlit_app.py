@@ -645,6 +645,121 @@ async def test_on_message_ignores_blank_input(fake_cl: _FakeCl, patch_client) ->
     assert len(fake_cl.messages) == 1
 
 
+# --- /learn slash-command (M-26) ----------------------------------------------
+
+
+def test_learn_args_parses_name_and_quoted_description() -> None:
+    assert ui._learn_args('/learn refactor_extract "Refactor: extract function"') == {
+        "pattern_name": "refactor_extract",
+        "description": "Refactor: extract function",
+    }
+    assert ui._learn_args("/learn") == {}
+    assert ui._learn_args("/learn remember_rg") == {"pattern_name": "remember_rg"}
+    # unbalanced quotes fall back to a plain split instead of raising
+    assert ui._learn_args('/learn "oops') == {"pattern_name": '"oops'}
+
+
+async def test_on_message_learn_captures_and_reports(
+    fake_cl: _FakeCl, patch_client
+) -> None:
+    fake_cl.user_session.set("thread_id", "sess-1")
+    requests = patch_client(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "status": "ok",
+                "learned_id": "learn_001",
+                "file": "LEARNED.md",
+                "compacted": False,
+                "line_count": 4,
+            },
+        )
+    )
+
+    await ui.on_message(
+        ui.cl.Message(  # type: ignore[arg-type]
+            content='/learn refactor_extract "Refactor: extract function"'
+        )
+    )
+
+    assert len(requests) == 1  # a memory write, never a chat turn
+    assert requests[0].url.path == "/sessions/sess-1/learn"
+    assert json.loads(requests[0].content) == {
+        "pattern_name": "refactor_extract",
+        "description": "Refactor: extract function",
+    }
+    assert (
+        fake_cl.messages[-1].content
+        == "✅ Learned: `learn_001` → LEARNED.md (compacted: false)"
+    )
+
+
+async def test_on_message_learn_without_args_sends_an_empty_body(
+    fake_cl: _FakeCl, patch_client
+) -> None:
+    fake_cl.user_session.set("thread_id", "sess-1")
+    requests = patch_client(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "learned_id": "learn_001",
+                "file": "LEARNED.md",
+                "compacted": True,
+                "line_count": 9,
+            },
+        )
+    )
+
+    await ui.on_message(ui.cl.Message(content="/learn"))  # type: ignore[arg-type]
+
+    assert len(requests) == 1
+    assert json.loads(requests[0].content) == {}
+    assert "(compacted: true)" in fake_cl.messages[-1].content
+
+
+async def test_on_message_learn_shows_the_400_detail(
+    fake_cl: _FakeCl, patch_client
+) -> None:
+    fake_cl.user_session.set("thread_id", "sess-1")
+    requests = patch_client(
+        lambda request: httpx.Response(
+            400, json={"detail": "No successful tool-call sequence to learn"}
+        )
+    )
+
+    await ui.on_message(ui.cl.Message(content="/learn"))  # type: ignore[arg-type]
+
+    assert len(requests) == 1
+    assert fake_cl.messages[-1].content.startswith("/learn failed:")
+    assert "No successful tool-call sequence to learn" in (fake_cl.messages[-1].content)
+
+
+async def test_on_message_learn_reports_an_unreachable_api(
+    fake_cl: _FakeCl, patch_client
+) -> None:
+    fake_cl.user_session.set("thread_id", "sess-1")
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    patch_client(refuse)
+
+    await ui.on_message(ui.cl.Message(content="/learn"))  # type: ignore[arg-type]
+
+    assert "FastAPI server unreachable" in fake_cl.messages[-1].content
+
+
+async def test_on_message_learn_without_a_session_explains(
+    fake_cl: _FakeCl, patch_client
+) -> None:
+    requests = patch_client(lambda request: httpx.Response(200, json={}))
+
+    await ui.on_message(ui.cl.Message(content="/learn"))  # type: ignore[arg-type]
+
+    assert requests == []
+    assert "No active session" in fake_cl.messages[-1].content
+
+
 # --- settings / sidebar ----------------------------------------------------------
 
 

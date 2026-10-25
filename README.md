@@ -317,6 +317,19 @@ store.stats()  # bytes / entries / last_write / over_limit
 - **Records:** entries follow the ARCHITECT6 §3.1.1 block format (`- [fact] id=... | confidence=... | source=... | ts=...` + indented text) — `MemoryItem.to_markdown()` / `parse_entries()` round-trip, and hand-edited free text stays valid.
 - **Prompt:** `format_memory_block()` injects LEARNED / PREFERENCES / FACTS / DECISIONS through the same seam, capped at 8 KB.
 
+## `/learn` (M-26)
+
+Two endpoints write into the L0 files through the `MDStore` seam:
+
+| Endpoint | Body | Effect |
+|---|---|---|
+| `POST /sessions/{id}/learn` | `{pattern_name?, description?, scope?}` | Extracts the session's **last successful tool-call sequence** from the JSONL projection (M-14), renders a `[learned]` block in the ARCHITECT6 §3.1.1 format and appends it to `LEARNED.md`. `pattern_name` defaults to the auto-name `grep_read_edit`; `400 "No successful tool-call sequence to learn"` when the last turn has no successful tool call (error, non-zero bash exit, permission refusal). |
+| `POST /learn` | `{content, category: "fact"\|"preference"\|"project"}` | Appends `content` to `FACTS.md` / `PREFERENCES.md` / `LEARNED.md` (PROMPT_MVP contract for CI/batch clients). |
+
+Both answer `{status, learned_id, file, compacted, line_count}`; `compacted` reports that the file is over budget — compaction itself is scheduled asynchronously and lands with M-27. Every call additionally writes an `action="learn"` audit record carrying `memory_id` / `source` / `trace_id` (own fields in the JSONL fallback, folded into `reason` for the PostgreSQL row).
+
+In the Chainlit UI, `/learn [name] [description]` calls the session endpoint and replies ``✅ Learned: `learn_001` → LEARNED.md (compacted: false)`` — no confirmation prompt, and the entry is visible to the model from the next turn (`format_memory_block()` reads the same files).
+
 ## Documentation
 
 - [Architecture v7](analytics/ARCHITECT7.md)
@@ -351,6 +364,7 @@ store.stats()  # bytes / entries / last_write / over_limit
 - ✅ **M-23** - Token-efficient output: compact structured contracts for all six tools (JSON bash/grep/glob, capped windows, dedup), `truncate_tool_messages()` second layer, token-count tests proving ≥30% savings on typical tool-results
 - ✅ **M-24** - Chainlit via FastAPI: SSE streaming endpoints (`?stream=true` on `/messages` + `/resume`; `token`/`tool_start`/`tool_end`/`interrupt`/`done`/`error` frames), settings overrides (model/mode/allow-list) resolved server-side, UI rewritten as an httpx client with no direct graph access, `from_cache` propagated into `tool_end`/`tool_steps`
 - ✅ **M-25** - Long-term memory: `MDStore` L0 (six MD files in `ORYA_MEMORY_DIR`, atomic `O_APPEND`+`fsync` append with per-file locks, size budgets + compaction hook, best-effort `memory_audit_log` audit), `MemoryItem` record model, system prompt reads L0 through the store seam
+- ✅ **M-26** - `/learn`: `POST /sessions/{id}/learn` (last successful tool sequence from the M-14 JSONL projection → `[learned]` block in `LEARNED.md`, auto pattern names, 400 on a failed last call), `POST /learn` content contract (`fact|preference|project`), Chainlit `/learn [name] [description]` slash-command, `learn` audit records (`memory_id`/`source`/`trace_id`)
 - ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for full 28 tickets)
 
 ## LLM Providers (M-01)

@@ -336,6 +336,32 @@ async def test_projection_emits_user_ai_tool_events():
     assert events[2]["payload"]["tool_call_id"] == "call_1"
 
 
+async def test_projection_emits_tool_status_for_learn():
+    """M-26: the /learn endpoint reads the tool outcome from the projection."""
+    m_user = HumanMessage(content="hi", id="m1")
+    m_ai = AIMessage(
+        content="", id="m2", tool_calls=[{"name": "read", "args": {}, "id": "c1"}]
+    )
+    m_ok = ToolMessage(content="fine", tool_call_id="c1", id="m3", name="read")
+    m_err = ToolMessage(
+        content="boom", tool_call_id="c2", id="m4", name="edit", status="error"
+    )
+    saver = FakeSaver(
+        [
+            {
+                "ts": "2026-01-01T00:00:01+00:00",
+                "messages": [m_user, m_ai, m_ok, m_err],
+            },
+        ]
+    )
+    await project_thread("s1", checkpointer=saver)
+
+    tool_events = [e for e in _read_events("s1") if e["type"] == "tool"]
+    assert [e["payload"]["status"] for e in tool_events] == ["success", "error"]
+    ai_event = next(e for e in _read_events("s1") if e["type"] == "ai")
+    assert "status" not in ai_event["payload"]
+
+
 async def test_projection_writes_meta_with_last_ts():
     saver = FakeSaver(_run_tool_turn_snapshots())
     await project_thread("s1", checkpointer=saver)

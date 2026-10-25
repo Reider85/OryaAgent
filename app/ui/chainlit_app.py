@@ -27,6 +27,14 @@ sessions via ``GET /sessions`` and restores history from
 allow-list to the settings file, and every request carries that state to
 the server, which builds the model and the policy for the session.
 
+M-26 adds the ``/learn`` slash-command (BACKLOG6): a message starting
+with ``/learn [name] [description]`` is *not* a chat turn — it calls
+``POST /sessions/{id}/learn`` (capture the last successful tool-call
+sequence into ``LEARNED.md``) and renders the
+``✅ Learned: learn_001 → LEARNED.md (compacted: false)`` feedback.
+Chainlit 2.x has no ``on_slash_command`` hook, so the command is parsed
+at the top of ``on_message``.
+
 Failure modes: an unreachable API server (``ORYA_API_URL``) leaves the
 chat with an explanatory message instead of a session; a database outage
 degrades to a locally generated ``thread_id`` and ``degraded: true`` in
@@ -37,6 +45,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shlex
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -304,6 +313,74 @@ async def _load_history(client: httpx.AsyncClient, thread_id: str) -> bool:
     return True
 
 
+# --- /learn slash-command (M-26) ----------------------------------------------
+
+
+def _learn_args(text: str) -> dict[str, Any]:
+    """Parse ``/learn [name] [description]`` into a POST body (M-26).
+
+    ``shlex`` honours quotes — ``/learn refactor_extract "Extract the
+    function"`` yields ``pattern_name=refactor_extract`` and the quoted
+    description; unbalanced quotes fall back to a plain split.
+    """
+    rest = text[len("/learn") :].strip()
+    try:
+        tokens = shlex.split(rest)
+    except ValueError:
+        tokens = rest.split()
+    body: dict[str, Any] = {}
+    if tokens:
+        body["pattern_name"] = tokens[0]
+    if len(tokens) > 1:
+        body["description"] = " ".join(tokens[1:])
+    return body
+
+
+async def _handle_learn(thread_id: str, text: str) -> None:
+    """Run ``/learn`` against ``POST /sessions/{id}/learn`` (M-26).
+
+    No confirmation prompt (BACKLOG6: ``/learn`` is an explicit user
+    action) — the endpoint answer is rendered as the feedback line.
+    """
+    try:
+        async with make_client() as client:
+            response = await client.post(
+                f"/sessions/{thread_id}/learn", json=_learn_args(text)
+            )
+    except httpx.HTTPError as exc:
+        logger.exception("learn request failed (thread_id=%s)", thread_id)
+        await cl.Message(
+            content=(
+                f"FastAPI server unreachable at `{api_url()}` ({exc}) — "
+                "start it with `make dev` and retry."
+            )
+        ).send()
+        return
+
+    if response.status_code != 200:
+        try:
+            detail = str(response.json().get("detail") or response.text)
+        except ValueError:
+            detail = response.text
+        await cl.Message(content=f"/learn failed: {detail}").send()
+        return
+
+    data = response.json()
+    compacted = str(bool(data.get("compacted"))).lower()
+    logger.info(
+        "/learn captured %s -> %s (thread_id=%s)",
+        data.get("learned_id"),
+        data.get("file"),
+        thread_id,
+    )
+    await cl.Message(
+        content=(
+            f"✅ Learned: `{data.get('learned_id')}` → {data.get('file')} "
+            f"(compacted: {compacted})"
+        )
+    ).send()
+
+
 # --- handlers ----------------------------------------------------------------
 
 
@@ -460,6 +537,10 @@ async def on_message(message: cl.Message) -> None:
         await cl.Message(content=_SESSION_HINT).send()
         return
     if not text:
+        return
+    if text == "/learn" or text.startswith("/learn "):
+        # M-26: slash-command — a memory write, never a chat turn.
+        await _handle_learn(str(thread_id), text)
         return
 
     settings = load_settings()

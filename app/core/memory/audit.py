@@ -1,7 +1,9 @@
-"""Best-effort audit trail for L0 memory operations (M-25).
+"""Best-effort audit trail for L0 memory operations (M-25/M-26).
 
 Every ``MDStore.append`` is recorded as a ``memory_audit_log`` row (the table
-already exists — see ``app/db/schema.sql``); when no asyncpg pool is up the
+already exists — see ``app/db/schema.sql``); the ``/learn`` endpoint (M-26)
+additionally records its own ``action="learn"`` row carrying ``memory_id`` /
+``source`` / ``trace_id``. When no asyncpg pool is up the
 record lands in ``{memory_dir}/audit/memory_audit.jsonl`` instead
 (ARCHITECT6 §13.2). Persistence mirrors ``app.core.security``: with a running
 event loop the write is scheduled as a background task, without one (plain
@@ -86,12 +88,32 @@ def record_memory_op(
     session_id: str | None = None,
     actor: str = "user",
     memory_dir: Path | None = None,
+    memory_id: str | None = None,
+    source: str | None = None,
+    trace_id: str | None = None,
 ) -> None:
-    """Record one L0 operation (``memory.append``, ...).
+    """Record one L0 operation (``memory.append``, ``learn``, ...).
 
     Never raises: with a running loop the INSERT is scheduled as a background
     task, otherwise the record goes to the JSONL trail immediately.
+
+    ``memory_id`` / ``source`` / ``trace_id`` (M-26 ``op=learn`` AC,
+    ARCHITECT6 §13.2) are carried as their own JSONL fields; the
+    ``memory_audit_log`` table has no such columns, so they are folded
+    into ``reason`` (``memory_id=... source=... trace_id=...``) — no
+    migration, M-25 column set untouched.
     """
+    extras = " ".join(
+        f"{key}={value}"
+        for key, value in (
+            ("memory_id", memory_id),
+            ("source", source),
+            ("trace_id", trace_id),
+        )
+        if value
+    )
+    if extras:
+        reason = f"{reason}; {extras}" if reason else extras
     record = {
         "ts": datetime.now(UTC).isoformat(timespec="seconds"),
         "actor": actor,
@@ -100,6 +122,9 @@ def record_memory_op(
         "preview": preview[:AUDIT_PREVIEW_CHARS],
         "reason": reason,
         "session_id": session_id,
+        "memory_id": memory_id,
+        "source": source,
+        "trace_id": trace_id,
     }
     try:
         loop = asyncio.get_running_loop()

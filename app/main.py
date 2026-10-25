@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 
+from app.api.learn import router as learn_router
 from app.api.llm import router as llm_router
 from app.api.metrics import router as metrics_router
 from app.api.sessions import router as sessions_router
@@ -53,6 +54,7 @@ app = FastAPI(
 
 app.include_router(llm_router)
 app.include_router(sessions_router)
+app.include_router(learn_router)
 app.include_router(metrics_router)
 
 

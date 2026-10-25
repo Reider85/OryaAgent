@@ -341,6 +341,11 @@ def _message_event(message: BaseMessage, message_id: str, ts: str) -> dict:
     tool_call_id = getattr(message, "tool_call_id", None)
     if tool_call_id:
         payload["tool_call_id"] = tool_call_id
+    status = getattr(message, "status", None)
+    if status:
+        # M-26: ``/learn`` needs the tool outcome (success/error) — the
+        # projection is where the endpoint reads the session log from.
+        payload["status"] = status
     name = getattr(message, "name", None)
     if name:
         payload["name"] = name
