@@ -133,6 +133,8 @@ Thumbs.db
 *.tmp
 sessions/
 memory/
+# ...but app/core/memory is source code (M-25), not runtime data
+!app/core/memory/
 
 # Chainlit runtime artifacts (auto-generated config + translations)
 .chainlit/

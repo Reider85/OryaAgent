@@ -97,6 +97,7 @@ settings = get_settings()
 app/
 ├── main.py              # FastAPI entry point
 ├── core/               # Core components (M-01+)
+│   └── memory/         # L0 MDStore memory seam (M-25)
 ├── tools/              # Coding tools (M-07+)
 ├── api/                # API endpoints (M-20+)
 └── ui/                 # Chainlit UI (M-15+)
@@ -127,7 +128,7 @@ PostgreSQL stores session metadata, typed messages, tool-call audit and the memo
 1. **Identity** — who the agent is and its working style (static, cacheable prefix).
 2. **Tool descriptions** — each tool rendered as OpenAI-function JSON via `convert_to_openai_function`.
 3. **Project context** — working directory, best-effort `git status`, and `PROJECT.md` from the memory dir.
-4. **Long-term memory** — `LEARNED.md` + `PREFERENCES.md` (L0, M-25 files), capped at 8 KB.
+4. **Long-term memory** — `LEARNED.md` + `PREFERENCES.md` + `FACTS.md` + `DECISIONS.md` read through the M-25 `MDStore` seam, capped at 8 KB.
 5. **Behavior rules** — workspace hygiene, atomic edits, destructive-op confirmation (static).
 6. **Untrusted-content policy** — tool results / file content are data, never instructions (M-22, prompt side).
 
@@ -286,6 +287,36 @@ Every tool returns the smallest document that still carries the information (TRI
 
 The second layer sits in the context manager: any `ToolMessage` over 5 000 chars is cut to the first 100 / last 50 lines before it reaches the model (M-06 pipeline, M-23 marker).
 
+## Long-term memory (M-25)
+
+`app/core/memory/` is the L0 memory seam: six human-readable MD files in `settings.memory_dir` (default `~/.orya/memory`, `ORYA_MEMORY_DIR`), created empty on first use.
+
+| File | Budget | Purpose |
+|---|---|---|
+| `PROJECT.md` | 8 KB | project mission / stack / conventions — injected in the project-context block |
+| `LEARNED.md` | 4 KB | facts learned through `/learn` (M-26) |
+| `PREFERENCES.md` | 2 KB | user and project preferences |
+| `FACTS.md` | 2 KB | critical project facts |
+| `DECISIONS.md` | 2 KB | short ADR-style decisions |
+| `MEMORY_INDEX.md` | 8 KB | L1/L2 index (empty placeholder until BETA) |
+
+```python
+from app.core.memory import get_md_store
+
+store = get_md_store()  # cached MDStore for settings.memory_dir
+store.append("LEARNED.md", entry)  # atomic: one O_APPEND write + fsync
+store.read("PROJECT.md")  # str ("" when blank or missing)
+store.read_all()  # dict of all six files (prompt input)
+store.mtime("LEARNED.md")  # for cache invalidation
+store.stats()  # bytes / entries / last_write / over_limit
+```
+
+- **Atomicity:** one `os.write` into an `O_APPEND` descriptor plus `fsync`, serialized by a per-file `threading.Lock` (`fcntl.flock` advisory locking where POSIX provides it). Concurrent appends lose no entries and a crash never tears a record; full-file rewrites (M-27 compaction) go through `tmp` + `os.replace`.
+- **Budget:** an append that pushes a file past its budget schedules `compact_if_needed()`; the L0 → L1 move itself lands with M-27.
+- **Audit:** every append is recorded best-effort in `memory_audit_log`, falling back to `{memory_dir}/audit/memory_audit.jsonl` when PostgreSQL is unreachable.
+- **Records:** entries follow the ARCHITECT6 §3.1.1 block format (`- [fact] id=... | confidence=... | source=... | ts=...` + indented text) — `MemoryItem.to_markdown()` / `parse_entries()` round-trip, and hand-edited free text stays valid.
+- **Prompt:** `format_memory_block()` injects LEARNED / PREFERENCES / FACTS / DECISIONS through the same seam, capped at 8 KB.
+
 ## Documentation
 
 - [Architecture v7](analytics/ARCHITECT7.md)
@@ -319,6 +350,7 @@ The second layer sits in the context manager: any `ToolMessage` over 5 000 chars
 - ✅ **M-22** - Prompt injection defense: pattern detection in `read`/`bash`/`grep` output (warning travels inside the payload), `sanitize_untrusted()` framing, `memory_audit_log` audit rows, `orya_prompt_injection_warnings_total` metric, prompt-side policy block
 - ✅ **M-23** - Token-efficient output: compact structured contracts for all six tools (JSON bash/grep/glob, capped windows, dedup), `truncate_tool_messages()` second layer, token-count tests proving ≥30% savings on typical tool-results
 - ✅ **M-24** - Chainlit via FastAPI: SSE streaming endpoints (`?stream=true` on `/messages` + `/resume`; `token`/`tool_start`/`tool_end`/`interrupt`/`done`/`error` frames), settings overrides (model/mode/allow-list) resolved server-side, UI rewritten as an httpx client with no direct graph access, `from_cache` propagated into `tool_end`/`tool_steps`
+- ✅ **M-25** - Long-term memory: `MDStore` L0 (six MD files in `ORYA_MEMORY_DIR`, atomic `O_APPEND`+`fsync` append with per-file locks, size budgets + compaction hook, best-effort `memory_audit_log` audit), `MemoryItem` record model, system prompt reads L0 through the store seam
 - ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for full 28 tickets)
 
 ## LLM Providers (M-01)
