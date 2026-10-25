@@ -4,7 +4,7 @@ Senior Python coding agent with UI and long-term memory.
 
 ## Phase: MVP
 
-Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (PostgreSQL schema), M-04 (LangGraph core), M-05 (system-prompt builder), M-06 (context manager), M-07 (tool `read`), M-08 (tool `write`), M-09 (tool `edit`), M-10 (tool `bash`), M-11 (tools `grep`/`glob`), M-12 (tool-registry integration), M-13 (permissions), M-14 (session-log), M-15 (Chainlit UI), M-16 (permission ask-prompt), M-17 (sidebar/settings), M-18 (smoke tests), M-20 (sessions API), M-21 (Redis cache), M-22 (prompt-injection defense) and M-23 (token-efficient output) are implemented.
+Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (PostgreSQL schema), M-04 (LangGraph core), M-05 (system-prompt builder), M-06 (context manager), M-07 (tool `read`), M-08 (tool `write`), M-09 (tool `edit`), M-10 (tool `bash`), M-11 (tools `grep`/`glob`), M-12 (tool-registry integration), M-13 (permissions), M-14 (session-log), M-15 (Chainlit UI), M-16 (permission ask-prompt), M-17 (sidebar/settings), M-18 (smoke tests), M-20 (sessions API), M-21 (Redis cache), M-22 (prompt-injection defense), M-23 (token-efficient output) and M-24 (Chainlit via FastAPI/SSE) are implemented.
 
 ## Quick Start
 
@@ -46,9 +46,16 @@ Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (
    # Should return: {"status": "ok", "message": "OryaAgent API is running"}
    ```
 
+6. **Start the Chainlit UI (another terminal):**
+   ```bash
+   make ui
+   ```
+   The chat opens on http://localhost:8001 and talks to the FastAPI server over HTTP/SSE (`ORYA_API_URL`, default `http://127.0.0.1:8000`) ? `make dev` must be running.
+
 ### Development Commands
 
 - `make dev` - Start development server (FastAPI on port 8000)
+- `make ui` - Chainlit chat UI (port 8001, M-15/M-24; requires `make dev`)
 - `make test` - Run tests
 - `make lint` - Lint code with ruff
 - `make format` - Format code with ruff
@@ -187,15 +194,15 @@ A background projection worker starts with the FastAPI app (lifespan in `app/mai
 
 ## Sessions API (M-20)
 
-`app/api/sessions.py` exposes the session lifecycle for non-UI clients (CI, batch jobs, future HTTP frontends). The Chainlit UI still drives the graph directly (M-15 decision; SSE streaming is the separate M-24 ticket); both layers share the session-agent runtime in `app/core/agent.py` (graph assembly, checkpointer fallback, `run_turn`/`run_resume`).
+`app/api/sessions.py` exposes the session lifecycle for every client: CI and batch jobs over JSON, the Chainlit UI (M-24) over SSE. The UI never touches the graph ? `Chainlit → FastAPI → LangGraph` ? and both response modes share the session-agent runtime in `app/core/agent.py` (graph assembly, checkpointer fallback, `stream_turn`/`run_turn`).
 
 | Endpoint | Purpose |
 |---|---|
 | `POST /sessions` | Create a session (server-side uuid4) → `{session_id, created_at, status, ...}` |
 | `GET /sessions?page=1&size=20` | Paginated list, newest activity first → `{items, total, page, size}` |
 | `GET /sessions/{id}` | Metadata + typed `messages` (M-14 log), 404 when unknown |
-| `POST /sessions/{id}/messages` | Run one full turn, JSON response (see below) |
-| `POST /sessions/{id}/resume` | Answer a pending permission interrupt: `{decision: "allow"\|"deny"\|"always"}`, 409 when nothing is pending |
+| `POST /sessions/{id}/messages` | Run one full turn — JSON by default, SSE stream with `?stream=true` (see below) |
+| `POST /sessions/{id}/resume` | Answer a pending permission interrupt: `{decision: "allow"\|"deny"\|"always"}`, 409 when nothing is pending; also streamable with `?stream=true` |
 | `DELETE /sessions/{id}` | Soft-delete — flips `sessions.status` to `closed`, history kept for audit |
 
 `POST /sessions/{id}/messages` accepts `{"content": "..."}` and returns:
@@ -205,7 +212,7 @@ A background projection worker starts with the FastAPI app (lifespan in `app/mai
   "session_id": "...",
   "status": "ok",
   "reply": "final answer text",
-  "tool_steps": [{"run_id": "...", "tool": "read", "args": {"path": "..."}, "output": "..."}],
+  "tool_steps": [{"run_id": "...", "tool": "read", "args": {"path": "..."}, "output": "...", "from_cache": false}],
   "pending_interrupt": null,
   "degraded": false
 }
@@ -216,6 +223,26 @@ A background projection worker starts with the FastAPI app (lifespan in `app/mai
 - DB failures return `503 {"detail": "database unavailable"}`; a failed run returns `502`.
 - The permission policy is cached per session process-wide, so «Approve & don't ask again» (M-13 session allowlist) survives across API calls within the process lifetime.
 - Interactive docs: `http://localhost:8000/docs` (OpenAPI).
+
+### SSE streaming (M-24)
+
+`POST /sessions/{id}/messages?stream=true` (and `/resume?stream=true`) returns `text/event-stream` instead of a buffered JSON turn — this is the transport the Chainlit UI uses:
+
+| Frame | Data |
+|---|---|
+| `token` | `{"content": "..."}` — one streamed model chunk |
+| `tool_start` | `{"run_id", "tool", "args"}` |
+| `tool_end` | `{"run_id", "tool", "output", "from_cache"}` — `from_cache: true` marks an M-21 cache hit |
+| `interrupt` | `{"tool", "args", "reason"}` — the run paused at the M-13 permission gate |
+| `error` | `{"detail"}` — a failure after the response started (always followed by `done`) |
+| `done` | `{"session_id", "status", "reply", "tool_steps", "pending_interrupt", "degraded"}` — terminal frame |
+
+Both turn endpoints also accept the UI settings-panel overrides — `model`, `permission_mode`, `allow_list` — and the server builds the model/policy for the session from them (the M-13 session allowlist is carried over when the settings change). In stream mode the session-log writes are best-effort: a database outage reports `degraded: true` instead of `503`, so a live chat is never aborted.
+
+```bash
+curl -N -X POST "localhost:8000/sessions/$SID/messages?stream=true" \\
+  -H 'content-type: application/json' -d '{"content":"run the tests"}'
+```
 
 Example:
 
@@ -283,14 +310,15 @@ The second layer sits in the context manager: any `ToolMessage` over 5 000 chars
 - ✅ **M-12** - Tool-registry integration: `get_tools()` full 6-tool list, `graph.bind_tools` wiring, integration tests (full-cycle agent→tools→agent e2e + offline real-model bind/schema check)
 - ✅ **M-13** - Permissions: `PermissionPolicy` (strict/permissive), deny→session→allow→mode rule precedence, session allowlist, interrupt-driven ask via the graph's permission-review node
 - ✅ **M-14** - Session-log: typed `messages` writer (`log_message`), JSONL projection of PostgresSaver checkpoints (`~/.orya/sessions/{id}.jsonl`, ts-deduped), background projection worker (FastAPI lifespan)
-- ✅ **M-15** - Chainlit UI: `on_chat_start` / `on_message`, normalized streaming (`token`/`tool_start`/`tool_end`), Postgres checkpointer with in-memory fallback
+- ✅ **M-15** - Chainlit UI: `on_chat_start` / `on_message`, normalized streaming (`token`/`tool_start`/`tool_end`), Postgres checkpointer with in-memory fallback — since M-24 routed through FastAPI SSE
 - ✅ **M-16** - Permission ask-prompt: `cl.AskActionMessage` with Approve / Deny / don't-ask-again, resume loop until the batch completes
 - ✅ **M-17** - Sidebar & settings: session list from JSONL + DB titles, session switching with history restore, model/permission/allow-list panel (`~/.orya/settings.json`)
 - ✅ **M-18** - Smoke tests: 5 canonical tasks (read/explain, atomic edit, bash+pytest, grep report, `/learn`) + cache/injection/JSON checks
-- ✅ **M-20** - Sessions API: `/sessions` CRUD (create, paginated list, metadata+messages, soft-delete), full-turn `POST /sessions/{id}/messages` (JSON with `tool_steps`/`pending_interrupt`), `POST /sessions/{id}/resume` for the M-13 permission gate; shared session-agent runtime (`app/core/agent.py`) reused by Chainlit
+- ✅ **M-20** - Sessions API: `/sessions` CRUD (create, paginated list, metadata+messages, soft-delete), full-turn `POST /sessions/{id}/messages` (JSON with `tool_steps`/`pending_interrupt`), `POST /sessions/{id}/resume` for the M-13 permission gate; shared session-agent runtime (`app/core/agent.py`); SSE mode added by M-24
 - ✅ **M-21** - CacheWrapper: Redis backend (`ORYA_CACHE_BACKEND=auto|memory|redis`, TTL `ORYA_CACHE_TTL_SECONDS`), per-path invalidation hook on write/edit, `from_cache` ToolMessage metadata, `/metrics` (Prometheus text) + `/tools/cache-stats`
 - ✅ **M-22** - Prompt injection defense: pattern detection in `read`/`bash`/`grep` output (warning travels inside the payload), `sanitize_untrusted()` framing, `memory_audit_log` audit rows, `orya_prompt_injection_warnings_total` metric, prompt-side policy block
 - ✅ **M-23** - Token-efficient output: compact structured contracts for all six tools (JSON bash/grep/glob, capped windows, dedup), `truncate_tool_messages()` second layer, token-count tests proving ≥30% savings on typical tool-results
+- ✅ **M-24** - Chainlit via FastAPI: SSE streaming endpoints (`?stream=true` on `/messages` + `/resume`; `token`/`tool_start`/`tool_end`/`interrupt`/`done`/`error` frames), settings overrides (model/mode/allow-list) resolved server-side, UI rewritten as an httpx client with no direct graph access, `from_cache` propagated into `tool_end`/`tool_steps`
 - ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for full 28 tickets)
 
 ## LLM Providers (M-01)

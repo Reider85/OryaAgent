@@ -34,7 +34,7 @@ Senior Python coding agent (FastAPI + LangGraph + LLM provider seam). MVP ticket
 - `app/core/permissions.py` — `PermissionPolicy`: precedence deny → session allowlist → allowlist → mode. Fail-closed: no checkpointer ⇒ `ask` = deny; unknown resume answer = deny; a mixed approve/refuse batch is wholly refused.
 - `app/core/context.py` — `trim_messages(messages, max_tokens, *, model)` signature is an architectural invariant (v7 BETA keeps it).
 - `app/db/` — app tables use **asyncpg** (`schema.sql` canonical + `migrations/NNNN_name.sql`); checkpoints use a **separate psycopg pool** (`checkpoints.py`, `AsyncPostgresSaver.setup()`). **A schema change requires editing BOTH `schema.sql` AND a new migration file** — `tests/unit/test_db_schema.py` fails on drift. Checkpoint tables are not in schema.sql.
-- `app/ui/` = Chainlit (M-15+); Redis backs the M-21 tool-result cache (`ORYA_CACHE_BACKEND=auto|memory|redis`, probed in the FastAPI lifespan / `on_chat_start`).
+- `app/ui/` = Chainlit (M-15+), since M-24 a pure httpx client of FastAPI: `ORYA_API_URL` (default `http://127.0.0.1:8000`), sessions via `POST /sessions`, turns via `POST /sessions/{id}/messages?stream=true` + `/resume?stream=true` (SSE frames `token`/`tool_start`/`tool_end`/`interrupt`/`done`/`error`) ? the UI never builds or drives a graph. Redis backs the M-21 tool-result cache (`ORYA_CACHE_BACKEND=auto|memory|redis`, probed in the FastAPI lifespan only).
 
 ## Conventions
 
