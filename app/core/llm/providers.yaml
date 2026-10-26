@@ -250,6 +250,11 @@ providers:
     env_var: OPENCODE_GO_API_KEY
     default_model: deepseek-v4.1-flash
     tier: aggregator
+    # Go rejects requests without a session id and asks for a self-identifying
+    # User-Agent (https://opencode.ai/docs/go/#where-can-i-use-it).
+    extra_headers:
+      x-opencode-session: orya-agent
+      User-Agent: orya-agent/7.0
     description: OpenCode Go (subscription gateway for open coding models)
 
   # ------------------------------------------------------------------ local

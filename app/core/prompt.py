@@ -40,6 +40,7 @@ from langchain_core.utils.function_calling import convert_to_openai_function
 
 from app.core.config import get_settings
 from app.core.memory import MDStore, get_md_store
+from app.core.workspace import current_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -104,8 +105,8 @@ def _memory_store(memory_dir: Path | None = None) -> MDStore:
     return get_md_store(memory_dir)
 
 
-def _git_status_line() -> str:
-    """Best-effort ``git status --short``; never raises."""
+def _git_status_line(workspace: Path | None = None) -> str:
+    """Best-effort ``git status --short`` inside ``workspace``; never raises."""
     try:
         result = subprocess.run(
             ["git", "status", "--short"],
@@ -113,6 +114,7 @@ def _git_status_line() -> str:
             text=True,
             timeout=2,
             shell=False,
+            cwd=str(workspace) if workspace is not None else None,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         logger.debug("git status unavailable: %s", exc)
@@ -123,15 +125,16 @@ def _git_status_line() -> str:
 
 
 def project_context_block(memory_dir: Path | None = None) -> str:
-    """Working directory, git status and the project's ``PROJECT.md``."""
+    """Opened project (workspace), git status and the project's ``PROJECT.md``."""
     store = _memory_store(memory_dir)
+    workspace = current_workspace()
     project_md = store.read("PROJECT.md")
     if not project_md.strip():
         project_md = f"(no PROJECT.md — create {store.memory_dir / 'PROJECT.md'})"
     return (
         "# Project Context\n"
-        f"Working directory: {Path.cwd()}\n"
-        f"Git status:\n{_git_status_line()}\n\n"
+        f"Working directory: {workspace}\n"
+        f"Git status:\n{_git_status_line(workspace)}\n\n"
         f"## PROJECT.md\n{project_md}"
     )
 

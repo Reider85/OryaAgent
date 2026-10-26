@@ -1,10 +1,40 @@
 """get_llm() seam tests for all providers (mocked — construction only, no network)."""
 
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
 import pytest
 from langchain_core.language_models import BaseChatModel
 
+from app.core.config import clear_settings_cache
 from app.core.llm import get_llm, list_models, list_providers
-from app.core.llm.registry import load_providers
+from app.core.llm.registry import clear_registry_cache, load_providers
+
+
+@pytest.fixture(autouse=True)
+def isolated_llm_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Sandbox config: no inherited env, no repo .env, no user config.yaml.
+
+    A developer's ``.env`` / ``~/.orya/config.yaml`` may set
+    ``ORYA_LLM_MODEL`` (or a yaml ``llm.default_model``) — without this
+    sandbox those leak into ``get_llm(provider)`` calls and break the
+    provider-resolution assertions below.
+    """
+    for name in list(os.environ):
+        if name.startswith("ORYA_") or name in {
+            "DEEPSEEK_API_KEY",
+            "ANTHROPIC_API_KEY",
+        }:
+            monkeypatch.delenv(name, raising=False)
+    monkeypatch.chdir(tmp_path)  # ignore any project-root .env
+    monkeypatch.setenv("ORYA_CONFIG_PATH", str(tmp_path / "config.yaml"))
+    clear_settings_cache()
+    clear_registry_cache()
+    yield
+    clear_settings_cache()
+    clear_registry_cache()
 
 
 def test_get_llm_returns_base_chat_model():

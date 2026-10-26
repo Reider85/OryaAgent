@@ -138,6 +138,8 @@ memory/
 
 # Chainlit runtime artifacts (auto-generated config + translations)
 .chainlit/
+# Chainlit uploaded files (paperclip attachments, session-scoped)
+.files/
 
 # Ruff
 .ruff_cache/

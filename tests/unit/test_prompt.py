@@ -107,6 +107,16 @@ def test_project_context_includes_cwd_and_git_block():
     assert "## PROJECT.md" in block
 
 
+def test_project_context_shows_the_opened_workspace(tmp_path: Path):
+    """A session that opened a project reports that directory (not cwd)."""
+    from app.core.workspace import workspace_scope
+
+    with workspace_scope(tmp_path):
+        block = project_context_block()
+
+    assert f"Working directory: {tmp_path}" in block
+
+
 def test_project_md_injected_when_present(_isolated_memory_dir: Path):
     (_isolated_memory_dir / "PROJECT.md").write_text(
         "Mission: build a coding agent.", encoding="utf-8"

@@ -30,6 +30,7 @@ class TestUISettings:
         assert settings.model is None
         assert settings.permission_mode is None
         assert settings.allow_list == []
+        assert settings.working_dir is None
 
     def test_to_dict_from_dict(self) -> None:
         """Test serialization roundtrip."""
@@ -37,6 +38,7 @@ class TestUISettings:
             model="claude-sonnet-3.5",
             permission_mode="strict",
             allow_list=["read /tmp/*", "write *.py"],
+            working_dir="C:/projects/OryaAgent",
         )
 
         data = original.to_dict()
@@ -45,6 +47,7 @@ class TestUISettings:
         assert restored.model == original.model
         assert restored.permission_mode == original.permission_mode
         assert restored.allow_list == original.allow_list
+        assert restored.working_dir == original.working_dir
 
     def test_from_dict_partial(self) -> None:
         """Test from_dict with missing fields (use defaults)."""
@@ -58,6 +61,7 @@ class TestUISettings:
         assert settings.model == "gpt-4o"
         assert settings.permission_mode is None
         assert settings.allow_list == ["bash *.sh"]
+        assert settings.working_dir is None
 
     def test_from_dict_invalid(self) -> None:
         """Test from_dict with invalid data (fallback to defaults)."""
@@ -70,6 +74,14 @@ class TestUISettings:
         assert settings.model is None
         assert settings.permission_mode is None
         assert settings.allow_list == []
+        assert settings.working_dir is None
+
+    def test_legacy_settings_file_without_working_dir(self) -> None:
+        """A settings.json written before working_dir still loads."""
+        settings = UISettings.from_dict(
+            {"model": "glm-4.5-flash", "permission_mode": "strict", "allow_list": []}
+        )
+        assert settings.working_dir is None
 
 
 class TestSettingsFile:

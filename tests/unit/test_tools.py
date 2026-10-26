@@ -1183,9 +1183,10 @@ async def test_grep_passes_glob_and_type_to_argv(monkeypatch: pytest.MonkeyPatch
     assert argv[argv.index("--glob") + 1] == "*.py"
     assert "--type" in argv
     assert argv[argv.index("--type") + 1] == "py"
-    # pattern/path come after the -- separator
+    # pattern/path come after the -- separator; the path is the
+    # workspace-resolved absolute directory (the process cwd here)
     assert argv[-2] == "x"
-    assert argv[-1] == "."
+    assert argv[-1] == str(Path.cwd().resolve())
 
 
 async def test_grep_pattern_with_leading_dash_stays_pattern(
@@ -1299,6 +1300,7 @@ async def test_grep_cache_hit_and_invalidation_via_mtime(
 
 async def test_glob_returns_files_json_with_untrusted_markers(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ):
     spy = _mock_rg(monkeypatch, ["app/main.py", "app/ui/chainlit_app.py"])
 
@@ -1314,7 +1316,8 @@ async def test_glob_returns_files_json_with_untrusted_markers(
     assert "--files" in argv
     assert argv[argv.index("--glob") + 1] == "*.py"
     assert argv[-2] == "--"
-    assert argv[-1] == "app"
+    # the relative path is resolved against the session workspace (= cwd here)
+    assert argv[-1] == str((tmp_path / "app").resolve())
 
 
 async def test_glob_path_outside_roots_raises(tmp_path: Path):

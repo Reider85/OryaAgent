@@ -231,7 +231,7 @@ async def grep(
     ] = None,
     path: Annotated[
         str,
-        "Directory or file to search in (relative to the workspace, or inside ~/.orya). Default: current directory.",
+        "Directory or file to search in (relative to the session workspace, or inside ~/.orya). Default: the session workspace.",
     ] = ".",
     type: Annotated[
         str | None,
@@ -260,10 +260,12 @@ async def grep(
         raise ToolException(f"max_matches must be >= 1, got {max_matches}")
 
     resolved = validate_path(path)
+    # rg resolves relative paths against the process cwd, so the
+    # workspace-resolved absolute path is passed instead of the raw arg.
     argv = _build_rg_argv(
         ["rg", "--no-config", "--json"],
         pattern,
-        path,
+        str(resolved),
         glob=glob,
         type=type,
     )
@@ -327,7 +329,7 @@ async def glob(
     ],
     path: Annotated[
         str,
-        "Directory to list files in (relative to the workspace, or inside ~/.orya). Default: current directory.",
+        "Directory to list files in (relative to the session workspace, or inside ~/.orya). Default: the session workspace.",
     ] = ".",
     max_matches: Annotated[
         int,
@@ -352,7 +354,8 @@ async def glob(
 
     resolved = validate_path(path)
     # rg --files treats positionals as paths, so the glob goes via --glob.
-    argv = ["rg", "--no-config", "--files", "--glob", pattern, "--", path]
+    # The workspace-resolved absolute path keeps rg out of the process cwd.
+    argv = ["rg", "--no-config", "--files", "--glob", pattern, "--", str(resolved)]
 
     lines, truncated, exit_code, stderr = await _run_rg(
         argv, RG_TIMEOUT, max_matches, "line"

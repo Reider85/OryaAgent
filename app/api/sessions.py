@@ -19,8 +19,16 @@ and the future Next.js frontend. Both layers reuse the shared runtime in
 * ``DELETE /sessions/{id}``          — soft-delete (``status='closed'``).
 
 Settings overrides: ``messages``/``resume`` accept the UI settings-panel
-state (``model``, ``permission_mode``, ``allow_list``) so the server —
-not the client — assembles the graph with the chosen model and policy.
+state (``model``, ``permission_mode``, ``allow_list``, ``working_dir``)
+so the server — not the client — assembles the graph with the chosen
+model and policy. ``working_dir`` opens a project directory for the
+session (app/core/workspace.py): it is validated (400 when unusable),
+persisted on the ``sessions`` row and bound to the turn so every tool
+resolves relative paths and runs subprocesses against it.
+
+Graph-build failures are mapped instead of leaking: a ``ValueError`` from
+the LLM seam (missing API key, unknown model) is a 400 with the reason —
+before this mapping every misconfiguration surfaced as a bare 500.
 
 Permission policy note: each session caches one :class:`PermissionPolicy`
 process-wide so the M-13 session allowlist («Approve & don't ask again»)
@@ -39,6 +47,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
@@ -59,6 +68,7 @@ from app.core.agent import (
 )
 from app.core.graph import default_run_config
 from app.core.permissions import PermissionPolicy, build_policy
+from app.core.workspace import open_workspace, set_workspace, workspace_scope
 from app.db.session_log import (
     create_session,
     ensure_session,
@@ -67,6 +77,7 @@ from app.db.session_log import (
     list_sessions,
     log_message,
     set_session_status,
+    set_session_working_dir,
 )
 
 logger = logging.getLogger(__name__)
@@ -103,6 +114,13 @@ class TurnSettings(BaseModel):
     model: str | None = None
     permission_mode: Literal["strict", "permissive"] | None = None
     allow_list: list[str] = Field(default_factory=list)
+    working_dir: str | None = Field(
+        default=None,
+        description=(
+            "Project directory to open for this session (the tools' root). "
+            "Persisted on the session; omit to keep the stored one."
+        ),
+    )
 
 
 class MessageCreate(TurnSettings):
@@ -139,6 +157,58 @@ def _policy_for(
             policy.record_session_allow(tool)
     _session_policies[session_id] = (key, policy)
     return policy
+
+
+async def _resolve_workspace(
+    session_id: str,
+    requested: str | None,
+    stored: str | None,
+    *,
+    soft: bool,
+) -> tuple[Path | None, bool]:
+    """Resolve the project directory («open project») of this turn.
+
+    ``requested`` (the request's ``working_dir`` override) wins and is
+    persisted on the session row so later turns keep the project open;
+    otherwise the value stored on the session is used. Returns
+    ``(path_or_None, degraded)`` — ``None`` keeps the process cwd as the
+    tools' root. An unusable path is a client error: HTTP 400.
+    """
+    candidate = requested if requested is not None else stored
+    if not candidate:
+        return None, False
+    try:
+        workspace = open_workspace(candidate)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    degraded = False
+    if requested is not None and str(workspace) != (stored or ""):
+        if soft:
+            degraded = await _soft_db(
+                set_session_working_dir(session_id, str(workspace))
+            )
+        else:
+            await _db(set_session_working_dir(session_id, str(workspace)))
+    return workspace, degraded
+
+
+async def _stream_in_workspace(
+    events: AsyncIterator[Any], workspace: Path | None
+) -> AsyncIterator[Any]:
+    """Bind ``workspace`` for the whole stream (tools read it per task).
+
+    The SSE body is iterated *after* the endpoint returned, so the
+    ``ContextVar`` is bound inside the stream, not around it. The reset
+    writes ``None`` (the documented default) instead of a token, because
+    a stream may be driven from more than one task context.
+    """
+    set_workspace(workspace)
+    try:
+        async for event in events:
+            yield event
+    finally:
+        set_workspace(None)
 
 
 def _pending_dict(pending: PendingInterrupt | None) -> dict[str, Any] | None:
@@ -257,6 +327,39 @@ def _require_session(session: dict | None, session_id: str) -> dict:
     return session
 
 
+def _build_graph_or_raise(
+    session_id: str,
+    checkpointer: Any,
+    *,
+    model: Any = None,
+    policy: Any | None = None,
+) -> Any:
+    """Assemble the session graph, mapping failures to HTTP errors.
+
+    ``get_llm`` raises ``ValueError`` for the fixable configuration
+    problems (missing API key, unknown provider/model alias) — those are
+    reported as 400 so the client sees the reason instead of a bare 500;
+    anything else is a 502, matching the run/resume failure contract.
+    """
+    try:
+        return build_session_graph(
+            session_id,
+            checkpointer,
+            model=model,
+            policy=policy,
+        )
+    except ValueError as exc:
+        logger.exception("graph configuration failed (session_id=%s)", session_id)
+        raise HTTPException(
+            status_code=400, detail=f"configuration error: {exc}"
+        ) from exc
+    except Exception as exc:
+        logger.exception("graph build failed (session_id=%s)", session_id)
+        raise HTTPException(
+            status_code=502, detail=f"graph build failed: {exc}"
+        ) from exc
+
+
 @router.post("")
 async def create_new_session(body: SessionCreate | None = None) -> dict:
     """Create a new session (M-20): server generates the ``session_id``."""
@@ -309,18 +412,33 @@ async def post_message(
     tool call; the client answers via ``POST /sessions/{id}/resume``.
     """
     degraded = False
+    session_row: dict | None = None
     if stream:
         # UI semantics: the chat already started — report, don't abort.
         degraded |= await _soft_db(ensure_session(session_id))
         degraded |= await _soft_db(log_message(session_id, "user", body.content))
+        try:
+            session_row = await get_session(session_id)
+        except Exception as exc:
+            logger.warning("workspace lookup skipped (database): %s", exc)
+            degraded = True
     else:
         # Lenient auto-create: CI/batch clients may write into a fresh id.
         await _db(ensure_session(session_id))
         await _db(log_message(session_id, "user", body.content))
+        session_row = await _db(get_session(session_id))
+
+    workspace, ws_degraded = await _resolve_workspace(
+        session_id,
+        body.working_dir,
+        None if session_row is None else session_row.get("working_dir"),
+        soft=stream,
+    )
+    degraded = bool(degraded or ws_degraded)
 
     checkpointer, ck_degraded = await resolve_checkpointer()
     degraded = bool(degraded or ck_degraded)
-    graph = build_session_graph(
+    graph = _build_graph_or_raise(
         session_id,
         checkpointer,
         model=body.model,
@@ -329,7 +447,9 @@ async def post_message(
     config = default_run_config(session_id)
 
     if stream:
-        events = stream_turn(graph, body.content, config)
+        events = _stream_in_workspace(
+            stream_turn(graph, body.content, config), workspace
+        )
         return StreamingResponse(
             _sse_turn(session_id, events, degraded),
             media_type="text/event-stream",
@@ -337,7 +457,8 @@ async def post_message(
         )
 
     try:
-        result = await run_turn(graph, body.content, config)
+        with workspace_scope(workspace):
+            result = await run_turn(graph, body.content, config)
     except Exception as exc:
         logger.exception("API run failed (session_id=%s)", session_id)
         raise HTTPException(status_code=502, detail=f"run failed: {exc}") from exc
@@ -362,11 +483,17 @@ async def post_resume(
     ``?stream=true`` (M-24) forwards the continuation (tool execution +
     the agent's answer) as SSE instead of aggregating it.
     """
-    _require_session(await _db(get_session(session_id)), session_id)
+    session_row = _require_session(await _db(get_session(session_id)), session_id)
+    workspace, ws_degraded = await _resolve_workspace(
+        session_id,
+        body.working_dir,
+        session_row.get("working_dir"),
+        soft=stream,
+    )
 
     checkpointer, ck_degraded = await resolve_checkpointer()
-    degraded = bool(ck_degraded)
-    graph = build_session_graph(
+    degraded = bool(ws_degraded or ck_degraded)
+    graph = _build_graph_or_raise(
         session_id,
         checkpointer,
         model=body.model,
@@ -387,7 +514,7 @@ async def post_resume(
 
     if stream:
         degraded |= await _soft_db(log_message(session_id, "system", permission_log))
-        events = stream_resume(graph, answer, config)
+        events = _stream_in_workspace(stream_resume(graph, answer, config), workspace)
         return StreamingResponse(
             _sse_turn(session_id, events, degraded),
             media_type="text/event-stream",
@@ -395,7 +522,8 @@ async def post_resume(
         )
 
     try:
-        result = await run_resume(graph, answer, config)
+        with workspace_scope(workspace):
+            result = await run_resume(graph, answer, config)
     except Exception as exc:
         logger.exception("API resume failed (session_id=%s)", session_id)
         raise HTTPException(status_code=502, detail=f"resume failed: {exc}") from exc

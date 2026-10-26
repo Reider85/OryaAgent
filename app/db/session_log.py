@@ -216,6 +216,28 @@ async def set_session_status(
     return _session_row(row)
 
 
+async def set_session_working_dir(
+    session_id: str,
+    working_dir: str | None,
+    *,
+    pool: asyncpg.Pool | None = None,
+) -> dict | None:
+    """Update ``sessions.working_dir`` (the project the session has open).
+
+    Returns the updated row, or ``None`` when the session does not exist.
+    """
+    if pool is None:
+        pool = await get_asyncpg_pool()
+    row = await pool.fetchrow(
+        "UPDATE sessions SET working_dir = $2, last_activity_at = now() "
+        "WHERE session_id = $1 "
+        "RETURNING *",
+        session_id,
+        working_dir,
+    )
+    return _session_row(row)
+
+
 async def list_messages(
     session_id: str,
     *,

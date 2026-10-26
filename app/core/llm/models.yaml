@@ -320,6 +320,22 @@ models:
     supports_tools: true
     supports_streaming: true
 
+  - alias: mimo-v2.6-flash
+    provider: opencode-go
+    model_id: mimo-v2.6-flash
+    context_window: 131072
+    supports_tools: true
+    supports_streaming: true
+    description: OpenCode Go (MiMo V2.6 Flash)
+
+  - alias: deepseek-v4.1-flash
+    provider: opencode-go
+    model_id: deepseek-v4.1-flash
+    context_window: 131072
+    supports_tools: true
+    supports_streaming: true
+    description: OpenCode Go (DeepSeek V4.1 Flash - needs Global region in console privacy)
+
   # ------------------------------------------------------------------ local
   - alias: ollama-coder
     provider: ollama

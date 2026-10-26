@@ -40,6 +40,7 @@ class UISettings:
     model: str | None = None
     permission_mode: str | None = None  # "strict" or "permissive"
     allow_list: list[str] = field(default_factory=list)
+    working_dir: str | None = None  # the project the session has open
 
     @classmethod
     def default(cls) -> UISettings:
@@ -48,6 +49,7 @@ class UISettings:
             model=None,  # Use default from config.yaml
             permission_mode=None,  # Use default from config.yaml
             allow_list=[],
+            working_dir=None,  # Tools fall back to the server's cwd
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -56,6 +58,7 @@ class UISettings:
             "model": self.model,
             "permission_mode": self.permission_mode,
             "allow_list": self.allow_list,
+            "working_dir": self.working_dir,
         }
 
     @classmethod
@@ -67,6 +70,7 @@ class UISettings:
             model=data.get("model"),
             permission_mode=data.get("permission_mode"),
             allow_list=data.get("allow_list", []),
+            working_dir=data.get("working_dir"),
         )
 
 

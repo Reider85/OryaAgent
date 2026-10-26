@@ -14,11 +14,20 @@ from app.api.llm import router as llm_router
 from app.api.memory import router as memory_router
 from app.api.metrics import router as metrics_router
 from app.api.sessions import router as sessions_router
+from app.core.logging_setup import install_file_logger, route_uvicorn_logs_to_root
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+
+
+def _configured_level() -> int:
+    """Numeric log level from ``settings.log_level`` (``LOG_LEVEL``)."""
+    from app.core.config import get_settings
+
+    name = str(get_settings().log_level or "INFO").upper()
+    return getattr(logging, name, logging.INFO)
 
 
 @asynccontextmanager
@@ -33,11 +42,19 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     running. The compaction worker sleeps
     ``settings.memory_compact_interval_s`` between passes (0 disables it)
     and never lets a failed pass kill the loop.
+
+    File logging is installed here, not at import time: uvicorn applies
+    its own ``dictConfig`` after importing the app, so only a post-startup
+    hook can route the ``uvicorn*`` loggers (and their ASGI tracebacks)
+    into ``logs/api.log``.
     """
     from app.core.cache import close_cache, init_cache
     from app.core.config import get_settings
     from app.core.memory.compactor import compaction_worker
     from app.db.session_log import projection_worker
+
+    install_file_logger("api.log", level=_configured_level())
+    route_uvicorn_logs_to_root()
 
     await init_cache()
     task = asyncio.create_task(projection_worker())

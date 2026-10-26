@@ -54,8 +54,9 @@ class _SessionStore:
 
 
 class _FakeMessage:
-    def __init__(self, content: str = "") -> None:
+    def __init__(self, content: str = "", actions: Any = None) -> None:
         self.content = content
+        self.actions = actions or []
         self.tokens: list[str] = []
         self.sent = 0
 
@@ -75,13 +76,13 @@ class _FakeCl:
         self.messages: list[_FakeMessage] = []
         self.panels: list[Any] = []
 
-    def Message(self, content: str = "", **_: Any) -> _FakeMessage:  # noqa: N802
-        message = _FakeMessage(content)
+    def Message(self, content: str = "", **kwargs: Any) -> _FakeMessage:  # noqa: N802
+        message = _FakeMessage(content, actions=kwargs.get("actions"))
         self.messages.append(message)
         return message
 
-    def ChatSettings(self, title: str = "", elements: Any = None) -> Any:  # noqa: N802
-        panel = SimpleNamespace(title=title, elements=elements)
+    def ChatSettings(self, inputs: Any = None, **_: Any) -> Any:  # noqa: N802
+        panel = SimpleNamespace(inputs=inputs or [], elements=inputs or [])
 
         async def _send() -> None:
             self.panels.append(panel)
@@ -183,6 +184,7 @@ def test_settings_payload_ships_panel_overrides() -> None:
         model="gpt-4o",
         permission_mode="permissive",
         allow_list=["read /tmp/*", "write *.py"],
+        working_dir="C:/projects/OryaAgent",
     )
 
     payload = ui.settings_payload(settings)
@@ -191,6 +193,7 @@ def test_settings_payload_ships_panel_overrides() -> None:
         "model": "gpt-4o",
         "permission_mode": "permissive",
         "allow_list": ["read /tmp/*", "write *.py"],
+        "working_dir": "C:/projects/OryaAgent",
     }
 
 
@@ -920,7 +923,8 @@ async def test_on_settings_update_persists_the_panel(
         {
             "Model": "gpt-4o",
             "Permission Mode": "permissive",
-            "Allow List (newline-separated patterns)": "read /tmp/*\n\nwrite *.py",
+            "Allow List": "read /tmp/*\n\nwrite *.py",
+            "Working directory": str(tmp_path / "project"),
         }
     )
 
@@ -929,8 +933,52 @@ async def test_on_settings_update_persists_the_panel(
         "model": "gpt-4o",
         "permission_mode": "permissive",
         "allow_list": ["read /tmp/*", "write *.py"],
+        "working_dir": str(tmp_path / "project"),
     }
     assert "apply from the next message" in fake_cl.messages[-1].content
+    assert str(tmp_path / "project") in fake_cl.messages[-1].content
+
+
+async def test_on_settings_update_blank_working_dir_clears_it(
+    fake_cl: _FakeCl, tmp_path: Path
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(
+        json.dumps({"working_dir": str(tmp_path)}), encoding="utf-8"
+    )
+
+    await ui.on_settings_update({"Working directory": "   "})
+
+    saved = json.loads(settings_file.read_text(encoding="utf-8"))
+    assert saved["working_dir"] is None
+
+
+async def test_show_settings_panel_uses_real_input_widgets(
+    fake_cl: _FakeCl, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Chainlit 2.x renders InputWidget instances only (dicts were dropped)."""
+    from chainlit.input_widget import Select, TextInput
+
+    monkeypatch.setattr(ui, "model_choices", lambda: ["glm-4.5-flash", "gpt-4o"])
+
+    await ui._show_settings_panel(
+        ui.UISettings(model="gpt-4o", working_dir="C:/projects/OryaAgent")
+    )
+
+    panel = fake_cl.panels[-1]
+    widgets = panel.inputs
+    by_id = {widget.id: widget for widget in widgets}
+    assert set(by_id) == {
+        "Model",
+        "Permission Mode",
+        "Allow List",
+        "Working directory",
+    }
+    assert isinstance(by_id["Model"], Select)
+    assert by_id["Model"].values == ["glm-4.5-flash", "gpt-4o"]
+    assert by_id["Model"].initial == "gpt-4o"
+    assert isinstance(by_id["Working directory"], TextInput)
+    assert by_id["Working directory"].initial == "C:/projects/OryaAgent"
 
 
 async def test_show_sidebar_lists_server_sessions(
@@ -953,9 +1001,10 @@ async def test_show_sidebar_lists_server_sessions(
 
     await ui._show_sidebar()
 
-    panel = fake_cl.panels[-1]
-    labels = [element.label for element in panel.elements]
+    message = fake_cl.messages[-1]
+    labels = [action.label for action in message.actions]
     assert labels == ["New session", "aaa-111", "My session"]
+    assert message.actions[1].payload == {"thread_id": "aaa-111"}
 
 
 async def test_show_sidebar_survives_an_api_failure(
@@ -968,8 +1017,8 @@ async def test_show_sidebar_survives_an_api_failure(
 
     await ui._show_sidebar()
 
-    panel = fake_cl.panels[-1]
-    assert [element.label for element in panel.elements] == ["New session"]
+    message = fake_cl.messages[-1]
+    assert [action.label for action in message.actions] == ["New session"]
 
 
 async def test_load_history_replays_user_and_assistant(fake_cl: _FakeCl) -> None:

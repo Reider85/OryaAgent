@@ -75,6 +75,7 @@ from app.core.security import (
     session_id_from_config,
     wrap_untrusted,
 )
+from app.core.workspace import current_workspace
 from app.tools._validators import validate_path
 
 logger = logging.getLogger(__name__)
@@ -397,7 +398,7 @@ async def bash(
     ] = 30.0,
     cwd: Annotated[
         str | None,
-        "Working directory (relative to workspace, or inside ~/.orya). If None, uses current working directory.",
+        "Working directory (relative to the session workspace, or inside ~/.orya). If None, uses the session workspace.",
     ] = None,
     env: Annotated[
         dict[str, str] | None,
@@ -425,8 +426,8 @@ async def bash(
     if timeout > 600:
         raise ToolException("timeout must be <= 600")
 
-    # Validate and resolve cwd
-    resolved_cwd = None
+    # Validate and resolve cwd (session workspace when not given)
+    resolved_cwd = current_workspace()
     if cwd:
         resolved_cwd = validate_path(cwd)
 

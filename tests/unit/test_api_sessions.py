@@ -872,3 +872,158 @@ def test_resume_stream_without_pending_is_409(
     )
 
     assert response.status_code == 409
+
+
+# --- graph-build failures (config errors must not surface as 500) -----------
+
+
+def test_graph_build_value_error_maps_to_400(
+    client: TestClient, fake_pool: FakePool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing API key is a fixable config error — 400 with the reason."""
+
+    def _explode(*args, **kwargs):
+        raise ValueError("No API key found for provider 'anthropic'.")
+
+    monkeypatch.setattr(api_sessions, "build_session_graph", _explode)
+
+    response = client.post("/sessions/s-1/messages", json={"content": "hi"})
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail.startswith("configuration error:")
+    assert "No API key found for provider 'anthropic'" in detail
+
+
+def test_graph_build_unexpected_error_maps_to_502(
+    client: TestClient, fake_pool: FakePool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _explode(*args, **kwargs):
+        raise RuntimeError("graph assembly exploded")
+
+    monkeypatch.setattr(api_sessions, "build_session_graph", _explode)
+
+    response = client.post("/sessions/s-1/messages", json={"content": "hi"})
+
+    assert response.status_code == 502
+    assert "graph build failed" in response.json()["detail"]
+
+
+def test_resume_graph_build_value_error_maps_to_400(
+    client: TestClient, fake_pool: FakePool, fake_graph, monkeypatch
+) -> None:
+    fake_graph.states = [_interrupted_state()]
+
+    def _explode(*args, **kwargs):
+        raise ValueError("Model alias 'nope' is not registered.")
+
+    monkeypatch.setattr(api_sessions, "build_session_graph", _explode)
+
+    response = client.post("/sessions/s-1/resume", json={"decision": "allow"})
+
+    assert response.status_code == 400
+    assert "configuration error" in response.json()["detail"]
+
+
+# --- working_dir («open project») --------------------------------------------
+
+
+def test_post_message_working_dir_opens_and_persists(
+    client: TestClient, fake_pool: FakePool, fake_graph, tmp_path: Path
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    response = client.post(
+        "/sessions/s-1/messages",
+        json={"content": "hi", "working_dir": str(project)},
+    )
+
+    assert response.status_code == 200
+    updates = [
+        args
+        for kind, q, args in fake_pool.executed
+        if kind == "fetchrow" and "UPDATE sessions" in q and "working_dir" in q
+    ]
+    assert updates, "expected the workspace to be persisted on the session"
+    assert updates[0] == ("s-1", str(project.resolve()))
+
+
+def test_post_message_missing_working_dir_is_400(
+    client: TestClient, fake_pool: FakePool, fake_graph, tmp_path: Path
+) -> None:
+    response = client.post(
+        "/sessions/s-1/messages",
+        json={"content": "hi", "working_dir": str(tmp_path / "does-not-exist")},
+    )
+
+    assert response.status_code == 400
+    assert "does not exist" in response.json()["detail"]
+
+
+def test_post_message_streaming_missing_working_dir_is_400(
+    client: TestClient, fake_pool: FakePool, fake_graph, tmp_path: Path
+) -> None:
+    """The workspace is validated before the SSE stream starts."""
+    response = client.post(
+        "/sessions/s-1/messages",
+        params={"stream": "true"},
+        json={"content": "hi", "working_dir": str(tmp_path / "gone")},
+    )
+
+    assert response.status_code == 400
+
+
+def test_post_message_uses_the_stored_workspace(
+    client: TestClient, fake_pool: FakePool, fake_graph, tmp_path: Path
+) -> None:
+    """A turn without a working_dir override reuses the session's project."""
+    project = tmp_path / "stored-project"
+    project.mkdir()
+    fake_pool.session_row["working_dir"] = str(project)
+
+    response = client.post("/sessions/s-1/messages", json={"content": "hi"})
+
+    assert response.status_code == 200
+    # no override -> nothing to persist, the stored value is kept
+    updates = [
+        args
+        for kind, q, args in fake_pool.executed
+        if kind == "fetchrow" and "UPDATE sessions" in q and "working_dir" in q
+    ]
+    assert updates == []
+
+
+def test_post_message_workspace_is_scoped_to_the_turn(
+    client: TestClient,
+    fake_pool: FakePool,
+    fake_graph,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ContextVar is bound while the run executes and cleared after."""
+    from app.core.workspace import current_workspace
+
+    project = tmp_path / "scoped"
+    project.mkdir()
+    seen: list[Path] = []
+
+    async def _astream_events(input, config=None, *, version=None):
+        seen.append(current_workspace())
+        yield _ev("on_chat_model_stream", data={"chunk": AIMessageChunk(content="ok")})
+
+    def _build(thread_id, checkpointer, *, model=None, policy=None):
+        graph = FakeGraph([], [_ok_state()])
+        graph.astream_events = _astream_events  # type: ignore[method-assign]
+        return graph
+
+    monkeypatch.setattr(api_sessions, "build_session_graph", _build)
+
+    response = client.post(
+        "/sessions/s-1/messages",
+        json={"content": "hi", "working_dir": str(project)},
+    )
+
+    assert response.status_code == 200
+    assert seen == [project.resolve()]
+    assert current_workspace() == Path.cwd()  # released after the turn

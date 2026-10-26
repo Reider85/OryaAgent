@@ -58,9 +58,11 @@ from typing import Any
 
 import chainlit as cl
 import httpx
+from chainlit.input_widget import Select, TextInput
 
 from app.core.agent import PendingInterrupt, content_text, preview
 from app.core.config import get_settings
+from app.core.logging_setup import install_file_logger
 from app.ui.interrupt import ask_permission
 from app.ui.settings import (
     UISettings,
@@ -70,6 +72,15 @@ from app.ui.settings import (
 )
 
 logger = logging.getLogger(__name__)
+
+# logs/ui.log — the start scripts' stdout/stderr redirect loses the handles
+# of the uv launcher on Windows, so the app writes its own file log.
+install_file_logger(
+    "ui.log",
+    level=getattr(
+        logging, str(get_settings().log_level or "INFO").upper(), logging.INFO
+    ),
+)
 
 #: No connect/write deadline on reads — a turn may stream for minutes.
 _API_TIMEOUT = httpx.Timeout(10.0, read=None)
@@ -115,6 +126,7 @@ def settings_payload(settings: UISettings) -> dict[str, Any]:
         "model": settings.model,
         "permission_mode": settings.permission_mode,
         "allow_list": list(settings.allow_list),
+        "working_dir": settings.working_dir,
     }
 
 
@@ -539,8 +551,14 @@ async def on_chat_start() -> None:
 
 
 async def _show_sidebar() -> None:
-    """Sidebar: new-session button plus the server's session list (M-17)."""
-    elements: list[cl.Action] = [
+    """Session switcher: a message with per-session action buttons (M-17).
+
+    Chainlit 2.x renders only ``InputWidget`` instances inside
+    ``ChatSettings`` (dict-style panels were silently dropped and showed
+    nothing), so the session list travels as a regular message with
+    ``cl.Action`` buttons instead.
+    """
+    actions: list[cl.Action] = [
         cl.Action(name="new_session", payload={"thread_id": None}, label="New session")
     ]
     sessions = await _list_sessions(make_client()) or []
@@ -549,58 +567,82 @@ async def _show_sidebar() -> None:
         if not session_id:
             continue
         label = str(session.get("title") or session_id[:8])
-        elements.append(
+        actions.append(
             cl.Action(
                 name="switch_session",
                 payload={"thread_id": session_id},
                 label=label,
             )
         )
-    await cl.ChatSettings(title="Sessions", elements=elements).send()
+    await cl.Message(
+        content="**Sessions** — pick one or start a new session:",
+        actions=actions,
+    ).send()
 
 
 async def _show_settings_panel(settings: UISettings) -> None:
-    """Settings panel: model, permission mode and allow-list (M-17)."""
-    current_model = settings.model or "default"
-    current_mode = settings.permission_mode or "strict"
-    elements: list[dict[str, Any]] = [
-        {
-            "label": "Model",
-            "type": "select",
-            "options": model_choices(),
-            "default": current_model,
-        },
-        {
-            "label": "Permission Mode",
-            "type": "select",
-            "options": [("strict", "Strict"), ("permissive", "Permissive")],
-            "default": current_mode,
-        },
-        {
-            "label": "Allow List (newline-separated patterns)",
-            "type": "textarea",
-            "default": "\n".join(settings.allow_list),
-        },
+    """Settings panel: model, permission mode, allow-list, workspace (M-17).
+
+    Chainlit 2.x requires real ``InputWidget`` objects; a ``Select`` takes
+    its default through ``initial_value`` (``initial`` is overwritten by
+    the widget's own ``__post_init__``).
+    """
+    choices = model_choices() or ["default"]
+    widgets: list[Any] = [
+        Select(
+            id="Model",
+            label="Model",
+            values=choices,
+            initial_value=settings.model if settings.model in choices else None,
+        ),
+        Select(
+            id="Permission Mode",
+            label="Permission Mode",
+            values=["strict", "permissive"],
+            initial_value=settings.permission_mode or "strict",
+        ),
+        TextInput(
+            id="Allow List",
+            label="Allow List (newline-separated patterns)",
+            initial="\n".join(settings.allow_list),
+            multiline=True,
+        ),
+        TextInput(
+            id="Working directory",
+            label="Working directory (project to open; blank = server cwd)",
+            initial=settings.working_dir or "",
+        ),
     ]
-    await cl.ChatSettings(title="Settings", elements=elements).send()
+    await cl.ChatSettings(widgets).send()
 
 
 @cl.on_settings_update
 async def on_settings_update(settings_data: dict) -> None:
-    """Persist the settings panel (applied on the next request, M-24)."""
+    """Persist the settings panel (applied on the next request, M-24).
+
+    Keys are the widget ids sent by :func:`_show_settings_panel`.
+    """
     settings = load_settings()
     settings.model = settings_data.get("Model")
     settings.permission_mode = settings_data.get("Permission Mode")
-    allow_list = settings_data.get("Allow List (newline-separated patterns)", "")
+    allow_list = str(settings_data.get("Allow List") or "")
     settings.allow_list = [
         line.strip() for line in allow_list.split("\n") if line.strip()
     ]
+    working_dir = str(settings_data.get("Working directory") or "").strip()
+    settings.working_dir = working_dir or None
     save_settings(settings)
     logger.info(
-        "Settings updated: model=%s mode=%s", settings.model, settings.permission_mode
+        "Settings updated: model=%s mode=%s working_dir=%s",
+        settings.model,
+        settings.permission_mode,
+        settings.working_dir,
+    )
+    workspace_note = (
+        f"\nProject: `{settings.working_dir}`" if settings.working_dir else ""
     )
     await cl.Message(
-        content="Settings saved — they apply from the next message."
+        content=f"Settings saved — they apply from the next message.{workspace_note}"
     ).send()
 
 
