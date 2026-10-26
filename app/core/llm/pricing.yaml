@@ -26,6 +26,8 @@ pricing:
   glm-4-plus: {input_per_1k: 0.0005, output_per_1k: 0.0005}
   glm-4.5: {input_per_1k: 0.0006, output_per_1k: 0.0006}
   glm-4-flash: {input_per_1k: 0.0, output_per_1k: 0.0}
+  glm-4.5-flash: {input_per_1k: 0.0, output_per_1k: 0.0}
+  glm-5.3-flash: {input_per_1k: 0.0, output_per_1k: 0.0}
   kimi-k2: {input_per_1k: 0.0006, output_per_1k: 0.0025}
   MiniMax-Text-01: {input_per_1k: 0.001, output_per_1k: 0.001}
   yi-large: {input_per_1k: 0.0004, output_per_1k: 0.0004}

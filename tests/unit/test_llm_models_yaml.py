@@ -62,6 +62,26 @@ def test_capabilities_yaml_shape():
     assert entry.suggests == "deepseek-chat"
 
 
+def test_zai_glm_flash_aliases_registered():
+    models = load_models()
+    flash = models["glm-4.5-flash"]
+    assert flash.provider == "zai"
+    assert flash.model_id == "glm-4.5-flash"
+    assert flash.supports_tools is True
+
+    successor = models["glm-5.3-flash"]
+    assert successor.provider == "zai"
+    assert successor.model_id == "glm-5.3-flash"
+
+    caps = load_capabilities()["zai"]
+    assert caps["glm-4.5-flash"].supports_tools is True
+    assert caps["glm-5.3-flash"].supports_tools is True
+
+    pricing = load_pricing()
+    assert pricing["glm-4.5-flash"].input_per_1k == 0.0
+    assert pricing["glm-5.3-flash"].output_per_1k == 0.0
+
+
 def test_pricing_yaml_covers_default_models():
     pricing = load_pricing()
     models = load_models()

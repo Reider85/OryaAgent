@@ -193,6 +193,22 @@ models:
     suggests: glm-4.5
     description: GLM-Zero — reasoning without tool-calling
 
+  - alias: glm-4.5-flash
+    provider: zai
+    model_id: glm-4.5-flash
+    context_window: 128000
+    supports_tools: true
+    supports_streaming: true
+    description: Z.AI GLM-4.5-Flash (free tier)
+
+  - alias: glm-5.3-flash
+    provider: zai
+    model_id: glm-5.3-flash
+    context_window: 128000
+    supports_tools: true
+    supports_streaming: true
+    description: Z.AI GLM-5.3-Flash (current free flash successor)
+
   - alias: mimo-7b-rl
     provider: mimo
     model_id: mimo-7b-rl

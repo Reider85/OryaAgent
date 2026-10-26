@@ -90,6 +90,25 @@ def test_openrouter_has_attribution_headers():
     assert "X-Title" in spec.extra_headers
 
 
+def test_gateway_and_zai_providers_present():
+    providers = load_providers()
+    zen = providers["opencode-zen"]
+    assert zen.adapter == "openai_compat"
+    assert zen.base_url == "https://opencode.ai/inference/v1"
+    assert zen.env_var == "OPENCODE_ZEN_API_KEY"
+
+    go = providers["opencode-go"]
+    assert go.adapter == "openai_compat"
+    assert go.base_url == "https://opencode.ai/inference/go/v1"
+    assert go.env_var == "OPENCODE_GO_API_KEY"
+
+    zai = providers["zai"]
+    assert zai.adapter == "openai_compat"
+    assert zai.base_url == "https://api.z.ai/api/paas/v4"
+    assert zai.env_var == "ZAI_API_KEY"
+    assert zai.default_model == "glm-4.5-flash"
+
+
 def test_provider_spec_validates_adapter_pattern():
     from pydantic import ValidationError
 

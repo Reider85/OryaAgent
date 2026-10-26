@@ -160,6 +160,14 @@ providers:
     tier: chinese
     description: Baidu ERNIE via Qianfan OpenAI-compatible endpoint
 
+  zai:
+    adapter: openai_compat
+    base_url: https://api.z.ai/api/paas/v4
+    env_var: ZAI_API_KEY
+    default_model: glm-4.5-flash
+    tier: chinese
+    description: Z.AI international GLM endpoint (glm-4.5-flash free tier)
+
   # ------------------------------------------------------------- aggregators
   openrouter:
     adapter: openai_compat
@@ -227,6 +235,22 @@ providers:
     default_model: Meta-Llama-3.3-70B-Instruct
     tier: aggregator
     description: SambaNova (RDU acceleration)
+
+  opencode-zen:
+    adapter: openai_compat
+    base_url: https://opencode.ai/inference/v1
+    env_var: OPENCODE_ZEN_API_KEY
+    default_model: deepseek-v4.1-flash-free
+    tier: aggregator
+    description: OpenCode Zen (Console gateway — curated + free models)
+
+  opencode-go:
+    adapter: openai_compat
+    base_url: https://opencode.ai/inference/go/v1
+    env_var: OPENCODE_GO_API_KEY
+    default_model: deepseek-v4.1-flash
+    tier: aggregator
+    description: OpenCode Go (subscription gateway for open coding models)
 
   # ------------------------------------------------------------------ local
   ollama:

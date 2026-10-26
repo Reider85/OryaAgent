@@ -18,11 +18,13 @@ from app.core.llm.registry import (
     load_providers,
     resolve_model,
 )
+from app.core.llm.remote import fetch_remote_models
 
 __all__ = [
     "get_llm",
     "list_models",
     "list_providers",
+    "fetch_remote_models",
     "load_providers",
     "load_models",
     "load_capabilities",

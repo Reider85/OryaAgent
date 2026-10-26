@@ -11,6 +11,12 @@ from fastapi import APIRouter, HTTPException
 from app.core.llm.adapters import check_lmstudio, check_ollama, check_openai_compat
 from app.core.llm.factory import list_models, list_providers
 from app.core.llm.registry import load_providers
+from app.core.llm.remote import (
+    MissingApiKeyError,
+    RemoteModelsError,
+    UnknownProviderError,
+    fetch_remote_models,
+)
 
 router = APIRouter(prefix="/llm", tags=["llm"])
 
@@ -25,6 +31,22 @@ async def providers() -> dict:
 async def models() -> dict:
     """Declarative model alias registry from models.yaml."""
     return {"models": list_models()}
+
+
+@router.get("/models/remote/{provider}")
+async def remote_models(provider: str) -> dict:
+    """Live model list from the provider's OpenAI-compatible /models endpoint.
+
+    200 on success; 404 unknown provider; 400 no API key; 503 unreachable.
+    """
+    try:
+        return await fetch_remote_models(provider)
+    except UnknownProviderError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except MissingApiKeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RemoteModelsError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/health/{provider}")
