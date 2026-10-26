@@ -16,6 +16,8 @@ and the future Next.js frontend. Both layers reuse the shared runtime in
 * ``POST   /sessions/{id}/resume``   — answer a pending interrupt
   (``decision``: ``allow`` / ``deny`` / ``always``), JSON or SSE with
   the same flag;
+* ``PATCH  /sessions/{id}``          — open/close the project directory
+  (``working_dir``; the UI's «Open project» browser uses it);
 * ``DELETE /sessions/{id}``          — soft-delete (``status='closed'``).
 
 Settings overrides: ``messages``/``resume`` accept the UI settings-panel
@@ -133,6 +135,17 @@ class ResumeRequest(TurnSettings):
     """Request body for ``POST /sessions/{id}/resume``."""
 
     decision: Literal["allow", "deny", "always"]
+
+
+class SessionPatch(BaseModel):
+    """Request body for ``PATCH /sessions/{id}`` (the «open project» seam).
+
+    ``working_dir`` opens a project directory for the session (validated
+    like the per-turn override, persisted on the row); ``None`` closes
+    the project so the tools fall back to the server cwd.
+    """
+
+    working_dir: str | None = None
 
 
 def _policy_for(
@@ -533,6 +546,32 @@ async def post_resume(
         await _db(log_message(session_id, "assistant", result.reply))
 
     return _result_dict(session_id, result, degraded)
+
+
+@router.patch("/{session_id}")
+async def patch_session(session_id: str, body: SessionPatch) -> dict:
+    """Open or close the session's project directory («open project»).
+
+    ``working_dir`` is validated through ``open_workspace`` (400 on an
+    unusable path) and persisted on the session row; ``None`` closes the
+    project so the tools fall back to the server cwd. Returns the
+    updated row — the UI's folder browser applies the pick with this
+    endpoint before any turn runs.
+    """
+    _require_session(await _db(get_session(session_id)), session_id)
+    if body.working_dir is None:
+        row = await _db(set_session_working_dir(session_id, None))
+        _require_session(row, session_id)
+        logger.info("session project closed: %s", session_id)
+        return row
+    try:
+        workspace = open_workspace(body.working_dir)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    row = await _db(set_session_working_dir(session_id, str(workspace)))
+    _require_session(row, session_id)
+    logger.info("session project opened: %s -> %s", session_id, workspace)
+    return row
 
 
 @router.delete("/{session_id}")

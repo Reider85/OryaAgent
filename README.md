@@ -204,6 +204,8 @@ A background projection worker starts with the FastAPI app (lifespan in `app/mai
 | `GET /sessions/{id}` | Metadata + typed `messages` (M-14 log), 404 when unknown |
 | `POST /sessions/{id}/messages` | Run one full turn — JSON by default, SSE stream with `?stream=true` (see below) |
 | `POST /sessions/{id}/resume` | Answer a pending permission interrupt: `{decision: "allow"\|"deny"\|"always"}`, 409 when nothing is pending; also streamable with `?stream=true` |
+| `PATCH /sessions/{id}` | Open/close the project directory: `{working_dir: "..."}` (validated, persisted on the row) or `{working_dir: null}` to close; 400 on an unusable path |
+| `GET /workspace/browse?path=…` | Subdirectory listing for the UI's «Open project» folder picker — dirs only, sorted, capped at 200 (`truncated: true`); default path is the server cwd; `parent: null` at a filesystem root |
 | `DELETE /sessions/{id}` | Soft-delete — flips `sessions.status` to `closed`, history kept for audit |
 
 `POST /sessions/{id}/messages` accepts `{"content": "..."}` and returns:
@@ -224,6 +226,10 @@ A background projection worker starts with the FastAPI app (lifespan in `app/mai
 - DB failures return `503 {"detail": "database unavailable"}`; a failed run returns `502`.
 - The permission policy is cached per session process-wide, so «Approve & don't ask again» (M-13 session allowlist) survives across API calls within the process lifetime.
 - Interactive docs: `http://localhost:8000/docs` (OpenAPI).
+
+### Opening a project from the chat (folder picker)
+
+The Chainlit UI opens a project folder in the main chat window: the **Open project** button (next to the session list) or the `/open` command (`/open /path/to/project` opens a path directly) starts a clickable folder browser — subdirectories, `.. (up)`, **Open this folder**, **Cancel**. The pick is applied immediately (`PATCH /sessions/{id}`) and saved as the UI default, so new sessions open the same project; the settings panel's *Working directory* field stays in sync. The browser lists directories only, through `GET /workspace/browse` — the Chainlit process never touches the filesystem itself.
 
 ### SSE streaming (M-24)
 

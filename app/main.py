@@ -14,6 +14,7 @@ from app.api.llm import router as llm_router
 from app.api.memory import router as memory_router
 from app.api.metrics import router as metrics_router
 from app.api.sessions import router as sessions_router
+from app.api.workspace import router as workspace_router
 from app.core.logging_setup import install_file_logger, route_uvicorn_logs_to_root
 
 logging.basicConfig(
@@ -87,6 +88,7 @@ app.include_router(sessions_router)
 app.include_router(learn_router)
 app.include_router(memory_router)
 app.include_router(metrics_router)
+app.include_router(workspace_router)
 
 
 @app.get("/health")

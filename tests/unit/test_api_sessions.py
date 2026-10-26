@@ -90,7 +90,10 @@ class FakePool:
             if self.session_row is None:
                 return None
             row = dict(self.session_row)
-            row["status"] = args[1]
+            if "working_dir" in query:
+                row["working_dir"] = args[1]
+            else:
+                row["status"] = args[1]
             return row
         if "INSERT INTO messages" in query:
             return {"id": 42}
@@ -1027,3 +1030,82 @@ def test_post_message_workspace_is_scoped_to_the_turn(
     assert response.status_code == 200
     assert seen == [project.resolve()]
     assert current_workspace() == Path.cwd()  # released after the turn
+
+
+# --- PATCH /sessions/{id} («open project») -----------------------------------
+
+
+def test_patch_session_opens_and_persists_working_dir(
+    client: TestClient, fake_pool: FakePool, tmp_path: Path
+) -> None:
+    project = tmp_path / "patched"
+    project.mkdir()
+
+    response = client.patch("/sessions/s-1", json={"working_dir": str(project)})
+
+    assert response.status_code == 200
+    assert response.json()["working_dir"] == str(project.resolve())
+    updates = [
+        args
+        for kind, q, args in fake_pool.executed
+        if kind == "fetchrow" and "UPDATE sessions" in q and "working_dir" in q
+    ]
+    assert updates == [("s-1", str(project.resolve()))]
+
+
+def test_patch_session_missing_dir_is_400(
+    client: TestClient, fake_pool: FakePool, tmp_path: Path
+) -> None:
+    response = client.patch(
+        "/sessions/s-1", json={"working_dir": str(tmp_path / "gone")}
+    )
+
+    assert response.status_code == 400
+    assert "does not exist" in response.json()["detail"]
+    # nothing was written
+    assert not any(
+        "working_dir" in q for kind, q, _ in fake_pool.executed if kind == "fetchrow"
+    )
+
+
+def test_patch_session_closes_the_project_with_null(
+    client: TestClient, fake_pool: FakePool, tmp_path: Path
+) -> None:
+    project = tmp_path / "was-open"
+    project.mkdir()
+    fake_pool.session_row["working_dir"] = str(project)
+
+    response = client.patch("/sessions/s-1", json={"working_dir": None})
+
+    assert response.status_code == 200
+    assert response.json()["working_dir"] is None
+    updates = [
+        args
+        for kind, q, args in fake_pool.executed
+        if kind == "fetchrow" and "UPDATE sessions" in q and "working_dir" in q
+    ]
+    assert updates == [("s-1", None)]
+
+
+def test_patch_session_unknown_is_404(
+    client: TestClient, fake_pool: FakePool, tmp_path: Path
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    fake_pool.session_row = None
+
+    response = client.patch("/sessions/nope", json={"working_dir": str(project)})
+
+    assert response.status_code == 404
+
+
+def test_patch_session_db_down_is_503(
+    client: TestClient, fake_pool: FakePool, tmp_path: Path
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    fake_pool.fail = True
+
+    response = client.patch("/sessions/s-1", json={"working_dir": str(project)})
+
+    assert response.status_code == 503

@@ -59,6 +59,7 @@ class _FakeMessage:
         self.actions = actions or []
         self.tokens: list[str] = []
         self.sent = 0
+        self.updated = 0
 
     async def stream_token(self, token: str) -> None:
         self.tokens.append(token)
@@ -66,6 +67,9 @@ class _FakeMessage:
 
     async def send(self) -> None:
         self.sent += 1
+
+    async def update(self) -> None:
+        self.updated += 1
 
 
 class _FakeCl:
@@ -411,6 +415,10 @@ def test_handlers_registered() -> None:
     assert callable(ui.on_settings_update)
     assert callable(ui.on_new_session)
     assert callable(ui.on_switch_session)
+    assert callable(ui.on_open_project)
+    assert callable(ui.on_open_project_nav)
+    assert callable(ui.on_open_project_open)
+    assert callable(ui.on_open_project_cancel)
 
 
 async def test_on_chat_start_creates_session_via_api(
@@ -1003,8 +1011,9 @@ async def test_show_sidebar_lists_server_sessions(
 
     message = fake_cl.messages[-1]
     labels = [action.label for action in message.actions]
-    assert labels == ["New session", "aaa-111", "My session"]
-    assert message.actions[1].payload == {"thread_id": "aaa-111"}
+    assert labels == ["New session", "Open project", "aaa-111", "My session"]
+    assert message.actions[2].payload == {"thread_id": "aaa-111"}
+    assert "Project: `(server cwd)`" in message.content
 
 
 async def test_show_sidebar_survives_an_api_failure(
@@ -1018,7 +1027,10 @@ async def test_show_sidebar_survives_an_api_failure(
     await ui._show_sidebar()
 
     message = fake_cl.messages[-1]
-    assert [action.label for action in message.actions] == ["New session"]
+    assert [action.label for action in message.actions] == [
+        "New session",
+        "Open project",
+    ]
 
 
 async def test_load_history_replays_user_and_assistant(fake_cl: _FakeCl) -> None:
@@ -1047,3 +1059,206 @@ async def test_load_history_returns_false_for_unknown_session() -> None:
     client = _client_for(lambda request: httpx.Response(404, json={"detail": "nope"}))
 
     assert await ui._load_history(client, "missing") is False
+
+
+# --- «Open project» folder browser ------------------------------------------------
+
+
+def _browse_payload(
+    path: str = "/proj", parent: str | None = "/home", names: tuple[str, ...] = ()
+) -> dict[str, Any]:
+    return {
+        "path": path,
+        "parent": parent,
+        "dirs": [{"name": name, "path": f"{path}/{name}"} for name in names],
+        "truncated": False,
+    }
+
+
+def test_browser_actions_include_dirs_up_open_and_cancel() -> None:
+    data = _browse_payload(parent="/home", names=("src", "docs"))
+
+    actions = ui._browser_actions(data)
+
+    assert [(a.name, a.label) for a in actions] == [
+        ("open_project_nav", "src"),
+        ("open_project_nav", "docs"),
+        ("open_project_nav", ".. (up)"),
+        ("open_project_open", "Open this folder"),
+        ("open_project_cancel", "Cancel"),
+    ]
+    assert actions[0].payload == {"path": "/proj/src"}
+    assert actions[2].payload == {"path": "/home"}
+    assert actions[3].payload == {"path": "/proj"}
+
+
+def test_browser_actions_hide_up_at_a_root() -> None:
+    actions = ui._browser_actions(_browse_payload(parent=None))
+
+    assert [a.name for a in actions] == [
+        "open_project_open",
+        "open_project_cancel",
+    ]
+
+
+def test_browser_content_reports_path_and_truncation() -> None:
+    data = _browse_payload(path="/proj")
+    data["truncated"] = True
+
+    content = ui._browser_content(data)
+
+    assert "`/proj`" in content
+    assert "truncated" in content
+
+
+async def test_open_project_button_starts_the_browser(
+    fake_cl: _FakeCl, patch_client, tmp_path: Path
+) -> None:
+    requests = patch_client(
+        lambda request: httpx.Response(200, json=_browse_payload(names=("app",)))
+    )
+
+    await ui.on_open_project(SimpleNamespace(payload={}))
+
+    assert requests[0].url.path == "/workspace/browse"
+    message = fake_cl.user_session.get("project_browser")
+    assert message is fake_cl.messages[-1]
+    assert "Open this folder" in [a.label for a in message.actions]
+
+
+async def test_open_project_nav_updates_in_place(
+    fake_cl: _FakeCl, patch_client
+) -> None:
+    first = ui.cl.Message(  # type: ignore[attr-defined]
+        content="old", actions=[]
+    )
+    fake_cl.user_session.set("project_browser", first)
+    requests = patch_client(
+        lambda request: httpx.Response(200, json=_browse_payload(names=("lib",)))
+    )
+
+    await ui.on_open_project_nav(SimpleNamespace(payload={"path": "/proj/src"}))
+
+    assert requests[0].url.params["path"] == "/proj/src"
+    assert first.updated == 1
+    assert "lib" in [a.label for a in first.actions]
+
+
+async def test_open_project_open_persists_and_saves_default(
+    fake_cl: _FakeCl, patch_client, tmp_path: Path
+) -> None:
+    fake_cl.user_session.set("thread_id", "sess-1")
+    browser = ui.cl.Message(content="browser", actions=[])  # type: ignore[attr-defined]
+    fake_cl.user_session.set("project_browser", browser)
+    project = tmp_path / "opened"
+    project.mkdir()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/sessions/sess-1"
+        assert request.method == "PATCH"
+        return httpx.Response(
+            200, json={"session_id": "sess-1", "working_dir": str(project.resolve())}
+        )
+
+    requests = patch_client(handler)
+
+    await ui.on_open_project_open(SimpleNamespace(payload={"path": str(project)}))
+
+    assert json.loads(requests[0].content) == {"working_dir": str(project)}
+    saved = ui.load_settings()
+    assert saved.working_dir == str(project.resolve())
+    assert "Project opened" in browser.content
+    assert browser.updated == 1
+
+
+async def test_open_project_open_400_keeps_the_old_default(
+    fake_cl: _FakeCl, patch_client, tmp_path: Path
+) -> None:
+    fake_cl.user_session.set("thread_id", "sess-1")
+    browser = ui.cl.Message(content="browser", actions=[])  # type: ignore[attr-defined]
+    fake_cl.user_session.set("project_browser", browser)
+
+    patch_client(lambda request: httpx.Response(400, json={"detail": "does not exist"}))
+
+    await ui.on_open_project_open(SimpleNamespace(payload={"path": "/gone"}))
+
+    saved = ui.load_settings()
+    assert saved.working_dir is None  # untouched
+    assert "Cannot open" in browser.content
+
+
+async def test_open_project_cancel_dismisses_the_browser(
+    fake_cl: _FakeCl, patch_client
+) -> None:
+    browser = ui.cl.Message(content="browser", actions=[])  # type: ignore[attr-defined]
+    fake_cl.user_session.set("project_browser", browser)
+    patch_client(lambda request: httpx.Response(200, json={}))
+
+    await ui.on_open_project_cancel(SimpleNamespace(payload={}))
+
+    assert browser.content == "Open project cancelled."
+    assert browser.actions == []
+    assert browser.updated == 1
+
+
+async def test_open_command_starts_the_browser(fake_cl: _FakeCl, patch_client) -> None:
+    fake_cl.user_session.set("thread_id", "sess-1")
+    requests = patch_client(
+        lambda request: httpx.Response(200, json=_browse_payload(names=("app",)))
+    )
+
+    await ui.on_message(ui.cl.Message(content="/open"))  # type: ignore[arg-type]
+
+    assert requests[0].url.path == "/workspace/browse"
+    assert fake_cl.user_session.get("project_browser") is not None
+
+
+async def test_open_command_with_a_path_opens_directly(
+    fake_cl: _FakeCl, patch_client, tmp_path: Path
+) -> None:
+    fake_cl.user_session.set("thread_id", "sess-1")
+    project = tmp_path / "direct"
+    project.mkdir()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/sessions/sess-1"
+        return httpx.Response(200, json={"working_dir": str(project.resolve())})
+
+    requests = patch_client(handler)
+
+    await ui.on_message(
+        ui.cl.Message(content=f"/open {project}")  # type: ignore[arg-type]
+    )
+
+    assert requests[0].method == "PATCH"
+    assert ui.load_settings().working_dir == str(project.resolve())
+    assert "Project opened" in fake_cl.messages[-1].content
+
+
+async def test_open_command_reports_an_unreachable_api(
+    fake_cl: _FakeCl, patch_client
+) -> None:
+    fake_cl.user_session.set("thread_id", "sess-1")
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    patch_client(refuse)
+
+    await ui.on_message(ui.cl.Message(content="/open"))  # type: ignore[arg-type]
+
+    assert "FastAPI server unreachable" in fake_cl.messages[-1].content
+
+
+async def test_create_session_ships_the_saved_working_dir(
+    monkeypatch: pytest.MonkeyPatch, patch_client, tmp_path: Path
+) -> None:
+    ui.save_settings(ui.UISettings(working_dir=str(tmp_path)))
+    requests = patch_client(
+        lambda request: httpx.Response(200, json={"session_id": "sess-9"})
+    )
+
+    thread_id, degraded = await ui._create_session(ui.make_client())  # type: ignore[arg-type]
+
+    assert thread_id == "sess-9" and not degraded
+    assert json.loads(requests[0].content) == {"working_dir": str(tmp_path)}

@@ -288,12 +288,19 @@ async def _stream(
 async def _create_session(client: httpx.AsyncClient) -> tuple[str, bool]:
     """Create a session through ``POST /sessions`` (M-24).
 
+    The UI's saved project (``settings.working_dir``) ships with the
+    create call so a new session opens the last opened folder right away.
+
     Returns ``(thread_id, degraded)``. A database outage (503) falls back
     to a locally generated id — the stream path logs best-effort and the
     chat keeps working without persistence, exactly like the pre-M-24
     UI did.
     """
-    response = await client.post("/sessions", json={})
+    settings = load_settings()
+    payload: dict[str, Any] = {}
+    if settings.working_dir:
+        payload["working_dir"] = settings.working_dir
+    response = await client.post("/sessions", json=payload)
     if response.status_code == 200:
         return str(response.json().get("session_id") or uuid.uuid4()), False
     if response.status_code == 503:
@@ -512,6 +519,184 @@ def _render_memory(action: str, data: dict[str, Any]) -> str:
     return str(data.get("markdown") or "")
 
 
+# --- «Open project» folder browser --------------------------------------------
+
+
+def _browser_actions(data: dict[str, Any]) -> list[cl.Action]:
+    """Action buttons for one ``GET /workspace/browse`` listing."""
+    actions = [
+        cl.Action(
+            name="open_project_nav",
+            payload={"path": entry["path"]},
+            label=str(entry["name"]),
+        )
+        for entry in data.get("dirs") or []
+    ]
+    parent = data.get("parent")
+    if parent:
+        actions.append(
+            cl.Action(
+                name="open_project_nav", payload={"path": parent}, label=".. (up)"
+            )
+        )
+    actions.append(
+        cl.Action(
+            name="open_project_open",
+            payload={"path": data.get("path")},
+            label="Open this folder",
+        )
+    )
+    actions.append(cl.Action(name="open_project_cancel", payload={}, label="Cancel"))
+    return actions
+
+
+def _browser_content(data: dict[str, Any]) -> str:
+    """Message body above the folder buttons."""
+    dirs = data.get("dirs") or []
+    note = " (listing truncated)" if data.get("truncated") else ""
+    empty = "\n\n_(no subfolders — open this folder or go up)_" if not dirs else ""
+    return f"**Open project** — pick a folder{note}:\n\n`{data.get('path')}`{empty}"
+
+
+async def _browse(path: str | None = None) -> dict[str, Any] | None:
+    """Fetch one directory listing; ``None`` after an error message."""
+    try:
+        async with make_client() as client:
+            params = {"path": path} if path else {}
+            response = await client.get("/workspace/browse", params=params)
+    except httpx.HTTPError as exc:
+        logger.exception("browse request failed (path=%s)", path)
+        await cl.Message(
+            content=(
+                f"FastAPI server unreachable at `{api_url()}` ({exc}) — "
+                "start it with `make dev` and retry."
+            )
+        ).send()
+        return None
+    if response.status_code != 200:
+        try:
+            detail = str(response.json().get("detail") or response.text)
+        except ValueError:
+            detail = response.text
+        await cl.Message(content=f"Cannot open `{path}`: {detail}").send()
+        return None
+    return response.json()
+
+
+async def _show_browser(data: dict[str, Any]) -> None:
+    """Send a fresh browser message and remember it for in-place updates."""
+    message = cl.Message(content=_browser_content(data), actions=_browser_actions(data))
+    await message.send()
+    cl.user_session.set("project_browser", message)
+
+
+async def _update_browser(content: str) -> None:
+    """Replace the browser message with ``content`` (no buttons)."""
+    message = cl.user_session.get("project_browser")
+    if message is None:
+        await cl.Message(content=content).send()
+        return
+    message.content = content
+    message.actions = []
+    await message.update()
+
+
+async def _start_project_browser(path: str | None = None) -> None:
+    """Open the folder browser at ``path`` (default: the current project)."""
+    if path is None:
+        path = load_settings().working_dir
+    data = await _browse(path)
+    if data is not None:
+        await _show_browser(data)
+
+
+async def _apply_project(path: str) -> None:
+    """Open ``path``: persist it on the session row + save as UI default.
+
+    The session patch is best-effort — the UI default is saved even when
+    the database is down (the turn-level override still applies), and a
+    400 (bad path) keeps both the old default and the old session row.
+    """
+    thread_id = cl.user_session.get("thread_id")
+    resolved = path
+    if thread_id:
+        try:
+            async with make_client() as client:
+                response = await client.patch(
+                    f"/sessions/{thread_id}", json={"working_dir": path}
+                )
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "project open not persisted (thread_id=%s): %s", thread_id, exc
+            )
+        else:
+            if response.status_code == 400:
+                try:
+                    detail = str(response.json().get("detail") or response.text)
+                except ValueError:
+                    detail = response.text
+                await _update_browser(f"Cannot open `{path}`: {detail}")
+                return
+            if response.status_code == 200:
+                resolved = str(response.json().get("working_dir") or path)
+            else:
+                logger.warning(
+                    "project open: unexpected status %s (thread_id=%s)",
+                    response.status_code,
+                    thread_id,
+                )
+    settings = load_settings()
+    settings.working_dir = resolved
+    save_settings(settings)
+    logger.info("project opened: %s (thread_id=%s)", resolved, thread_id)
+    await _update_browser(f"✅ Project opened: `{resolved}`")
+
+
+@cl.action_callback("open_project")
+async def on_open_project(action: cl.Action) -> None:
+    """Sidebar button: start the folder browser at the current project."""
+    await _start_project_browser()
+
+
+@cl.action_callback("open_project_nav")
+async def on_open_project_nav(action: cl.Action) -> None:
+    """Browser button: re-list at the clicked directory (in-place update)."""
+    path = str(action.payload.get("path") or "")
+    data = await _browse(path)
+    if data is None:
+        return
+    message = cl.user_session.get("project_browser")
+    if message is None:
+        await _show_browser(data)
+        return
+    message.content = _browser_content(data)
+    message.actions = _browser_actions(data)
+    await message.update()
+
+
+@cl.action_callback("open_project_open")
+async def on_open_project_open(action: cl.Action) -> None:
+    """Browser button: open the folder the listing is at."""
+    path = str(action.payload.get("path") or "")
+    if path:
+        await _apply_project(path)
+
+
+@cl.action_callback("open_project_cancel")
+async def on_open_project_cancel(action: cl.Action) -> None:
+    """Browser button: dismiss the picker."""
+    await _update_browser("Open project cancelled.")
+
+
+async def _handle_open(text: str) -> None:
+    """``/open [path]`` — the slash-command twin of the browser button."""
+    path = text[len("/open") :].strip()
+    if path:
+        await _apply_project(path)
+        return
+    await _start_project_browser()
+
+
 # --- handlers ----------------------------------------------------------------
 
 
@@ -551,15 +736,19 @@ async def on_chat_start() -> None:
 
 
 async def _show_sidebar() -> None:
-    """Session switcher: a message with per-session action buttons (M-17).
+    """Session switcher + «Open project» button (M-17, folder browser).
 
     Chainlit 2.x renders only ``InputWidget`` instances inside
     ``ChatSettings`` (dict-style panels were silently dropped and showed
     nothing), so the session list travels as a regular message with
-    ``cl.Action`` buttons instead.
+    ``cl.Action`` buttons instead. The project line reports the folder
+    the tools currently resolve against (blank = the server's cwd).
     """
+    settings = load_settings()
+    project = settings.working_dir or "(server cwd)"
     actions: list[cl.Action] = [
-        cl.Action(name="new_session", payload={"thread_id": None}, label="New session")
+        cl.Action(name="new_session", payload={"thread_id": None}, label="New session"),
+        cl.Action(name="open_project", payload={}, label="Open project"),
     ]
     sessions = await _list_sessions(make_client()) or []
     for session in sessions:
@@ -575,7 +764,9 @@ async def _show_sidebar() -> None:
             )
         )
     await cl.Message(
-        content="**Sessions** — pick one or start a new session:",
+        content=(
+            f"**Sessions** — pick one or start a new session.\n\nProject: `{project}`"
+        ),
         actions=actions,
     ).send()
 
@@ -702,6 +893,10 @@ async def on_message(message: cl.Message) -> None:
     if text == "/learn" or text.startswith("/learn "):
         # M-26: slash-command — a memory write, never a chat turn.
         await _handle_learn(str(thread_id), text)
+        return
+    if text == "/open" or text.startswith("/open "):
+        # Folder browser — open a project, never a chat turn.
+        await _handle_open(text)
         return
     memory_action = _memory_action(text)
     if memory_action is not None:
