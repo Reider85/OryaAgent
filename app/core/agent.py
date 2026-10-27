@@ -241,6 +241,7 @@ def build_session_graph(
     checkpointer: Any,
     *,
     model: Any = None,
+    provider: str | None = None,
     policy: Any | None = None,
 ) -> CompiledStateGraph:
     """Assemble the per-session graph through the architectural seams.
@@ -251,12 +252,14 @@ def build_session_graph(
 
     ``model`` is a model alias from ``models.yaml`` (resolved through
     the ``get_llm`` seam) or an already-built chat-model instance;
+    ``provider`` optionally pins the providers.yaml provider (None =
+    «Auto» — the alias' own provider or the config/env default);
     ``policy`` is a :class:`~app.core.permissions.PermissionPolicy`.
     """
     if model is None:
-        llm = get_llm()
+        llm = get_llm(provider=provider)
     elif isinstance(model, str):
-        llm = get_llm(model=model)
+        llm = get_llm(provider=provider, model=model)
     else:
         llm = model
     return build_graph(

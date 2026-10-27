@@ -68,6 +68,7 @@ from app.ui.settings import (
     UISettings,
     load_settings,
     model_choices,
+    provider_choices,
     save_settings,
 )
 
@@ -124,6 +125,7 @@ def settings_payload(settings: UISettings) -> dict[str, Any]:
     """Settings-panel state sent with every turn/resume (M-24 overrides)."""
     return {
         "model": settings.model,
+        "provider": settings.provider,
         "permission_mode": settings.permission_mode,
         "allow_list": list(settings.allow_list),
         "working_dir": settings.working_dir,
@@ -772,19 +774,38 @@ async def _show_sidebar() -> None:
 
 
 async def _show_settings_panel(settings: UISettings) -> None:
-    """Settings panel: model, permission mode, allow-list, workspace (M-17).
+    """Settings panel: provider, model, permission mode, allow-list, workspace.
 
     Chainlit 2.x requires real ``InputWidget`` objects; a ``Select`` takes
     its default through ``initial_value`` (``initial`` is overwritten by
     the widget's own ``__post_init__``).
+
+    The Model combobox depends on the Provider one: its values come from
+    ``model_choices(provider)``. Chainlit has no dependent selects, so
+    :func:`on_settings_update` re-sends the whole panel whenever the
+    provider changes (that is what refreshes the model list).
     """
-    choices = model_choices() or ["default"]
+    providers = provider_choices()
+    provider = settings.provider if settings.provider in providers else None
+    choices = model_choices(provider) or ["default"]
+    if settings.model in choices:
+        model_initial: str | None = settings.model
+    elif provider is not None:
+        model_initial = choices[0]  # align with the on_settings_update reset
+    else:
+        model_initial = None  # «Auto» — the config default may differ
     widgets: list[Any] = [
+        Select(
+            id="Provider",
+            label="Provider («Auto» = config/env default)",
+            values=providers,
+            initial_value=provider or "Auto",
+        ),
         Select(
             id="Model",
             label="Model",
             values=choices,
-            initial_value=settings.model if settings.model in choices else None,
+            initial_value=model_initial,
         ),
         Select(
             id="Permission Mode",
@@ -812,9 +833,22 @@ async def on_settings_update(settings_data: dict) -> None:
     """Persist the settings panel (applied on the next request, M-24).
 
     Keys are the widget ids sent by :func:`_show_settings_panel`.
+    A changed Provider re-sends the panel so the Model combobox only
+    lists that provider's models; a model left over from another
+    provider is reset to the first valid choice so the payload always
+    matches what the dropdown shows.
     """
     settings = load_settings()
+    previous_provider = settings.provider
+    raw_provider = settings_data.get("Provider")
+    settings.provider = (
+        None if raw_provider in (None, "", "Auto") else str(raw_provider)
+    )
     settings.model = settings_data.get("Model")
+    if settings.provider is not None:
+        choices = model_choices(settings.provider) or ["default"]
+        if settings.model not in choices:
+            settings.model = choices[0]
     settings.permission_mode = settings_data.get("Permission Mode")
     allow_list = str(settings_data.get("Allow List") or "")
     settings.allow_list = [
@@ -824,16 +858,30 @@ async def on_settings_update(settings_data: dict) -> None:
     settings.working_dir = working_dir or None
     save_settings(settings)
     logger.info(
-        "Settings updated: model=%s mode=%s working_dir=%s",
+        "Settings updated: provider=%s model=%s mode=%s working_dir=%s",
+        settings.provider,
         settings.model,
         settings.permission_mode,
         settings.working_dir,
     )
+    provider_changed = settings.provider != previous_provider
+    if provider_changed:
+        # Refresh the panel: the Model combobox now lists this provider only.
+        await _show_settings_panel(settings)
     workspace_note = (
         f"\nProject: `{settings.working_dir}`" if settings.working_dir else ""
     )
+    provider_note = ""
+    if provider_changed:
+        provider_note = (
+            f"\nProvider: `{settings.provider or 'Auto'}` — "
+            "the model list was refreshed."
+        )
     await cl.Message(
-        content=f"Settings saved — they apply from the next message.{workspace_note}"
+        content=(
+            "Settings saved — they apply from the next message."
+            f"{provider_note}{workspace_note}"
+        )
     ).send()
 
 

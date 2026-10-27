@@ -186,6 +186,7 @@ async def test_iter_sse_ignores_field_lines_without_a_colon() -> None:
 def test_settings_payload_ships_panel_overrides() -> None:
     settings = ui.UISettings(
         model="gpt-4o",
+        provider="openai",
         permission_mode="permissive",
         allow_list=["read /tmp/*", "write *.py"],
         working_dir="C:/projects/OryaAgent",
@@ -195,10 +196,17 @@ def test_settings_payload_ships_panel_overrides() -> None:
 
     assert payload == {
         "model": "gpt-4o",
+        "provider": "openai",
         "permission_mode": "permissive",
         "allow_list": ["read /tmp/*", "write *.py"],
         "working_dir": "C:/projects/OryaAgent",
     }
+
+
+def test_settings_payload_defaults_provider_to_auto() -> None:
+    payload = ui.settings_payload(ui.UISettings())
+
+    assert payload["provider"] is None
 
 
 def test_api_url_reads_the_config(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -939,6 +947,7 @@ async def test_on_settings_update_persists_the_panel(
     saved = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
     assert saved == {
         "model": "gpt-4o",
+        "provider": None,
         "permission_mode": "permissive",
         "allow_list": ["read /tmp/*", "write *.py"],
         "working_dir": str(tmp_path / "project"),
@@ -967,26 +976,127 @@ async def test_show_settings_panel_uses_real_input_widgets(
     """Chainlit 2.x renders InputWidget instances only (dicts were dropped)."""
     from chainlit.input_widget import Select, TextInput
 
-    monkeypatch.setattr(ui, "model_choices", lambda: ["glm-4.5-flash", "gpt-4o"])
+    monkeypatch.setattr(ui, "provider_choices", lambda: ["Auto", "glm", "openai"])
+    monkeypatch.setattr(
+        ui,
+        "model_choices",
+        lambda provider=None: (
+            ["glm-4.5-flash"] if provider == "glm" else ["glm-4.5-flash", "gpt-4o"]
+        ),
+    )
 
     await ui._show_settings_panel(
-        ui.UISettings(model="gpt-4o", working_dir="C:/projects/OryaAgent")
+        ui.UISettings(
+            model="gpt-4o",
+            provider="openai",
+            working_dir="C:/projects/OryaAgent",
+        )
     )
 
     panel = fake_cl.panels[-1]
     widgets = panel.inputs
     by_id = {widget.id: widget for widget in widgets}
     assert set(by_id) == {
+        "Provider",
         "Model",
         "Permission Mode",
         "Allow List",
         "Working directory",
     }
+    assert isinstance(by_id["Provider"], Select)
+    assert by_id["Provider"].values == ["Auto", "glm", "openai"]
+    assert by_id["Provider"].initial == "openai"
+    # the model combobox only lists the selected provider's models
     assert isinstance(by_id["Model"], Select)
     assert by_id["Model"].values == ["glm-4.5-flash", "gpt-4o"]
     assert by_id["Model"].initial == "gpt-4o"
     assert isinstance(by_id["Working directory"], TextInput)
     assert by_id["Working directory"].initial == "C:/projects/OryaAgent"
+
+
+async def test_show_settings_panel_auto_provider_lists_all_models(
+    fake_cl: _FakeCl, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """«Auto» (provider=None) shows every tool-capable model, no pin."""
+    monkeypatch.setattr(ui, "provider_choices", lambda: ["Auto", "openai"])
+    monkeypatch.setattr(
+        ui,
+        "model_choices",
+        lambda provider=None: ["glm-4.5-flash", "gpt-4o"],
+    )
+
+    await ui._show_settings_panel(ui.UISettings(provider=None, model=None))
+
+    by_id = {widget.id: widget for widget in fake_cl.panels[-1].inputs}
+    assert by_id["Provider"].initial == "Auto"
+    assert by_id["Model"].values == ["glm-4.5-flash", "gpt-4o"]
+    # no pinned model → nothing preselected (config default applies)
+    assert by_id["Model"].initial is None
+
+
+async def test_on_settings_update_provider_change_resends_panel(
+    fake_cl: _FakeCl, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Changing the provider re-sends the panel with the model re-filtered."""
+    monkeypatch.setattr(ui, "provider_choices", lambda: ["Auto", "deepseek", "openai"])
+    monkeypatch.setattr(
+        ui,
+        "model_choices",
+        lambda provider=None: {
+            None: ["glm-4.5-flash", "gpt-4o"],
+            "deepseek": ["deepseek-chat", "deepseek-reasoner"],
+            "openai": ["gpt-4o"],
+        }[provider],
+    )
+
+    await ui.on_settings_update(
+        {
+            "Provider": "deepseek",
+            "Model": "gpt-4o",  # stale: belongs to the previous provider
+            "Permission Mode": "strict",
+            "Allow List": "",
+            "Working directory": "",
+        }
+    )
+
+    saved = ui.load_settings()
+    assert saved.provider == "deepseek"
+    # the incompatible model was reset to the provider's first valid choice
+    assert saved.model == "deepseek-chat"
+
+    by_id = {widget.id: widget for widget in fake_cl.panels[-1].inputs}
+    assert by_id["Provider"].initial == "deepseek"
+    assert by_id["Model"].values == ["deepseek-chat", "deepseek-reasoner"]
+    assert by_id["Model"].initial == "deepseek-chat"
+    assert "model list was refreshed" in fake_cl.messages[-1].content
+
+
+async def test_on_settings_update_provider_auto_clears_pin(
+    fake_cl: _FakeCl, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Switching back to «Auto» unpins the provider and restores all models."""
+    settings_file = Path(os.environ["ORYA_UI_SETTINGS_PATH"])
+    settings_file.write_text(
+        json.dumps({"model": "gpt-4o", "provider": "openai"}), encoding="utf-8"
+    )
+    monkeypatch.setattr(ui, "provider_choices", lambda: ["Auto", "openai"])
+    monkeypatch.setattr(
+        ui,
+        "model_choices",
+        lambda provider=None: ["gpt-4o"] if provider else ["glm-4.5-flash", "gpt-4o"],
+    )
+
+    await ui.on_settings_update(
+        {"Provider": "Auto", "Model": "gpt-4o", "Permission Mode": "strict"}
+    )
+
+    saved = json.loads(settings_file.read_text(encoding="utf-8"))
+    assert saved["provider"] is None
+    assert saved["model"] == "gpt-4o"
+
+    by_id = {widget.id: widget for widget in fake_cl.panels[-1].inputs}
+    assert by_id["Provider"].initial == "Auto"
+    assert by_id["Model"].values == ["glm-4.5-flash", "gpt-4o"]
 
 
 async def test_show_sidebar_lists_server_sessions(

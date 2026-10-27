@@ -16,6 +16,7 @@ from app.ui.settings import (
     UISettings,
     load_settings,
     model_choices,
+    provider_choices,
     save_settings,
     settings_path,
 )
@@ -28,6 +29,7 @@ class TestUISettings:
         """Test default settings creation."""
         settings = UISettings.default()
         assert settings.model is None
+        assert settings.provider is None
         assert settings.permission_mode is None
         assert settings.allow_list == []
         assert settings.working_dir is None
@@ -36,6 +38,7 @@ class TestUISettings:
         """Test serialization roundtrip."""
         original = UISettings(
             model="claude-sonnet-3.5",
+            provider="anthropic",
             permission_mode="strict",
             allow_list=["read /tmp/*", "write *.py"],
             working_dir="C:/projects/OryaAgent",
@@ -45,6 +48,7 @@ class TestUISettings:
         restored = UISettings.from_dict(data)
 
         assert restored.model == original.model
+        assert restored.provider == original.provider
         assert restored.permission_mode == original.permission_mode
         assert restored.allow_list == original.allow_list
         assert restored.working_dir == original.working_dir
@@ -53,12 +57,13 @@ class TestUISettings:
         """Test from_dict with missing fields (use defaults)."""
         data = {
             "model": "gpt-4o",
-            # permission_mode missing (should default to None)
+            # provider/permission_mode missing (should default to None)
             "allow_list": ["bash *.sh"],
         }
 
         settings = UISettings.from_dict(data)
         assert settings.model == "gpt-4o"
+        assert settings.provider is None
         assert settings.permission_mode is None
         assert settings.allow_list == ["bash *.sh"]
         assert settings.working_dir is None
@@ -72,6 +77,7 @@ class TestUISettings:
         # Missing required fields
         settings = UISettings.from_dict({})
         assert settings.model is None
+        assert settings.provider is None
         assert settings.permission_mode is None
         assert settings.allow_list == []
         assert settings.working_dir is None
@@ -82,6 +88,8 @@ class TestUISettings:
             {"model": "glm-4.5-flash", "permission_mode": "strict", "allow_list": []}
         )
         assert settings.working_dir is None
+        # Written before the provider combobox — «Auto».
+        assert settings.provider is None
 
 
 class TestSettingsFile:
@@ -179,6 +187,49 @@ class TestModelChoices:
 
         choices = model_choices()
         assert choices == ["a-model", "m-model", "z-model"]
+
+    @patch("app.ui.settings.load_models")
+    def test_model_choices_filters_by_provider(self, mock_load_models) -> None:
+        """A pinned provider only lists its own tool-capable aliases."""
+        mock_load_models.return_value = {
+            "gpt-4o": type(
+                "Mock", (), {"supports_tools": True, "provider": "openai"}
+            )(),
+            "o1": type("Mock", (), {"supports_tools": False, "provider": "openai"})(),
+            "glm-4.5": type("Mock", (), {"supports_tools": True, "provider": "glm"})(),
+        }
+
+        assert model_choices("openai") == ["gpt-4o"]
+        assert model_choices("glm") == ["glm-4.5"]
+
+    @patch("app.ui.settings.load_providers")
+    @patch("app.ui.settings.load_models")
+    def test_model_choices_provider_without_tool_aliases(
+        self, mock_load_models, mock_load_providers
+    ) -> None:
+        """A provider with no tool-capable alias falls back to default_model."""
+        mock_load_models.return_value = {
+            "mimo-7b-rl": type(
+                "Mock", (), {"supports_tools": False, "provider": "mimo"}
+            )(),
+        }
+        spec = type("Mock", (), {"default_model": "mimo-7b-rl"})()
+        mock_load_providers.return_value = {"mimo": spec}
+
+        assert model_choices("mimo") == ["mimo-7b-rl"]
+
+
+class TestProviderChoices:
+    """The provider dropdown: «Auto» first, then the full registry."""
+
+    @patch("app.ui.settings.load_providers")
+    def test_provider_choices_auto_first(self, mock_load_providers) -> None:
+        mock_load_providers.return_value = {
+            "openai": object(),
+            "deepseek": object(),
+        }
+
+        assert provider_choices() == ["Auto", "deepseek", "openai"]
 
 
 class TestSettingsPath:

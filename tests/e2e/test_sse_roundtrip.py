@@ -158,7 +158,9 @@ def scripted_api(monkeypatch: pytest.MonkeyPatch):
     async def _resolve():
         return state["checkpointer"], True
 
-    def _build_default(thread_id, _checkpointer, *, model=None, policy=None):
+    def _build_default(
+        thread_id, _checkpointer, *, model=None, provider=None, policy=None
+    ):
         scripted = _ScriptedModel(tool_name="_echo", tool_args={"text": "orya"})
         return build_graph(state["tools"], scripted, state["checkpointer"], policy)
 
@@ -178,7 +180,7 @@ def scripted_api(monkeypatch: pytest.MonkeyPatch):
         """Switch the builder to ``tools`` + ``model_instance`` for this test."""
         state["tools"] = tools
 
-        def _build(thread_id, _checkpointer, *, model=None, policy=None):
+        def _build(thread_id, _checkpointer, *, model=None, provider=None, policy=None):
             return build_graph(tools, model_instance, state["checkpointer"], policy)
 
         monkeypatch.setattr(api_sessions, "build_session_graph", _build)

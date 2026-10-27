@@ -9,7 +9,13 @@ from app.ui.chainlit_app import (
 )
 from app.ui.interrupt import ask_permission, get_pending_interrupt
 from app.ui.sessions import SessionInfo, enrich_titles_from_db, list_sessions
-from app.ui.settings import UISettings, load_settings, model_choices, save_settings
+from app.ui.settings import (
+    UISettings,
+    load_settings,
+    model_choices,
+    provider_choices,
+    save_settings,
+)
 
 __all__ = [
     # Chainlit handlers
@@ -30,4 +36,5 @@ __all__ = [
     "load_settings",
     "save_settings",
     "model_choices",
+    "provider_choices",
 ]

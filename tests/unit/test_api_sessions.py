@@ -249,8 +249,15 @@ def fake_graph(monkeypatch: pytest.MonkeyPatch):
     async def _resolve():
         return MemorySaver(), True
 
-    def _build(thread_id, checkpointer, *, model=None, policy=None):
-        holder.built.append({"thread_id": thread_id, "model": model, "policy": policy})
+    def _build(thread_id, checkpointer, *, model=None, provider=None, policy=None):
+        holder.built.append(
+            {
+                "thread_id": thread_id,
+                "model": model,
+                "provider": provider,
+                "policy": policy,
+            }
+        )
         return FakeGraph(holder.events, holder.states)
 
     monkeypatch.setattr(api_sessions, "resolve_checkpointer", _resolve)
@@ -769,6 +776,7 @@ def test_post_message_stream_passes_settings_overrides(
         params={"stream": "true"},
         json={
             "content": "hi",
+            "provider": "openai",
             "model": "gpt-4o",
             "permission_mode": "permissive",
             "allow_list": ["read /tmp/*"],
@@ -778,6 +786,7 @@ def test_post_message_stream_passes_settings_overrides(
     assert response.status_code == 200
     built = fake_graph.built[-1]
     assert built["model"] == "gpt-4o"
+    assert built["provider"] == "openai"
     policy = built["policy"]
     assert policy.mode == "permissive"
     assert any(r.pattern == "read /tmp/*" for r in policy.config.allow_rules)
@@ -793,6 +802,8 @@ def test_post_message_json_passes_settings_overrides(
 
     assert response.status_code == 200
     assert fake_graph.built[-1]["model"] == "claude-haiku"
+    # provider omitted → «Auto» (None) travels through unchanged
+    assert fake_graph.built[-1]["provider"] is None
 
 
 def test_policy_cache_reuses_and_carries_the_session_allowlist(
@@ -1015,7 +1026,7 @@ def test_post_message_workspace_is_scoped_to_the_turn(
         seen.append(current_workspace())
         yield _ev("on_chat_model_stream", data={"chunk": AIMessageChunk(content="ok")})
 
-    def _build(thread_id, checkpointer, *, model=None, policy=None):
+    def _build(thread_id, checkpointer, *, model=None, provider=None, policy=None):
         graph = FakeGraph([], [_ok_state()])
         graph.astream_events = _astream_events  # type: ignore[method-assign]
         return graph

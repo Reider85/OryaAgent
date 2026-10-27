@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import get_settings
-from app.core.llm.registry import load_models
+from app.core.llm.registry import load_models, load_providers
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,7 @@ class UISettings:
     """UI state persisted to ``settings.ui_settings_path`` (M-17)."""
 
     model: str | None = None
+    provider: str | None = None  # None = «Auto» (config/env default)
     permission_mode: str | None = None  # "strict" or "permissive"
     allow_list: list[str] = field(default_factory=list)
     working_dir: str | None = None  # the project the session has open
@@ -47,6 +48,7 @@ class UISettings:
         """Return default settings (fallback for missing/corrupt file)."""
         return cls(
             model=None,  # Use default from config.yaml
+            provider=None,  # «Auto» — provider resolved by the LLM seam
             permission_mode=None,  # Use default from config.yaml
             allow_list=[],
             working_dir=None,  # Tools fall back to the server's cwd
@@ -56,6 +58,7 @@ class UISettings:
         """Convert to JSON-serializable dict."""
         return {
             "model": self.model,
+            "provider": self.provider,
             "permission_mode": self.permission_mode,
             "allow_list": self.allow_list,
             "working_dir": self.working_dir,
@@ -68,6 +71,7 @@ class UISettings:
             return cls.default()
         return cls(
             model=data.get("model"),
+            provider=data.get("provider"),
             permission_mode=data.get("permission_mode"),
             allow_list=data.get("allow_list", []),
             working_dir=data.get("working_dir"),
@@ -128,11 +132,38 @@ def save_settings(settings: UISettings, path: Path | None = None) -> None:
         logger.warning("Cannot write settings %s (%s)", path, exc)
 
 
-def model_choices() -> list[str]:
+def provider_choices() -> list[str]:
+    """Provider dropdown: «Auto» first, then every providers.yaml entry.
+
+    «Auto» (stored as ``provider=None``) keeps the legacy behavior: the
+    provider comes from env/config, and the model dropdown lists every
+    tool-capable alias across all providers.
+    """
+    return ["Auto", *sorted(load_providers())]
+
+
+def model_choices(provider: str | None = None) -> list[str]:
     """Return list of model aliases with tool-calling support.
+
+    Args:
+        provider: When set, only aliases owned by that provider are
+            returned (the dependent model combobox). A provider without
+            any tool-capable alias falls back to its ``default_model``
+            so the dropdown is never empty.
 
     Filters models.yaml for `supports_tools=true` (agent needs tools).
     Sorted alphabetically for consistent dropdown order.
     """
     models = load_models()
-    return sorted(alias for alias, spec in models.items() if spec.supports_tools)
+    if provider is None:
+        return sorted(alias for alias, spec in models.items() if spec.supports_tools)
+
+    owned = sorted(
+        alias
+        for alias, spec in models.items()
+        if spec.supports_tools and spec.provider == provider
+    )
+    if owned:
+        return owned
+    spec = load_providers().get(provider)
+    return [spec.default_model] if spec and spec.default_model else ["default"]

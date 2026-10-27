@@ -429,7 +429,30 @@ def test_build_session_graph_resolves_model_alias(
     agent.build_session_graph("tid-1", "CP", model="gpt-4o")
 
     assert captured["model"] == "RESOLVED_MODEL"
-    assert calls == [{"args": (), "kwargs": {"model": "gpt-4o"}}]
+    assert calls == [{"args": (), "kwargs": {"provider": None, "model": "gpt-4o"}}]
+
+
+def test_build_session_graph_pins_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The UI provider combobox travels through the ``get_llm`` seam."""
+    calls: list[dict[str, Any]] = []
+
+    def fake_build_graph(tools, model, checkpointer, policy, **kwargs):
+        return "GRAPH"
+
+    def fake_get_llm(*args, **kwargs):
+        calls.append({"args": args, "kwargs": kwargs})
+        return "RESOLVED_MODEL"
+
+    monkeypatch.setattr(agent, "build_graph", fake_build_graph)
+    monkeypatch.setattr(agent, "get_llm", fake_get_llm)
+
+    agent.build_session_graph("tid-1", "CP", model="deepseek-chat", provider="deepseek")
+
+    assert calls == [
+        {"args": (), "kwargs": {"provider": "deepseek", "model": "deepseek-chat"}}
+    ]
 
 
 def test_build_session_graph_keeps_model_instance(

@@ -113,6 +113,13 @@ class SessionCreate(BaseModel):
 class TurnSettings(BaseModel):
     """UI settings-panel overrides applied to the graph of this request."""
 
+    provider: str | None = Field(
+        default=None,
+        description=(
+            "Provider key from providers.yaml; omit for «Auto» (the "
+            "config/env default, or the alias' own provider)."
+        ),
+    )
     model: str | None = None
     permission_mode: Literal["strict", "permissive"] | None = None
     allow_list: list[str] = Field(default_factory=list)
@@ -345,6 +352,7 @@ def _build_graph_or_raise(
     checkpointer: Any,
     *,
     model: Any = None,
+    provider: str | None = None,
     policy: Any | None = None,
 ) -> Any:
     """Assemble the session graph, mapping failures to HTTP errors.
@@ -359,6 +367,7 @@ def _build_graph_or_raise(
             session_id,
             checkpointer,
             model=model,
+            provider=provider,
             policy=policy,
         )
     except ValueError as exc:
@@ -455,6 +464,7 @@ async def post_message(
         session_id,
         checkpointer,
         model=body.model,
+        provider=body.provider,
         policy=_policy_for(session_id, body.permission_mode, body.allow_list),
     )
     config = default_run_config(session_id)
@@ -510,6 +520,7 @@ async def post_resume(
         session_id,
         checkpointer,
         model=body.model,
+        provider=body.provider,
         policy=_policy_for(session_id, body.permission_mode, body.allow_list),
     )
     config = default_run_config(session_id)
