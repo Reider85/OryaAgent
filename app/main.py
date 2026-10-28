@@ -111,7 +111,7 @@ def main() -> None:
         "--from",
         dest="source",
         required=True,
-        choices=["opencode", "continue", "aider"],
+        choices=["opencode", "continue", "aider", "cline"],
         help="Source agent to import from",
     )
 

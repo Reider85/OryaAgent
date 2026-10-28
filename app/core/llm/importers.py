@@ -4,6 +4,9 @@ Supported sources:
 - OpenCode  (sst/opencode):      ``~/.config/opencode/auth.json``
 - Continue.dev:                  ``~/.continue/config.json``
 - Aider:                         ``~/.aider.conf.yml``
+- Cline / Roo Code:              VS Code globalStorage ``state.vscdb``
+  (``<editor>/User/globalStorage/<extension-id>/state.vscdb``, SQLite,
+  ``ItemTable`` -> ``storage.json`` -> JSON with ``apiConfiguration``)
 
 Importers never copy plaintext API keys into ``~/.orya/config.yaml`` —
 they write ``${ENV_VAR}`` placeholders (forbidden pattern: no plaintext
@@ -14,6 +17,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import sqlite3
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -31,6 +36,7 @@ _PROVIDER_ALIASES = {
     "google_genai": "google",
     "gemini": "google",
     "vertexai": "google",
+    "vertex": "google",
     "llamafile": "llamacpp",
     "mistral": "openrouter",  # no native mistral provider in MVP — route via aggregator
     "togetherai": "together",
@@ -127,8 +133,13 @@ def _finalize(
     default_provider: str | None,
     default_model: str | None,
     extra_notes: list[str] | None = None,
+    overrides: dict[str, dict[str, Any]] | None = None,
 ) -> ImportReport:
-    """Write provider placeholders into config.yaml and build the report."""
+    """Write provider placeholders into config.yaml and build the report.
+
+    ``overrides`` optionally patches per-provider config fields (e.g. a
+    custom ``base_url`` detected in the source agent's config).
+    """
     providers_cfg: dict[str, dict[str, Any]] = {}
     missing: list[str] = []
     notes: list[str] = list(extra_notes or [])
@@ -144,6 +155,8 @@ def _finalize(
             entry["base_url"] = spec.base_url
         if spec.default_model:
             entry["default_model"] = spec.default_model
+        for key, value in (overrides or {}).get(name, {}).items():
+            entry[key] = value
         providers_cfg[name] = entry
         written.append(name)
         if spec.env_var:
@@ -344,8 +357,235 @@ def import_aider(
     )
 
 
+# Cline and Roo Code (VS Code extensions) keep their API config in the
+# editor's global storage: ``<editor>/User/globalStorage/<extension-id>/``
+# with a SQLite database ``state.vscdb`` — table ``ItemTable``, key
+# ``storage.json`` -> JSON blob containing an ``apiConfiguration`` block.
+_CLINE_DB_FILENAME = "state.vscdb"
+_CLINE_EXTENSION_IDS = (
+    "saoudrizwan.claude-dev",  # Cline (ex Claude Dev)
+    "rooveterinaryinc.roo-cline",  # Roo Code
+    "roo-cline.roo-cline",  # Roo Code (older installs)
+)
+_CLINE_EDITORS = ("Code", "Code - Insiders", "VSCodium", "Cursor")
+
+# Cline's apiConfiguration uses per-provider field names. Keys/models/base
+# URLs live in provider-specific fields; ``apiKey`` is the common fallback.
+_CLINE_KEY_FIELDS = {
+    "anthropic": ("apiKey",),
+    "openai": ("apiKey",),
+    "openrouter": ("apiKey",),
+    "deepseek": ("apiKey",),
+    "qwen": ("qwenApiKey", "apiKey"),
+    "google": ("geminiApiKey", "apiKey"),
+    "ollama": (),
+    "lmstudio": (),
+}
+_CLINE_MODEL_FIELDS = {
+    "anthropic": "anthropicModelId",
+    "openai": "openAIModelId",
+    "openrouter": "openRouterModelId",
+    "deepseek": "deepSeekModelId",
+    "qwen": "qwenModelId",
+    "google": "geminiModelId",
+    "ollama": "ollamaModelId",
+    "lmstudio": "lmStudioModelId",
+}
+_CLINE_BASE_URL_FIELDS = {
+    "anthropic": "anthropicBaseUrl",
+    "openai": "openAIBaseUrl",
+    "openrouter": "openRouterBaseUrl",
+    "deepseek": "deepSeekBaseUrl",
+    "qwen": "qwenApiBaseUrl",
+    "ollama": "ollamaBaseUrl",
+    "lmstudio": "lmStudioBaseUrl",
+}
+
+
+def _vscode_global_storage_dirs() -> list[Path]:
+    """Candidate ``<editor>/User/globalStorage`` dirs across platforms."""
+    bases: list[Path] = []
+    appdata = os.environ.get("APPDATA")
+    if appdata:  # Windows
+        bases.append(Path(appdata))
+    bases.append(Path.home() / "Library" / "Application Support")  # macOS
+    bases.append(Path.home() / ".config")  # Linux
+    return [
+        base / editor / "User" / "globalStorage"
+        for base in bases
+        for editor in _CLINE_EDITORS
+    ]
+
+
+def _find_cline_db() -> Path | None:
+    """First existing Cline/Roo Code ``state.vscdb`` in known editor storages."""
+    for base in _vscode_global_storage_dirs():
+        for ext_id in _CLINE_EXTENSION_IDS:
+            candidate = base / ext_id / _CLINE_DB_FILENAME
+            if candidate.exists():
+                return candidate
+    return None
+
+
+def _query_state_vscdb(db_path: Path) -> str | None:
+    """Return the ``storage.json`` blob from ItemTable, or None if absent.
+
+    Raises ``sqlite3.Error`` when the database is locked/unreadable — the
+    caller falls back to reading a copy.
+    """
+    conn = sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True)
+    try:
+        row = conn.execute(
+            "SELECT value FROM ItemTable WHERE key = 'storage.json'"
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None or row[0] is None:
+        return None
+    value = row[0]
+    return value.decode("utf-8") if isinstance(value, bytes) else str(value)
+
+
+def _read_cline_storage(db_path: Path) -> dict[str, Any]:
+    """Load storage.json from state.vscdb (falls back to a copy if locked)."""
+    try:
+        raw = _query_state_vscdb(db_path)
+    except sqlite3.Error:
+        raw = None
+    if raw is None:
+        # A running VS Code can hold the db (WAL); read a snapshot copy.
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot = Path(tmp) / _CLINE_DB_FILENAME
+            try:
+                shutil.copyfile(db_path, snapshot)
+                raw = _query_state_vscdb(snapshot)
+            except (OSError, sqlite3.Error):
+                raw = None
+    if raw is None:
+        raise ValueError(
+            f"{db_path}: no 'storage.json' entry in ItemTable — nothing to import"
+        )
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{db_path}: storage.json is not valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"{db_path}: storage.json must contain a JSON object")
+    return data
+
+
+def _cline_api_key(api_config: dict[str, Any], provider: str) -> str | None:
+    """Pull the provider's API key out of apiConfiguration (tolerantly)."""
+    for field in _CLINE_KEY_FIELDS.get(provider, ("apiKey",)):
+        value = api_config.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def import_cline(
+    cline_path: str | Path | None = None,
+    config_path: str | Path | None = None,
+) -> ImportReport:
+    """Import from Cline / Roo Code VS Code globalStorage (``state.vscdb``).
+
+    ``cline_path`` may point at ``state.vscdb`` itself or at the extension's
+    globalStorage directory (``state.vscdb`` is appended). When omitted, the
+    importer probes common VS Code-family editors (Code, Code Insiders,
+    VSCodium, Cursor) for the Cline and Roo Code extension storages.
+
+    Reads the active ``apiConfiguration`` (``apiProvider``, model id, custom
+    base url) and writes registry-driven provider entries — API keys stay out
+    of the config (``${ENV_VAR}`` placeholders only).
+    """
+    if cline_path:
+        src = Path(cline_path)
+        if src.is_dir():
+            src = src / _CLINE_DB_FILENAME
+    else:
+        discovered = _find_cline_db()
+        if discovered is None:
+            raise FileNotFoundError(
+                "Cline/Roo Code state.vscdb not found. Expected "
+                "<editor>/User/globalStorage/saoudrizwan.claude-dev/"
+                f"{_CLINE_DB_FILENAME} (or rooveterinaryinc.roo-cline) under "
+                "%APPDATA%, ~/Library/Application Support or ~/.config. "
+                "Pass cline_path explicitly to override."
+            )
+        src = discovered
+    dst = Path(config_path) if config_path else user_config_path()
+
+    if not src.exists():
+        raise FileNotFoundError(f"Cline state.vscdb not found: {src}")
+
+    data = _read_cline_storage(src)
+    api_config = data.get("apiConfiguration")
+    if not isinstance(api_config, dict):
+        api_config = data.get("apiConfig")
+    if not isinstance(api_config, dict):
+        raise ValueError(f"{src}: no 'apiConfiguration' block in storage.json")
+    provider_name = str(api_config.get("apiProvider", "")).strip()
+    if not provider_name:
+        raise ValueError(f"{src}: no 'apiProvider' configured — nothing to import")
+
+    notes: list[str] = []
+    found: dict[str, str | None] = {}
+    overrides: dict[str, dict[str, Any]] = {}
+    default_provider: str | None = None
+    default_model: str | None = None
+
+    mapped = _map_provider(provider_name)
+    if mapped is None:
+        if provider_name in ("vscode-lm", "vscode_lm"):
+            notes.append(
+                "Skipped 'vscode-lm' (VS Code LM API): it reuses the editor's "
+                "built-in Copilot credentials, which cannot be exported."
+            )
+        else:
+            notes.append(f"Skipped unknown Cline apiProvider '{provider_name}'")
+    else:
+        registry = load_providers()
+        found[mapped] = _cline_api_key(api_config, mapped)
+        default_provider = mapped
+        model_field = _CLINE_MODEL_FIELDS.get(mapped)
+        model = api_config.get(model_field) if model_field else None
+        if isinstance(model, str) and model.strip():
+            default_model = model.strip()
+
+        base_field = _CLINE_BASE_URL_FIELDS.get(mapped)
+        custom = api_config.get(base_field) if base_field else None
+        if isinstance(custom, str) and custom.strip():
+            custom_url = custom.strip().rstrip("/")
+            registry_url = (registry[mapped].base_url or "").rstrip("/")
+            if custom_url != registry_url:
+                overrides[mapped] = {"base_url": custom_url}
+                notes.append(
+                    f"{mapped}: copied custom base URL {custom_url} from the "
+                    "Cline config."
+                )
+
+        if found[mapped] is None and registry[mapped].env_var:
+            notes.append(
+                f"{mapped}: no API key in the Cline config (recent Cline "
+                "versions keep keys in the VS Code Keychain) — export the env "
+                "var instead."
+            )
+
+    return _finalize(
+        source="cline",
+        source_path=src,
+        config_path=dst,
+        found=found,
+        default_provider=default_provider,
+        default_model=default_model,
+        extra_notes=notes,
+        overrides=overrides,
+    )
+
+
 IMPORTERS = {
     "opencode": import_opencode,
     "continue": import_continue,
     "aider": import_aider,
+    "cline": import_cline,
 }

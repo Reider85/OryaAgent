@@ -27,7 +27,7 @@ Senior Python coding agent (FastAPI + LangGraph + LLM provider seam). MVP ticket
 
 ## Architecture (dependency direction matters)
 
-- `app/main.py` — FastAPI app + `orya` CLI (`orya import --from opencode|continue|aider`, `orya db migrate`).
+- `app/main.py` — FastAPI app + `orya` CLI (`orya import --from opencode|continue|aider|cline`, `orya db migrate`).
 - `app/core/llm/` — single LLM seam: `get_llm(provider, model)` (`factory.py`). **Never import `langchain_anthropic`/`langchain_openai` outside this package.** Providers live in YAML: `providers.yaml`, `models.yaml` (aliases), `capabilities.yaml`, `pricing.yaml` — adding an OpenAI-compatible provider is YAML-only; tests in `tests/unit/test_llm_providers_yaml.py` enforce structure. `app/core/llm/settings.py` is a deprecated shim → import `app.core.config`.
 - `app/core/graph.py` — `build_graph(tools, model, checkpointer, policy, *, system_prompt_fn, trim_fn)`. **The graph must not import `prompt.py`/`context.py`** — they're injected callables (cacheable-prefix ordering depends on it).
 - `app/core/tools.py` — `get_tools()` returns exactly `[read, write, edit, bash, grep, glob]` **in that order**; graph, prompt builder, and tests assert this. Never hardcode a tool list elsewhere.
