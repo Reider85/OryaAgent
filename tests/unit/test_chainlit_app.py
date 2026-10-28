@@ -1099,6 +1099,150 @@ async def test_on_settings_update_provider_auto_clears_pin(
     assert by_id["Model"].values == ["glm-4.5-flash", "gpt-4o"]
 
 
+# --- on_settings_edit: live dependent Model combobox ---------------------------
+
+
+def _patch_registry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Three-provider registry: Auto lists everything, providers filter."""
+    monkeypatch.setattr(
+        ui, "provider_choices", lambda: ["Auto", "deepseek", "openai", "zai"]
+    )
+    monkeypatch.setattr(
+        ui,
+        "model_choices",
+        lambda provider=None: {
+            None: ["deepseek-chat", "gpt-4o", "glm-4.5-flash"],
+            "deepseek": ["deepseek-chat", "deepseek-coder"],
+            "openai": ["gpt-4o"],
+            "zai": ["glm-4.5-flash"],
+        }[provider],
+    )
+
+
+async def test_on_settings_edit_provider_change_resends_panel_without_saving(
+    fake_cl: _FakeCl, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A provider change in the open dialog re-filters the Model combobox.
+
+    The refresh is transient: the user may still press Cancel, so the
+    settings file must stay untouched.
+    """
+    _patch_registry(monkeypatch)
+    await ui._show_settings_panel(ui.UISettings(provider="zai", model="glm-4.5-flash"))
+    panels_before = len(fake_cl.panels)
+    settings_file = Path(os.environ["ORYA_UI_SETTINGS_PATH"])
+
+    await ui.on_settings_edit(
+        {
+            "Provider": "deepseek",
+            "Model": "glm-4.5-flash",  # stale: still the zai model
+            "Permission Mode": "strict",
+            "Allow List": "",
+            "Working directory": "",
+        }
+    )
+
+    assert len(fake_cl.panels) == panels_before + 1
+    by_id = {widget.id: widget for widget in fake_cl.panels[-1].inputs}
+    assert by_id["Provider"].initial == "deepseek"
+    assert by_id["Model"].values == ["deepseek-chat", "deepseek-coder"]
+    # the stale model is not a choice any more → first valid one is pinned
+    assert by_id["Model"].initial == "deepseek-chat"
+    # nothing persisted before Confirm
+    assert not settings_file.exists()
+
+
+async def test_on_settings_edit_same_provider_keeps_dialog_untouched(
+    fake_cl: _FakeCl, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A keystroke in another field must not re-send (and reset) the panel."""
+    _patch_registry(monkeypatch)
+    await ui._show_settings_panel(
+        ui.UISettings(provider="deepseek", model="deepseek-chat")
+    )
+    panels_before = len(fake_cl.panels)
+
+    # Chainlit fires chat_settings_edit on every TextInput keystroke too.
+    await ui.on_settings_edit(
+        {
+            "Provider": "deepseek",
+            "Model": "deepseek-chat",
+            "Permission Mode": "strict",
+            "Allow List": "git st",
+            "Working directory": "",
+        }
+    )
+
+    assert len(fake_cl.panels) == panels_before
+
+
+async def test_on_settings_edit_preserves_unsaved_fields(
+    fake_cl: _FakeCl, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The re-sent panel carries the user's unconfirmed edits, not the file."""
+    _patch_registry(monkeypatch)
+    await ui._show_settings_panel(ui.UISettings(provider="zai", model="glm-4.5-flash"))
+
+    await ui.on_settings_edit(
+        {
+            "Provider": "openai",
+            "Model": "glm-4.5-flash",
+            "Permission Mode": "permissive",
+            "Allow List": "git status\nread *.md",
+            "Working directory": "C:/projects/OryaAgent",
+        }
+    )
+
+    by_id = {widget.id: widget for widget in fake_cl.panels[-1].inputs}
+    assert by_id["Model"].values == ["gpt-4o"]
+    assert by_id["Permission Mode"].initial == "permissive"
+    assert by_id["Allow List"].initial == "git status\nread *.md"
+    assert by_id["Working directory"].initial == "C:/projects/OryaAgent"
+
+
+async def test_on_settings_edit_auto_restores_full_model_list(
+    fake_cl: _FakeCl, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Switching back to «Auto» in the dialog lists every tool-capable model."""
+    _patch_registry(monkeypatch)
+    await ui._show_settings_panel(
+        ui.UISettings(provider="deepseek", model="deepseek-chat")
+    )
+
+    await ui.on_settings_edit(
+        {
+            "Provider": "Auto",
+            "Model": "deepseek-chat",
+            "Permission Mode": "strict",
+            "Allow List": "",
+            "Working directory": "",
+        }
+    )
+
+    by_id = {widget.id: widget for widget in fake_cl.panels[-1].inputs}
+    assert by_id["Provider"].initial == "Auto"
+    assert by_id["Model"].values == ["deepseek-chat", "gpt-4o", "glm-4.5-flash"]
+    # «Auto» keeps the picked model when it is still a valid alias
+    assert by_id["Model"].initial == "deepseek-chat"
+
+
+async def test_show_settings_panel_remembers_panel_provider(
+    fake_cl: _FakeCl, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The panel records the provider it was built with (edit-handler guard)."""
+    _patch_registry(monkeypatch)
+
+    await ui._show_settings_panel(ui.UISettings(provider="zai", model=None))
+
+    assert fake_cl.user_session.get("panel_provider") == "zai"
+
+    await ui._show_settings_panel(ui.UISettings(provider=None, model=None))
+
+    assert fake_cl.user_session.get("panel_provider") is None
+
+
 async def test_show_sidebar_lists_server_sessions(
     fake_cl: _FakeCl, patch_client
 ) -> None:

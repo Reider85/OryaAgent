@@ -4,6 +4,7 @@ from app.ui.chainlit_app import (
     on_chat_start,
     on_message,
     on_new_session,
+    on_settings_edit,
     on_settings_update,
     on_switch_session,
 )
@@ -21,6 +22,7 @@ __all__ = [
     # Chainlit handlers
     "on_chat_start",
     "on_message",
+    "on_settings_edit",
     "on_settings_update",
     "on_new_session",
     "on_switch_session",

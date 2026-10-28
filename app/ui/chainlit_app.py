@@ -25,7 +25,11 @@ M-17 keeps the session sidebar and the settings panel: the sidebar lists
 sessions via ``GET /sessions`` and restores history from
 ``GET /sessions/{id}``; the panel persists model / permission mode /
 allow-list to the settings file, and every request carries that state to
-the server, which builds the model and the policy for the session.
+the server, which builds the model and the policy for the session. The
+Model combobox depends on the Provider one — Chainlit has no dependent
+selects, so the panel re-sends itself (``on_settings_edit`` while the
+dialog is open, ``on_settings_update`` on Confirm) with the model list
+re-filtered to the selected provider.
 
 M-26 adds the ``/learn`` slash-command (BACKLOG6): a message starting
 with ``/learn [name] [description]`` is *not* a chat turn — it calls
@@ -773,6 +777,28 @@ async def _show_sidebar() -> None:
     ).send()
 
 
+def _settings_from_payload(settings_data: dict) -> UISettings:
+    """Build a transient ``UISettings`` from a settings-panel payload.
+
+    Keys are the widget ids created by :func:`_show_settings_panel`
+    (``Provider`` / ``Model`` / ``Permission Mode`` / ``Allow List`` /
+    ``Working directory``), exactly as the panel shows them — including
+    edits the user has not confirmed yet. The result is *not* persisted:
+    :func:`on_settings_edit` keeps it transient, :func:`on_settings_update`
+    saves it.
+    """
+    raw_provider = settings_data.get("Provider")
+    allow_list = str(settings_data.get("Allow List") or "")
+    working_dir = str(settings_data.get("Working directory") or "").strip()
+    return UISettings(
+        provider=None if raw_provider in (None, "", "Auto") else str(raw_provider),
+        model=settings_data.get("Model"),
+        permission_mode=settings_data.get("Permission Mode"),
+        allow_list=[line.strip() for line in allow_list.split("\n") if line.strip()],
+        working_dir=working_dir or None,
+    )
+
+
 async def _show_settings_panel(settings: UISettings) -> None:
     """Settings panel: provider, model, permission mode, allow-list, workspace.
 
@@ -781,9 +807,12 @@ async def _show_settings_panel(settings: UISettings) -> None:
     the widget's own ``__post_init__``).
 
     The Model combobox depends on the Provider one: its values come from
-    ``model_choices(provider)``. Chainlit has no dependent selects, so
-    :func:`on_settings_update` re-sends the whole panel whenever the
-    provider changes (that is what refreshes the model list).
+    ``model_choices(provider)``. Chainlit has no dependent selects, so the
+    panel re-sends itself whenever the provider changes — from
+    :func:`on_settings_edit` (live, while the dialog is open) and from
+    :func:`on_settings_update` (on Confirm). The provider the current panel
+    was built with is remembered as ``panel_provider`` so the edit handler
+    can tell a real provider change from an unrelated keystroke.
     """
     providers = provider_choices()
     provider = settings.provider if settings.provider in providers else None
@@ -825,6 +854,9 @@ async def _show_settings_panel(settings: UISettings) -> None:
             initial=settings.working_dir or "",
         ),
     ]
+    # Remember the provider this panel was built with: the edit handler
+    # compares against it to decide whether the Model list must refresh.
+    cl.user_session.set("panel_provider", provider)
     await cl.ChatSettings(widgets).send()
 
 
@@ -840,22 +872,16 @@ async def on_settings_update(settings_data: dict) -> None:
     """
     settings = load_settings()
     previous_provider = settings.provider
-    raw_provider = settings_data.get("Provider")
-    settings.provider = (
-        None if raw_provider in (None, "", "Auto") else str(raw_provider)
-    )
-    settings.model = settings_data.get("Model")
+    payload = _settings_from_payload(settings_data)
+    settings.provider = payload.provider
+    settings.model = payload.model
     if settings.provider is not None:
         choices = model_choices(settings.provider) or ["default"]
         if settings.model not in choices:
             settings.model = choices[0]
-    settings.permission_mode = settings_data.get("Permission Mode")
-    allow_list = str(settings_data.get("Allow List") or "")
-    settings.allow_list = [
-        line.strip() for line in allow_list.split("\n") if line.strip()
-    ]
-    working_dir = str(settings_data.get("Working directory") or "").strip()
-    settings.working_dir = working_dir or None
+    settings.permission_mode = payload.permission_mode
+    settings.allow_list = payload.allow_list
+    settings.working_dir = payload.working_dir
     save_settings(settings)
     logger.info(
         "Settings updated: provider=%s model=%s mode=%s working_dir=%s",
@@ -883,6 +909,35 @@ async def on_settings_update(settings_data: dict) -> None:
             f"{provider_note}{workspace_note}"
         )
     ).send()
+
+
+@cl.on_settings_edit
+async def on_settings_edit(settings_data: dict) -> None:
+    """Live-refresh the Model combobox when Provider changes (open dialog).
+
+    Chainlit has no dependent selects: the client only emits
+    ``chat_settings_edit`` while the panel dialog is open, carrying the
+    *whole* form (a TextInput fires it per keystroke). The panel is
+    therefore re-sent only when the payload's provider differs from the
+    one the currently displayed panel was built with
+    (``panel_provider``) — otherwise a keystroke in the Allow List would
+    reset the form and drop the focus.
+
+    The re-send is transient: nothing is written to the settings file
+    (the user may still press Cancel), and the widgets are built from
+    the payload, so unsaved edits to the other fields survive the
+    refresh. A model left over from another provider is simply not in
+    the new list, so the Model select falls back to the first valid
+    choice.
+    """
+    settings = _settings_from_payload(settings_data)
+    if settings.provider == cl.user_session.get("panel_provider"):
+        return  # not a provider change — leave the dialog alone
+    logger.info(
+        "Settings edit: provider=%s -> refreshing the model list",
+        settings.provider or "Auto",
+    )
+    await _show_settings_panel(settings)
 
 
 @cl.action_callback("new_session")
