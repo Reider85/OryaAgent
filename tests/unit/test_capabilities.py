@@ -36,6 +36,30 @@ def test_mimo_rejected():
         get_llm("mimo", "mimo-7b-rl", api_key="sk-fake")
 
 
+def test_qwq_rejected_with_hint():
+    for model in ("qwq-plus", "qwq-plus-latest", "qwq-32b", "qwq-32b-preview"):
+        with pytest.raises(ValueError) as exc_info:
+            get_llm("qwen", model, api_key="sk-fake")
+        message = str(exc_info.value)
+        assert "tool-calling" in message, model
+        assert "qwen3-coder-plus" in message, model
+        assert "require_tools=False" in message, model
+
+
+def test_qwq_plain_chat_fallback():
+    llm = get_llm("qwen", "qwq-plus", api_key="sk-fake", require_tools=False)
+    assert llm.model == "qwq-plus"
+
+
+def test_qwq_ollama_rejected():
+    for model in ("qwq", "qwq:latest", "qwq:32b"):
+        with pytest.raises(ValueError) as exc_info:
+            get_llm("ollama", model)
+        message = str(exc_info.value)
+        assert "tool-calling" in message, model
+        assert "qwen2.5-coder:14b" in message, model
+
+
 def test_chat_models_accepted_by_default():
     for provider, model, key in [
         ("deepseek", "deepseek-chat", "sk-fake"),

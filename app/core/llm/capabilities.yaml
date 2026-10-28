@@ -40,6 +40,12 @@ capabilities:
     qwen-turbo: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 1000000}
     qwen2.5-72b-instruct: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 131072}
     qwen3-235b-a22b: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 131072}
+    # QwQ (MVP-POLISH-1): reasoning model without reliable tool-calling —
+    # get_llm() must fail fast instead of a confusing runtime error.
+    qwq-plus: {supports_tools: false, supports_streaming: true, supports_system_prompt: true, context_window: 131072, suggests: qwen3-coder-plus}
+    qwq-plus-latest: {supports_tools: false, supports_streaming: true, supports_system_prompt: true, context_window: 131072, suggests: qwen3-coder-plus}
+    qwq-32b: {supports_tools: false, supports_streaming: true, supports_system_prompt: true, context_window: 131072, suggests: qwen3-coder-plus}
+    qwq-32b-preview: {supports_tools: false, supports_streaming: true, supports_system_prompt: true, context_window: 32768, suggests: qwen3-coder-plus}
 
   glm:
     glm-4-plus: {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 128000}
@@ -141,3 +147,8 @@ capabilities:
     "qwen2.5-coder:7b": {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 32768}
     "llama3.3:70b": {supports_tools: true, supports_streaming: true, supports_system_prompt: true, context_window: 131072}
     "deepseek-r1:14b": {supports_tools: false, supports_streaming: true, supports_system_prompt: true, context_window: 64000, suggests: "qwen2.5-coder:14b"}
+    # QwQ (MVP-POLISH-1): reasoning model without reliable tool-calling —
+    # same stance as deepseek-r1:14b above, despite Ollama's "tools" badge.
+    "qwq": {supports_tools: false, supports_streaming: true, supports_system_prompt: true, context_window: 40960, suggests: "qwen2.5-coder:14b"}
+    "qwq:latest": {supports_tools: false, supports_streaming: true, supports_system_prompt: true, context_window: 40960, suggests: "qwen2.5-coder:14b"}
+    "qwq:32b": {supports_tools: false, supports_streaming: true, supports_system_prompt: true, context_window: 40960, suggests: "qwen2.5-coder:14b"}

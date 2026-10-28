@@ -62,6 +62,19 @@ def test_capabilities_yaml_shape():
     assert entry.suggests == "deepseek-chat"
 
 
+def test_qwq_capabilities_registered():
+    """MVP-POLISH-1: every QwQ id is registered as no-tools with a hint."""
+    caps = load_capabilities()
+    for model_id in ("qwq-plus", "qwq-plus-latest", "qwq-32b", "qwq-32b-preview"):
+        entry = caps["qwen"][model_id]
+        assert entry.supports_tools is False, model_id
+        assert entry.suggests == "qwen3-coder-plus", model_id
+    for model_id in ("qwq", "qwq:latest", "qwq:32b"):
+        entry = caps["ollama"][model_id]
+        assert entry.supports_tools is False, model_id
+        assert entry.suggests == "qwen2.5-coder:14b", model_id
+
+
 def test_zai_glm_flash_aliases_registered():
     models = load_models()
     flash = models["glm-4.5-flash"]
