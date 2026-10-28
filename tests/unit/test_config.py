@@ -79,6 +79,11 @@ def test_defaults():
     assert s.redis_url == "redis://localhost:6379"
     assert s.permission_policy == "strict"
     assert s.recursion_limit == 25
+    # Failure recovery (M-28)
+    assert s.recovery_max_rounds == 3
+    assert s.recovery_variants == 5
+    assert s.llm_retry_attempts == 3
+    assert s.llm_retry_backoff_seconds == 1.0
     assert s.context_max_tokens == 120_000
     assert s.log_level == "INFO"
     assert s.memory_dir == Path.home() / ".orya" / "memory"
@@ -123,6 +128,22 @@ def test_env_overrides(monkeypatch: pytest.MonkeyPatch):
     assert s.permission_policy == "permissive"
     assert s.recursion_limit == 50
     assert s.log_level == "DEBUG"
+
+
+def test_recovery_env_overrides(monkeypatch: pytest.MonkeyPatch):
+    """M-28 budgets come from the env, like every other loop knob."""
+    monkeypatch.setenv("ORYA_RECOVERY_MAX_ROUNDS", "1")
+    monkeypatch.setenv("ORYA_RECOVERY_VARIANTS", "2")
+    monkeypatch.setenv("ORYA_LLM_RETRY_ATTEMPTS", "5")
+    monkeypatch.setenv("ORYA_LLM_RETRY_BACKOFF_SECONDS", "0.25")
+    clear_settings_cache()
+
+    s = get_settings()
+
+    assert s.recovery_max_rounds == 1
+    assert s.recovery_variants == 2
+    assert s.llm_retry_attempts == 5
+    assert s.llm_retry_backoff_seconds == 0.25
 
 
 def test_dotenv_is_read(tmp_path: Path):

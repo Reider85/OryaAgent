@@ -34,10 +34,13 @@ def _ev(
     run_id: str = "run-1",
     tool: str | None = None,
     data: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     event: dict[str, Any] = {"event": name, "run_id": run_id, "data": data or {}}
     if tool is not None:
         event["name"] = tool
+    if metadata is not None:
+        event["metadata"] = metadata
     return event
 
 
@@ -190,6 +193,65 @@ async def test_stream_graph_events_yields_nothing_for_chain_only_events() -> Non
 
     assert events == []
     assert len(graph.calls) == 1
+
+
+# --- M-28: failure recovery in the stream ------------------------------------
+
+
+async def test_stream_graph_events_drops_recover_node_tokens() -> None:
+    """The recover node's alternatives chatter never reaches the reply."""
+    graph = _FakeEventGraph(
+        [
+            _ev(
+                "on_chat_model_stream",
+                data={"chunk": AIMessageChunk(content="Alternatives: 1) ...")},
+                metadata={"langgraph_node": "recover"},
+            ),
+            _ev(
+                "on_chat_model_stream",
+                data={"chunk": AIMessageChunk(content="final answer")},
+                metadata={"langgraph_node": "agent"},
+            ),
+            _ev("on_chat_model_stream", data={"chunk": AIMessageChunk(content="ok")}),
+        ]
+    )
+
+    events = [event async for event in agent.stream_graph_events(graph, "hi", {})]
+
+    assert events == [
+        ("token", {"content": "final answer"}),
+        ("token", {"content": "ok"}),
+    ]
+
+
+async def test_stream_graph_events_maps_tool_error_to_tool_end() -> None:
+    """A failed call closes its step card: on_tool_error -> tool_end (M-28)."""
+    graph = _FakeEventGraph(
+        [
+            _ev("on_tool_start", tool="boom", data={"input": {"text": "x"}}),
+            _ev(
+                "on_tool_error",
+                run_id="run-9",
+                tool="boom",
+                data={"error": ValueError("kaboom"), "tool_call_id": "c1"},
+            ),
+        ]
+    )
+
+    events = [event async for event in agent.stream_graph_events(graph, "hi", {})]
+
+    assert events == [
+        ("tool_start", {"run_id": "run-1", "tool": "boom", "args": {"text": "x"}}),
+        (
+            "tool_end",
+            {
+                "run_id": "run-9",
+                "tool": "boom",
+                "output": "kaboom",
+                "from_cache": False,
+            },
+        ),
+    ]
 
 
 # --- resume_graph_events (M-16) ----------------------------------------------

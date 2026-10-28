@@ -46,7 +46,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
 from app.core.context import trim_messages
-from app.core.graph import build_graph, resume_command
+from app.core.graph import RECOVER_NODE_NAME, build_graph, resume_command
 from app.core.llm import get_llm
 from app.core.permissions import get_policy
 from app.core.prompt import build_system_prompt
@@ -124,15 +124,27 @@ async def _stream_normalized(
 
     Chat-model token chunks become ``token`` events, tool calls become
     ``tool_start`` / ``tool_end`` pairs keyed by LangGraph ``run_id``.
+    Since M-28 a failed tool emits ``on_tool_error`` (langgraph never
+    produces ``on_tool_end`` for it) — that is normalized to a ``tool_end``
+    too, so the step card closes with the error text instead of hanging.
     Internal chain events are ignored. An interrupted run simply ends
     the iteration; the caller probes the checkpoint state afterwards
     (``state.next != ()``).
+
+    Tokens produced inside the M-28 ``recover`` node are dropped: that
+    call is the model talking to itself about alternatives — its prose
+    must not end up in the final assistant reply (the terminal ``done``
+    falls back to :func:`final_answer_text` when the recovery answer is
+    the last word of the turn).
     """
     async for event in graph.astream_events(payload, config, version="v2"):
         kind = event.get("event")
         data = event.get("data") or {}
         run_id = str(event.get("run_id") or "")
         if kind == "on_chat_model_stream":
+            node = str((event.get("metadata") or {}).get("langgraph_node") or "")
+            if node == RECOVER_NODE_NAME:
+                continue
             text = content_text(getattr(data.get("chunk"), "content", None))
             if text:
                 yield "token", {"content": text}
@@ -154,6 +166,18 @@ async def _stream_normalized(
                     "tool": event.get("name"),
                     "output": content_text(getattr(output, "content", output)),
                     "from_cache": _from_cache(output),
+                },
+            )
+        elif kind == "on_tool_error":
+            # M-28: langgraph emits on_tool_error (never on_tool_end) for a
+            # failed call — close the step card with the error as output.
+            yield (
+                "tool_end",
+                {
+                    "run_id": run_id,
+                    "tool": event.get("name"),
+                    "output": content_text(data.get("error")) or "tool failed",
+                    "from_cache": False,
                 },
             )
 

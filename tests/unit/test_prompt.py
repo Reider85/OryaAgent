@@ -89,6 +89,14 @@ def test_behavior_rules_block_present():
     assert block in build_system_prompt({"messages": []}, [echo])[0].content
 
 
+def test_behavior_rules_include_failure_recovery_rule():
+    """M-28: the prompt tells the model not to give up after one error."""
+    block = behavior_rules_block()
+
+    assert "If an action fails" in block
+    assert "try a different one" in block
+
+
 def test_stable_prefix_precedes_dynamic_sections():
     """Identity must come before dynamic file-derived sections (cacheable prefix)."""
     content = build_system_prompt({"messages": []}, [echo])[0].content

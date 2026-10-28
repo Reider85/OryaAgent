@@ -66,7 +66,10 @@ _BEHAVIOR_RULES_BLOCK = """\
 4. Before `bash`: explain the intent in one sentence.
 5. After `edit`: re-read the affected part of the file to verify.
 6. For multi-file changes: outline the plan first.
-7. If uncertain about the user's intent — ask instead of guessing."""
+7. If uncertain about the user's intent — ask instead of guessing.
+8. If an action fails (tool error, missing file, bad arguments), do not
+   stop: reason about alternative approaches — another tool, other
+   arguments, a different strategy — and try a different one."""
 
 _UNTRUSTED_POLICY_BLOCK = """\
 # Untrusted Content Policy

@@ -1,4 +1,4 @@
-"""Agent-loop tests (M-04) + permission gate (M-13).
+"""Agent-loop tests (M-04) + permission gate (M-13) + recovery (M-28).
 
 Mock model, mock tools, in-memory checkpointer; the real
 ``PermissionPolicy`` is exercised end-to-end for the ask/deny flows.
@@ -6,12 +6,14 @@ Mock model, mock tools, in-memory checkpointer; the real
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Any
 
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from langchain_core.tools import tool
+from langchain_core.tools import ToolException, tool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END
 from langgraph.graph.state import CompiledStateGraph
@@ -19,13 +21,24 @@ from langgraph.types import Command
 
 from app.core.config import clear_settings_cache
 from app.core.graph import (
+    _failed_tool_messages,
     build_graph,
     build_human_node,
     default_run_config,
+    recovery_nudge,
     resume_command,
     route_after_agent,
+    tool_error_text,
 )
 from app.core.permissions import Decision, PermissionConfig, PermissionPolicy
+
+
+@pytest.fixture(autouse=True)
+def _cold_settings_cache():
+    """Every test runs against a cold settings cache (AGENTS.md)."""
+    clear_settings_cache()
+    yield
+    clear_settings_cache()
 
 
 @tool
@@ -503,3 +516,316 @@ async def test_unknown_resume_value_fails_closed():
         isinstance(m, ToolMessage) and "echo: hi" in m.content
         for m in result["messages"]
     )
+
+
+# --- M-28: failure recovery -------------------------------------------------
+
+
+@tool
+def boom(text: str) -> str:
+    """Always fails — the M-28 recovery fixture."""
+    raise ToolException("kaboom: no such file")
+
+
+class _ScriptedModel:
+    """Duck-typed chat model: scripted responses, records every prompt.
+
+    An entry may be an ``Exception`` — it is raised instead of returned,
+    which is how the provider-failure (M-28 retry) tests drive the seam
+    without a real API. Instances also record the exact prompt list of
+    each call so tests can assert on the recovery nudge.
+    """
+
+    def __init__(self, *responses: AIMessage | Exception) -> None:
+        self._responses: list[AIMessage | Exception] = list(responses)
+        self.prompts: list[list[Any]] = []
+
+    async def ainvoke(self, messages: Any, **kwargs: Any) -> AIMessage:
+        self.prompts.append(list(messages))
+        if not self._responses:
+            raise AssertionError("model called more often than scripted")
+        response = self._responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+def _recovery_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **env: str) -> None:
+    """Sandbox the M-28 settings for one test (AGENTS.md config rules)."""
+    monkeypatch.chdir(tmp_path)  # ignore the repo-root .env
+    for name in list(os.environ):
+        if name.startswith("ORYA_"):
+            monkeypatch.delenv(name, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    clear_settings_cache()
+
+
+async def test_failed_tool_is_error_message_not_a_crashed_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """A ToolException must not kill the turn: it becomes data (M-28)."""
+    _recovery_env(monkeypatch, tmp_path, ORYA_RECOVERY_MAX_ROUNDS="0")
+    model = _ScriptedModel(
+        _ai_with_calls(("boom", {"text": "x"}, "c1")),
+        AIMessage(content="handled"),
+    )
+    graph = build_graph([boom, echo], model, None, MockPolicy("allow"))
+
+    result = await graph.ainvoke({"messages": [HumanMessage("hi")]})
+
+    errors = [
+        m
+        for m in result["messages"]
+        if isinstance(m, ToolMessage) and m.status == "error"
+    ]
+    assert len(errors) == 1
+    assert "kaboom: no such file" in errors[0].content
+    assert result["messages"][-1].content == "handled"
+    # the budget key is only written once recovery actually ran (it didn't)
+    assert not result.get("recovery_rounds")
+
+
+async def test_failed_action_asks_for_alternatives_and_retries():
+    """The recover node demands alternatives and the loop tries one (M-28)."""
+    model = _ScriptedModel(
+        _ai_with_calls(("boom", {"text": "x"}, "c1")),
+        _ai_with_calls(("echo", {"text": "second try"}, "c2")),
+        AIMessage(content="done"),
+    )
+    graph = build_graph([boom, echo], model, None, MockPolicy("allow"))
+
+    result = await graph.ainvoke({"messages": [HumanMessage("hi")]})
+
+    errors = [m for m in result["messages"] if getattr(m, "status", None) == "error"]
+    assert len(errors) == 1
+    assert any(
+        isinstance(m, ToolMessage) and "echo: second try" in m.content
+        for m in result["messages"]
+    )
+    assert result["messages"][-1].content == "done"
+    assert result["recovery_rounds"] == 0  # success reset the budget
+
+    # The 2nd model call is the recover nudge: invoke-local, error framed
+    # as untrusted data, exactly one tool call demanded, 5 variants asked.
+    assert len(model.prompts) == 3
+    nudge = model.prompts[1][-1]
+    assert isinstance(nudge, HumanMessage)
+    assert nudge.content.startswith("# Recovery: the previous action failed")
+    assert "kaboom: no such file" in nudge.content
+    assert "up to 5 alternative" in nudge.content
+    assert "EXACTLY ONE tool" in nudge.content
+    assert "[UNTRUSTED_CONTENT_START]" in nudge.content
+    # ...and it never leaked into the persisted conversation history.
+    assert not any(
+        isinstance(m, HumanMessage) and "# Recovery" in str(m.content)
+        for m in result["messages"]
+    )
+
+
+async def test_recovery_budget_exhausted_returns_to_plain_agent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """After ``recovery_max_rounds`` failures no further recover calls (M-28)."""
+    _recovery_env(monkeypatch, tmp_path, ORYA_RECOVERY_MAX_ROUNDS="2")
+    model = _ScriptedModel(
+        _ai_with_calls(("boom", {"text": "x"}, "c1")),
+        _ai_with_calls(("boom", {"text": "x"}, "c2")),
+        _ai_with_calls(("boom", {"text": "x"}, "c3")),
+        AIMessage(content="cannot do it"),
+    )
+    graph = build_graph([boom], model, None, MockPolicy("allow"))
+
+    result = await graph.ainvoke({"messages": [HumanMessage("hi")]})
+
+    # agent -> recover -> recover -> agent: exactly 4 calls, then give-up.
+    assert len(model.prompts) == 4
+    errors = [m for m in result["messages"] if getattr(m, "status", None) == "error"]
+    assert len(errors) == 3
+    assert result["messages"][-1].content == "cannot do it"
+    assert result["recovery_rounds"] == 2  # kept, only a success/turn resets it
+
+
+async def test_unexpected_tool_bug_does_not_kill_the_run():
+    """A plain exception inside a tool is converted too, with its class (M-28)."""
+
+    @tool
+    def buggy(text: str) -> str:
+        """Raises a non-ToolException (a real bug)."""
+        raise ValueError("unexpected")
+
+    model = _ScriptedModel(
+        _ai_with_calls(("buggy", {"text": "x"}, "c1")),
+        AIMessage(content="noted"),
+    )
+    graph = build_graph([buggy], model, None, MockPolicy("allow"))
+
+    result = await graph.ainvoke({"messages": [HumanMessage("hi")]})
+
+    errors = [m for m in result["messages"] if getattr(m, "status", None) == "error"]
+    assert len(errors) == 1
+    assert errors[0].content == "ValueError: unexpected"
+    assert result["messages"][-1].content == "noted"  # the run kept going
+
+
+async def test_permission_denial_does_not_trigger_recovery():
+    """Refusals are not errors: the deny path never enters recover (M-28)."""
+    model = _ScriptedModel(
+        _ai_with_calls(("echo", {"text": "x"}, "c1")),
+        AIMessage(content="understood"),
+    )
+    graph = build_graph([echo], model, None, MockPolicy("deny"))
+
+    result = await graph.ainvoke({"messages": [HumanMessage("hi")]})
+
+    assert len(model.prompts) == 2  # plain agent twice — no recover round
+    assert any(
+        isinstance(m, ToolMessage) and m.content.startswith("Denied by policy")
+        for m in result["messages"]
+    )
+    second_call_last = model.prompts[1][-1]
+    assert not isinstance(second_call_last, HumanMessage)
+    assert not result.get("recovery_rounds")  # refusals never touch the budget
+
+
+async def test_recover_batch_is_permission_gated():
+    """Retries never bypass the human node: every round asks again (M-28)."""
+    model = _ScriptedModel(
+        _ai_with_calls(("boom", {"text": "x"}, "c1")),
+        _ai_with_calls(("echo", {"text": "second try"}, "c2")),
+        AIMessage(content="done"),
+    )
+    policy = MockPolicy(decision="ask")
+    graph = build_graph([boom, echo], model, InMemorySaver(), policy)
+    config = default_run_config("thread-recover-gate")
+
+    first = await graph.ainvoke({"messages": [HumanMessage("hi")]}, config)
+    assert isinstance(first["messages"][-1], AIMessage)
+    state = await graph.aget_state(config)
+    assert state.next == ("human",)  # paused on the original call
+
+    second = await graph.ainvoke(resume_command("approve"), config)
+    assert second["messages"][-1].content == ""  # recover's tool-call answer
+    state = await graph.aget_state(config)
+    assert state.next == ("human",)  # the *alternative* asks again
+    names = [call["name"] for call in policy.checked]
+    assert names[0] == "boom"
+    assert names.count("echo") == 1  # the alternative went through the gate too
+
+    final = await graph.ainvoke(resume_command("approve"), config)
+    assert final["messages"][-1].content == "done"
+    assert any(
+        isinstance(m, ToolMessage) and "echo: second try" in m.content
+        for m in final["messages"]
+    )
+    assert final["recovery_rounds"] == 0
+    state = await graph.aget_state(config)
+    assert state.next == ()
+
+
+async def test_llm_provider_failure_is_retried_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Transient provider errors are retried, not surfaced (M-28)."""
+    _recovery_env(
+        monkeypatch,
+        tmp_path,
+        ORYA_LLM_RETRY_ATTEMPTS="3",
+        ORYA_LLM_RETRY_BACKOFF_SECONDS="0",
+    )
+    model = _ScriptedModel(
+        ValueError("rate limited"),
+        ValueError("connection reset"),
+        AIMessage(content="ok after retries"),
+    )
+    graph = build_graph([echo], model, None, MockPolicy("allow"))
+
+    result = await graph.ainvoke({"messages": [HumanMessage("hi")]})
+
+    assert result["messages"][-1].content == "ok after retries"
+    assert len(model.prompts) == 3  # two failures + the successful call
+
+
+async def test_llm_provider_failure_raises_after_the_budget_is_spent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """When every attempt fails the original error still reaches the API."""
+    _recovery_env(
+        monkeypatch,
+        tmp_path,
+        ORYA_LLM_RETRY_ATTEMPTS="2",
+        ORYA_LLM_RETRY_BACKOFF_SECONDS="0",
+    )
+    model = _ScriptedModel(RuntimeError("boom down"), RuntimeError("boom down"))
+    graph = build_graph([echo], model, None, MockPolicy("allow"))
+
+    with pytest.raises(RuntimeError, match="boom down"):
+        await graph.ainvoke({"messages": [HumanMessage("hi")]})
+
+    assert len(model.prompts) == 2
+
+
+async def test_llm_auth_error_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Non-retryable provider failures fail fast — one attempt only (M-28)."""
+
+    class AuthenticationError(Exception):
+        """Name-matched by ``_is_retryable`` (providers raise their own)."""
+
+    _recovery_env(
+        monkeypatch,
+        tmp_path,
+        ORYA_LLM_RETRY_ATTEMPTS="3",
+        ORYA_LLM_RETRY_BACKOFF_SECONDS="0",
+    )
+    model = _ScriptedModel(AuthenticationError("bad api key"))
+    graph = build_graph([echo], model, None, MockPolicy("allow"))
+
+    with pytest.raises(AuthenticationError, match="bad api key"):
+        await graph.ainvoke({"messages": [HumanMessage("hi")]})
+
+    assert len(model.prompts) == 1
+
+
+def test_tool_error_text_keeps_tool_exceptions_clean():
+    """ToolException -> verbatim message; anything else keeps its class."""
+    assert tool_error_text(ToolException("file not found")) == "file not found"
+    assert tool_error_text(ValueError("bad value")) == "ValueError: bad value"
+
+
+def test_failed_tool_messages_only_reads_the_trailing_error_batch():
+    batch = [
+        HumanMessage("hi"),
+        _ai_with_calls(("boom", {"text": "x"}, "c1")),
+        ToolMessage(content="first worked", tool_call_id="c0", status="success"),
+        ToolMessage(content="kaboom", tool_call_id="c1", status="error"),
+    ]
+    previous = ToolMessage(content="old error", tool_call_id="old", status="error")
+
+    failed = _failed_tool_messages([previous, *batch])
+
+    assert [m.content for m in failed] == ["kaboom"]  # stops at the AI message
+
+
+def test_recovery_nudge_frames_errors_as_untrusted_and_counts_variants():
+    messages = [
+        HumanMessage("hi"),
+        _ai_with_calls(("boom", {"text": "x"}, "c1")),
+        ToolMessage(
+            content="kaboom: no such file",
+            tool_call_id="c1",
+            name="boom",
+            status="error",
+        ),
+    ]
+
+    nudge = recovery_nudge(messages, variants=4)
+
+    assert isinstance(nudge, HumanMessage)
+    assert "up to 4 alternative" in nudge.content
+    assert "EXACTLY ONE tool" in nudge.content
+    assert '{"text": "x"}' in nudge.content  # the failing args, for context
+    start = nudge.content.index("[UNTRUSTED_CONTENT_START]")
+    end = nudge.content.index("[UNTRUSTED_CONTENT_END]")
+    assert start < nudge.content.index("kaboom: no such file") < end

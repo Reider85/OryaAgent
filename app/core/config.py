@@ -196,6 +196,36 @@ class Settings(BaseSettings):
         description="Max agent-loop iterations (LangGraph recursion_limit)",
     )
 
+    # --- Failure recovery (M-28) ------------------------------------------
+    recovery_max_rounds: int = Field(
+        default=3,
+        validation_alias=AliasChoices(
+            "ORYA_RECOVERY_MAX_ROUNDS", "RECOVERY_MAX_ROUNDS"
+        ),
+        description="How many times a failed tool batch may trigger the "
+        "recover node (alternatives requested from the LLM)",
+    )
+    recovery_variants: int = Field(
+        default=5,
+        validation_alias=AliasChoices("ORYA_RECOVERY_VARIANTS", "RECOVERY_VARIANTS"),
+        description="How many alternative approaches the recover nudge asks "
+        "the model to enumerate (one is attempted per round)",
+    )
+    llm_retry_attempts: int = Field(
+        default=3,
+        validation_alias=AliasChoices("ORYA_LLM_RETRY_ATTEMPTS", "LLM_RETRY_ATTEMPTS"),
+        description="Total attempts of one LLM provider call incl. the "
+        "first one (1 = no retry)",
+    )
+    llm_retry_backoff_seconds: float = Field(
+        default=1.0,
+        validation_alias=AliasChoices(
+            "ORYA_LLM_RETRY_BACKOFF_SECONDS", "LLM_RETRY_BACKOFF_SECONDS"
+        ),
+        description="Base delay for the exponential LLM retry backoff "
+        "(1s, 2s, 4s, ... capped at 30s)",
+    )
+
     # --- Context manager (M-06) -------------------------------------------
     context_max_tokens: int = Field(
         default=120_000,
