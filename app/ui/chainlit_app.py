@@ -31,6 +31,11 @@ selects, so the panel re-sends itself (``on_settings_edit`` while the
 dialog is open, ``on_settings_update`` on Confirm) with the model list
 re-filtered to the selected provider.
 
+Both chat-level panels of M-17 — the sidebar and the «Open project»
+folder picker — are single messages updated in place: a repeated click
+rewrites the stored message instead of stacking another window whose
+stale buttons drive some other message.
+
 M-26 adds the ``/learn`` slash-command (BACKLOG6): a message starting
 with ``/learn [name] [description]`` is *not* a chat turn — it calls
 ``POST /sessions/{id}/learn`` (capture the last successful tool-call
@@ -53,6 +58,7 @@ the ``done`` frame (the server logs best-effort in stream mode).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import shlex
@@ -529,12 +535,22 @@ def _render_memory(action: str, data: dict[str, Any]) -> str:
 
 
 def _browser_actions(data: dict[str, Any]) -> list[cl.Action]:
-    """Action buttons for one ``GET /workspace/browse`` listing."""
+    """Action buttons for one ``GET /workspace/browse`` listing.
+
+    Chainlit renders message actions as small grey ghost buttons, so the
+    folder buttons carry a Lucide ``folder`` icon plus a tooltip with the
+    full path — that is what makes the row read as a folder list instead
+    of a wall of plain text. The three commands get their own icons
+    (``arrow-up`` / ``folder-open`` / ``x``) to stay visually separate
+    from the folders they act on.
+    """
     actions = [
         cl.Action(
             name="open_project_nav",
             payload={"path": entry["path"]},
             label=str(entry["name"]),
+            icon="folder",
+            tooltip=str(entry["path"]),
         )
         for entry in data.get("dirs") or []
     ]
@@ -542,7 +558,11 @@ def _browser_actions(data: dict[str, Any]) -> list[cl.Action]:
     if parent:
         actions.append(
             cl.Action(
-                name="open_project_nav", payload={"path": parent}, label=".. (up)"
+                name="open_project_nav",
+                payload={"path": parent},
+                label=".. (up)",
+                icon="arrow-up",
+                tooltip=str(parent),
             )
         )
     actions.append(
@@ -550,9 +570,12 @@ def _browser_actions(data: dict[str, Any]) -> list[cl.Action]:
             name="open_project_open",
             payload={"path": data.get("path")},
             label="Open this folder",
+            icon="folder-open",
         )
     )
-    actions.append(cl.Action(name="open_project_cancel", payload={}, label="Cancel"))
+    actions.append(
+        cl.Action(name="open_project_cancel", payload={}, label="Cancel", icon="x")
+    )
     return actions
 
 
@@ -560,8 +583,13 @@ def _browser_content(data: dict[str, Any]) -> str:
     """Message body above the folder buttons."""
     dirs = data.get("dirs") or []
     note = " (listing truncated)" if data.get("truncated") else ""
+    plural = "" if len(dirs) == 1 else "s"
+    count = f"\n\n{len(dirs)} folder{plural}" if dirs else ""
     empty = "\n\n_(no subfolders — open this folder or go up)_" if not dirs else ""
-    return f"**Open project** — pick a folder{note}:\n\n`{data.get('path')}`{empty}"
+    return (
+        f"📁 **Open project** — pick a folder{note}:\n\n"
+        f"`{data.get('path')}`{count}{empty}"
+    )
 
 
 async def _browse(path: str | None = None) -> dict[str, Any] | None:
@@ -589,22 +617,60 @@ async def _browse(path: str | None = None) -> dict[str, Any] | None:
     return response.json()
 
 
+def _browser_lock() -> asyncio.Lock:
+    """Per-session lock serialising writes to the picker message.
+
+    Two quick clicks on «Open project» run their callbacks concurrently:
+    without the lock the second one could ``update()`` a message whose
+    ``send()`` has not landed yet. Claiming the session slot before the
+    first ``await`` already guarantees a single message — the lock makes
+    the writes land in order.
+    """
+    lock = cl.user_session.get("project_browser_lock")
+    if lock is None:
+        lock = asyncio.Lock()
+        cl.user_session.set("project_browser_lock", lock)
+    return lock
+
+
 async def _show_browser(data: dict[str, Any]) -> None:
-    """Send a fresh browser message and remember it for in-place updates."""
-    message = cl.Message(content=_browser_content(data), actions=_browser_actions(data))
-    await message.send()
-    cl.user_session.set("project_browser", message)
+    """Show the listing in **one** message: reuse it, update in place.
+
+    A fresh ``cl.Message`` is sent only on the first open — every later
+    click on «Open project» (and every navigation step) rewrites the
+    message stored under ``project_browser``, so the chat never piles up
+    picker windows whose stale buttons drive some *other* message.
+    """
+    content = _browser_content(data)
+    actions = _browser_actions(data)
+    async with _browser_lock():
+        message = cl.user_session.get("project_browser")
+        if message is None:
+            message = cl.Message(content=content, actions=actions)
+            # Claim the slot before awaiting so a second click reuses it.
+            cl.user_session.set("project_browser", message)
+            await message.send()
+            return
+        # The client *appends* every `action` event and only drops buttons
+        # on `remove_action` — rewriting `message.actions` alone would
+        # stack a second copy of the folder buttons under the message.
+        await message.remove_actions()
+        message.content = content
+        message.actions = actions
+        await message.update()
 
 
 async def _update_browser(content: str) -> None:
     """Replace the browser message with ``content`` (no buttons)."""
-    message = cl.user_session.get("project_browser")
-    if message is None:
-        await cl.Message(content=content).send()
-        return
-    message.content = content
-    message.actions = []
-    await message.update()
+    async with _browser_lock():
+        message = cl.user_session.get("project_browser")
+        if message is None:
+            await cl.Message(content=content).send()
+            return
+        await message.remove_actions()  # see _show_browser — buttons are sticky
+        message.content = content
+        message.actions = []
+        await message.update()
 
 
 async def _start_project_browser(path: str | None = None) -> None:
@@ -671,13 +737,7 @@ async def on_open_project_nav(action: cl.Action) -> None:
     data = await _browse(path)
     if data is None:
         return
-    message = cl.user_session.get("project_browser")
-    if message is None:
-        await _show_browser(data)
-        return
-    message.content = _browser_content(data)
-    message.actions = _browser_actions(data)
-    await message.update()
+    await _show_browser(data)
 
 
 @cl.action_callback("open_project_open")
@@ -749,6 +809,11 @@ async def _show_sidebar() -> None:
     nothing), so the session list travels as a regular message with
     ``cl.Action`` buttons instead. The project line reports the folder
     the tools currently resolve against (blank = the server's cwd).
+
+    Like the folder picker, the sidebar lives in a **single** message:
+    ``on_new_session`` / ``on_switch_session`` rewrite it in place instead
+    of sending a new one, or every session switch would stack another
+    sidebar (with buttons that still act on the old list).
     """
     settings = load_settings()
     project = settings.working_dir or "(server cwd)"
@@ -769,12 +834,19 @@ async def _show_sidebar() -> None:
                 label=label,
             )
         )
-    await cl.Message(
-        content=(
-            f"**Sessions** — pick one or start a new session.\n\nProject: `{project}`"
-        ),
-        actions=actions,
-    ).send()
+    content = f"**Sessions** — pick one or start a new session.\n\nProject: `{project}`"
+    message = cl.user_session.get("sidebar_message")
+    if message is None:
+        message = cl.Message(content=content, actions=actions)
+        cl.user_session.set("sidebar_message", message)  # before await
+        await message.send()
+        return
+    # The client appends `action` events by id-less push, so the buttons
+    # being replaced have to be removed explicitly or they stack.
+    await message.remove_actions()
+    message.content = content
+    message.actions = actions
+    await message.update()
 
 
 def _settings_from_payload(settings_data: dict) -> UISettings:

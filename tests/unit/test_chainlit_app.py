@@ -60,6 +60,7 @@ class _FakeMessage:
         self.tokens: list[str] = []
         self.sent = 0
         self.updated = 0
+        self.removed_actions = 0
 
     async def stream_token(self, token: str) -> None:
         self.tokens.append(token)
@@ -70,6 +71,11 @@ class _FakeMessage:
 
     async def update(self) -> None:
         self.updated += 1
+
+    async def remove_actions(self) -> None:
+        # Mirrors chainlit: drops the sent buttons client-side, keeps
+        # ``self.actions`` (the caller replaces the list right after).
+        self.removed_actions += 1
 
 
 class _FakeCl:
@@ -1287,6 +1293,24 @@ async def test_show_sidebar_survives_an_api_failure(
     ]
 
 
+async def test_show_sidebar_reuses_its_message(fake_cl: _FakeCl, patch_client) -> None:
+    """New session / switch session rewrite the sidebar in place (M-17)."""
+    patch_client(
+        lambda request: httpx.Response(
+            200, json={"items": [], "total": 0, "page": 1, "size": 10}
+        )
+    )
+
+    await ui._show_sidebar()
+    await ui._show_sidebar()
+
+    assert len(fake_cl.messages) == 1
+    sidebar = fake_cl.user_session.get("sidebar_message")
+    assert sidebar.sent == 1
+    assert sidebar.updated == 1
+    assert sidebar.removed_actions == 1  # the old button set is dropped
+
+
 async def test_load_history_replays_user_and_assistant(fake_cl: _FakeCl) -> None:
     client = _client_for(
         lambda request: httpx.Response(
@@ -1344,6 +1368,18 @@ def test_browser_actions_include_dirs_up_open_and_cancel() -> None:
     assert actions[0].payload == {"path": "/proj/src"}
     assert actions[2].payload == {"path": "/home"}
     assert actions[3].payload == {"path": "/proj"}
+    # icons distinguish folders from the three commands, tooltips carry
+    # the full path (the button label is only the folder name)
+    assert [a.icon for a in actions] == [
+        "folder",
+        "folder",
+        "arrow-up",
+        "folder-open",
+        "x",
+    ]
+    assert actions[0].tooltip == "/proj/src"
+    assert actions[2].tooltip == "/home"
+    assert actions[4].tooltip == ""
 
 
 def test_browser_actions_hide_up_at_a_root() -> None:
@@ -1361,8 +1397,15 @@ def test_browser_content_reports_path_and_truncation() -> None:
 
     content = ui._browser_content(data)
 
+    assert content.startswith("📁 **Open project**")
     assert "`/proj`" in content
     assert "truncated" in content
+    assert "no subfolders" in content  # empty listing
+
+
+def test_browser_content_counts_folders() -> None:
+    assert "2 folders" in ui._browser_content(_browse_payload(names=("app", "src")))
+    assert "1 folder" in ui._browser_content(_browse_payload(names=("app",)))
 
 
 async def test_open_project_button_starts_the_browser(
@@ -1380,6 +1423,28 @@ async def test_open_project_button_starts_the_browser(
     assert "Open this folder" in [a.label for a in message.actions]
 
 
+async def test_open_project_second_click_updates_the_same_message(
+    fake_cl: _FakeCl, patch_client
+) -> None:
+    """The picker lives in one message — repeated clicks never stack new ones."""
+    patch_client(
+        lambda request: httpx.Response(200, json=_browse_payload(names=("app",)))
+    )
+
+    await ui.on_open_project(SimpleNamespace(payload={}))
+    await ui.on_open_project(SimpleNamespace(payload={}))
+    await ui.on_open_project(SimpleNamespace(payload={}))
+
+    assert len(fake_cl.messages) == 1
+    message = fake_cl.user_session.get("project_browser")
+    assert message.sent == 1
+    assert message.updated == 2
+    # the client appends `action` events — every rewrite must first drop
+    # the previous button set or the folders stack up in the DOM
+    assert message.removed_actions == 2
+    assert "app" in [a.label for a in message.actions]
+
+
 async def test_open_project_nav_updates_in_place(
     fake_cl: _FakeCl, patch_client
 ) -> None:
@@ -1395,6 +1460,7 @@ async def test_open_project_nav_updates_in_place(
 
     assert requests[0].url.params["path"] == "/proj/src"
     assert first.updated == 1
+    assert first.removed_actions == 1  # old buttons dropped before the rewrite
     assert "lib" in [a.label for a in first.actions]
 
 
@@ -1453,6 +1519,7 @@ async def test_open_project_cancel_dismisses_the_browser(
     assert browser.content == "Open project cancelled."
     assert browser.actions == []
     assert browser.updated == 1
+    assert browser.removed_actions == 1  # the folder buttons must vanish too
 
 
 async def test_open_command_starts_the_browser(fake_cl: _FakeCl, patch_client) -> None:
