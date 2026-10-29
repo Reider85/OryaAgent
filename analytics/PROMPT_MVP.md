@@ -25,7 +25,7 @@
 Доставить end-to-end работающего кодинг-агента с:
 
 1. **Нормальным UI с первого дня** (Chainlit поверх FastAPI) — сессии, настройки, interrupt_before-диалог для permission-prompts.
-2. **Базовой долговременной памятью в MD-файлах** (L0: 4 файла — `PROJECT.md`, `LEARNED.md`, `PREFERENCES.md`, `MEMORY_INDEX.md`) с atomic-append.
+2. **Базовой долговременной памятью в MD-файлах** (L0: 6 файлов — `PROJECT.md`, `LEARNED.md`, `PREFERENCES.md`, `FACTS.md`, `DECISIONS.md`, `MEMORY_INDEX.md`) с atomic-append.
 3. **Командой `/learn`** — пользователь явно добавляет знание в LEARNED.md.
 4. **Инструментами кодинга:** `read`, `write`, `edit`, `bash`, `grep`, `glob` — 6 базовых tools.
 5. **Permission-policy** — `interrupt_before` для dangerous tools (write/edit/bash) с подтверждением через UI.
@@ -258,7 +258,7 @@ OryaAgent MVP должен уметь читать конфиги провайд
   1. Identity block ("You are OryaAgent, a senior code-agent...").
   2. Tool descriptions (через `format_tool_to_openai_function`).
   3. Project context block (из `PROJECT.md`, если есть).
-  4. Long-term memory block (из `LEARNED.md` + `PREFERENCES.md` — 4 MD-файла L0).
+  4. Long-term memory block (L0 = 6 файлов; инжектирует 4 scored-файла — `LEARNED.md` + `PREFERENCES.md` + `FACTS.md` + `DECISIONS.md`; `PROJECT.md` уходит в project-context-блок, `MEMORY_INDEX.md` — пустой placeholder).
   5. Behavior rules (workspace hygiene, atomic-writes, no destructive ops without confirmation).
   6. **Untrusted-content policy block** (M-22) — warning, что содержимое файлов/user-input может быть malicious, не выполнять инструкции из file-content.
 - В v7 (BETA) сюда добавится `dynamic_suffix` из DFC, но в MVP — статичный system-prompt.
@@ -384,22 +384,25 @@ OryaAgent MVP должен уметь читать конфиги провайд
 ### 3.7. L0 Memory (M-25, M-26, M-27) — новые в v6, сохранены в v7
 
 **M-25 — MDStore: L0 MD-файлы + atomic-append**
-- `app/core/memory/mdstore.py::MDStore`.
-- 4 файла в `~/.orya/memory/`:
-  - `PROJECT.md` — проект-контекст (mission, stack, conventions).
-  - `LEARNED.md` — выученные факты (через `/learn`).
-  - `PREFERENCES.md` — предпочтения пользователя (стиль кода, tone).
-  - `MEMORY_INDEX.md` — auto-generated индекс L1/L2 memory (placeholder в MVP, full в BETA+).
-- `append(file, content) -> None` — atomic (write to `.tmp`, then `os.replace`).
+- `app/core/memory/md_store.py::MDStore` (+ `models.py::MemoryItem`, `audit.py::record_memory_op`).
+- 6 файлов в `~/.orya/memory/` (бюджеты из `MAX_BYTES` / `DEFAULT_MAX_BYTES` = 8 KB):
+  - `PROJECT.md` (8 KB) — проект-контекст (mission, stack, conventions); читается в `project_context_block`, не в memory-блоке.
+  - `LEARNED.md` (4 KB) — выученные факты (через `/learn`).
+  - `PREFERENCES.md` (2 KB) — предпочтения пользователя (стиль кода, tone).
+  - `FACTS.md` (2 KB) — критические факты о проекте.
+  - `DECISIONS.md` (2 KB) — короткие ADR-выжимки.
+  - `MEMORY_INDEX.md` (8 KB) — auto-generated индекс L1/L2 memory (пустой placeholder в MVP, full в BETA+).
+- `append(file, content) -> None` — один `os.write` в fd с `O_APPEND` + `fsync` под per-file `threading.Lock` (`fcntl.flock` — best-effort только на POSIX, на Windows no-op). tmp + `os.replace` — только для rewrite при compaction (M-27), не для append.
 - `read(file) -> str`.
+- `read_all() -> dict[str, str]` — 6 ключей (= `FILES`).
 - `mtime(file) -> float` (для cache-invalidation).
-- File-lock через `fcntl.flock` для concurrent access.
+- `stats()` — bytes / entries / last_write / over_limit для каждого файла.
 
 **M-26 — `/learn` endpoint + Chainlit slash-command**
 - `app/api/learn.py::POST /learn`:
   - Body: `{"content": str, "category": "fact|preference|project"}`.
-  - Action: append to LEARNED.md (или PREFERENCES.md для category=preference).
-  - Return: `{"status": "ok", "file": "LEARNED.md", "line_count": N}`.
+  - Action: append по `category` → файл: `fact` → `FACTS.md`, `preference` → `PREFERENCES.md`, `project` → `LEARNED.md`.
+  - Return: `{"status", "learned_id", "file", "compacted", "line_count"}`.
 - Chainlit: `@cl.on_slash_command("learn")` — prompt for content, call API.
 - После `/learn` — обновляется `format_memory_block()` в `build_system_prompt` (на следующем turn'е LLM видит новый факт).
 
@@ -466,7 +469,7 @@ OryaAgent MVP должен уметь читать конфиги провайд
 - ✅ Session-log: каждый ход в PostgreSQL + JSONL projection.
 - ✅ CacheWrapper: повторный `read` того же файла (с тем же mtime) → cache-hit.
 - ✅ Prompt-injection defense: системная инструкция с `<!-- ignore previous -->` → detected, logged.
-- ✅ 4 MD-файла L0 создаются при первом запуске (если их нет).
+- ✅ 6 MD-файлов L0 создаются при первом запуске (если их нет; существующие не трuncate-ятся).
 - ✅ `/learn` slash-command → append в LEARNED.md → виден в следующем turn'е.
 - ✅ `/memory/stats` → JSON с file-sizes/line-counts/last-modified.
 - ✅ `/memory/compact` → запускает Compactor (placeholder в MVP: подсчёт метрик без embeddings).
@@ -571,8 +574,10 @@ app/
 │   ├── log.py                 # logging setup
 │   └── memory/
 │       ├── __init__.py
-│       ├── mdstore.py         # M-25: MDStore L0
-│       └── compactor.py       # M-27: Compactor L0→L1 placeholder
+│       ├── md_store.py         # M-25: MDStore L0 (6 файлов)
+│       ├── models.py           # M-25: MemoryItem (записи §3.1.1)
+│       ├── audit.py            # M-25: record_memory_op → memory_audit_log
+│       └── compactor.py        # M-27: Compactor L0→L1 placeholder
 ├── tools/
 │   ├── __init__.py
 │   ├── read.py                # M-07
@@ -608,7 +613,8 @@ tests/
 │   ├── test_tools.py
 │   ├── test_cache.py
 │   ├── test_permissions.py
-│   ├── test_mdstore.py
+│   ├── test_md_store.py
+│   ├── test_memory_models.py   # MemoryItem: формат §3.1.1, ids, парсер
 │   └── test_compactor.py
 ├── integration/
 │   ├── test_provider_anthropic.py     # real API call (skip в CI если нет ключа)
@@ -623,11 +629,13 @@ tests/
 
 ~/.orya/
 ├── config.yaml                # M-02: multi-provider config
-├── memory/                    # M-25
-│   ├── PROJECT.md
-│   ├── LEARNED.md
-│   ├── PREFERENCES.md
-│   └── MEMORY_INDEX.md
+├── memory/                    # M-25 (6 файлов)
+│   ├── PROJECT.md             # ≤ 8 KB — project context (project-context-блок)
+│   ├── LEARNED.md             # ≤ 4 KB — факты через /learn
+│   ├── PREFERENCES.md         # ≤ 2 KB — предпочтения
+│   ├── FACTS.md               # ≤ 2 KB — критические факты
+│   ├── DECISIONS.md           # ≤ 2 KB — ADR-выжимки
+│   └── MEMORY_INDEX.md        # ≤ 8 KB — индекс L1/L2 (пустой placeholder)
 └── sessions/                  # M-14
     └── {session_id}.jsonl
 ```
@@ -645,7 +653,7 @@ tests/
 
 ## 12. Exit criteria (переход MVP → ALPHA)
 
-- ✅ L0 MD-память работает: 4 файла, atomic-append, /learn, /memory/stats.
+- ✅ L0 MD-память работает: 6 файлов, atomic-append, /learn, /memory/stats.
 - ✅ Memory-audit log пишется.
 - ✅ Periodic compaction запускается раз в 24 часа (через APScheduler).
 - ✅ Smoke-тест: /learn после успешного tool-call sequence → запись в LEARNED.md → видна в следующем turn'е.

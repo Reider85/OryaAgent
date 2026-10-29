@@ -186,7 +186,7 @@ v7 не добавляет тикетов в MVP. Принцип: «не нар�
      - Anthropic: SystemMessage с `cache_control: ephemeral` markers для cacheable prefix.
      - OpenAI: SystemMessage с cache-friendly structure (провайдер кэширует автоматически).
      - Gemini: context caching (через separate API call для регистрации prefix).
-2. Cacheable prefix: system + tools + project_summary + L0 memory (4 MD-файла).
+2. Cacheable prefix: system + tools + project_summary + L0 memory (4 scored-файла из 6 L0-файлов).
 3. Dynamic suffix: plan + active symbols + active diff (из DFC, но DFC появится в BETA — для ALPHA dynamic suffix = past user/assistant messages).
 4. Redis: `orya:prompt_cache:prefix_hash:{thread_id}` — hash of cacheable prefix (для invalidation при изменении tool-schemas).
 5. Span attribute: `llm.call.cache_hit` (true|false), `llm.call.cache_age_seconds`.

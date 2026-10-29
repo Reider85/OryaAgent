@@ -166,7 +166,7 @@
 
 - `app/core/llm/prompt_cache.py::PromptCacheLayout`.
 - `assemble(system, tools, project_summary, l0_memory, dynamic)` → LangChain messages с `cache_control: ephemeral` markers.
-- Cacheable prefix: system + tools + project_summary + L0 memory (4 MD-файла).
+- Cacheable prefix: system + tools + project_summary + L0 memory (4 scored-файла из 6 L0-файлов).
 - Dynamic suffix: plan + active symbols + active diff (из DFC, но DFC появится в BETA — для ALPHA dynamic suffix = past user/assistant messages).
 - Provider support: Anthropic `cache_control`, OpenAI prompt caching, Gemini context caching.
 - Span attribute: `llm.call.cache_hit` (true|false), `llm.call.cache_age_seconds`.

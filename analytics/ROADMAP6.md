@@ -50,7 +50,7 @@
 
 | Фаза | Что нового в v6 |
 |---|---|
-| **MVP** | + L0 MD-память (4 файла), + `/learn` команда, + Compactor + `/memory/stats` + `/memory/compact` |
+| **MVP** | + L0 MD-память (6 файлов), + `/learn` команда, + Compactor + `/memory/stats` + `/memory/compact` |
 | **ALPHA** | + OryaObservability SDK integration (A-16), + sampler-proxy mode (A-17) + cost/security span attributes |
 | **BETA** | + L1 SQLite FTS5 (SQLCipher) (B-21), + Memory-extractor LLM-worker (B-22), + `/remember`, `/forget`, `/memory list/export/import` (B-23); B-00 REMOVED (deprecated) |
 | **PROD** | + L2 Qdrant via OriaHS (P-18), + Distributed tracing через MCP (P-19), + Offline-eval для /learn |
@@ -104,11 +104,11 @@
 
 #### 3.2.11. Memory Layer L0 (MDStore) 🆕
 
-- 4 MD-файла: `PREFERENCES.md`, `LEARNED.md`, `FACTS.md`, `DECISIONS.md`.
+- 6 MD-файлов: `PROJECT.md` (≤ 8 KB), `LEARNED.md` (≤ 4 KB), `PREFERENCES.md` (≤ 2 KB), `FACTS.md` (≤ 2 KB), `DECISIONS.md` (≤ 2 KB), `MEMORY_INDEX.md` (≤ 8 KB, placeholder до BETA).
 - Расположение: `~/.orya/memory/`.
 - Atomic-append через `open(path, "a") + fsync` с per-file `threading.Lock`.
-- Max 4 KB на файл (compaction при превышении — M-27).
-- `read_all()` для system-prompt injection (вызывается в `build_system_prompt`).
+- Бюджеты 2–8 KB на файл (compaction при превышении — M-27; компактятся только 4 scored-файла).
+- Чтение L0 для system-prompt injection через `MDStore` (в `build_system_prompt` инжектируются 4 scored-файла из 6; `read_all()` возвращает все 6).
 
 #### 3.2.12. `/learn` endpoint + Chainlit slash-command 🆕
 
@@ -121,7 +121,7 @@
 - `Compactor.compact_if_needed(filename)` — async, не блокирует user-turn.
 - FastAPI `POST /memory/compact`, `GET /memory/stats`, `GET /memory`.
 - Chainlit `/memory compact`, `/memory stats`, `/memory`.
-- Periodic background-task: каждые 24 часа проверка всех 4 файлов.
+- Periodic background-task: каждые 24 часа проверка всех 6 файлов (компактятся 4 scored-файла).
 
 ### 3.3. TRIZ-gates фазы (дополнение к v5 MVP)
 
@@ -136,11 +136,11 @@
 ### 3.4. Definition of Done (дополнение к v5 MVP)
 
 - ✅ (все DoD из v5 MVP)
-- ✅ `~/.orya/memory/` содержит 4 MD-файла (создаются при первом запуске).
-- ✅ System-prompt содержит секцию `# Long-term memory (L0, always loaded)` с содержимым 4 файлов.
+- ✅ `~/.orya/memory/` содержит 6 MD-файлов (создаются при первом запуске).
+- ✅ System-prompt содержит секцию `# Long-term memory (L0, always loaded)` с содержимым 4 scored-файлов (из 6; `PROJECT.md` — в project-context-блоке, `MEMORY_INDEX.md` пуст).
 - ✅ `/learn` в Chainlit создаёт запись в `LEARNED.md` (< 100 мс latency).
 - ✅ После 20 `/learn` вызовов — compaction запускается async, архивирует старые записи.
-- ✅ `/memory stats` показывает размеры и кол-ва для всех 4 файлов.
+- ✅ `/memory stats` показывает размеры и кол-ва для всех 6 файлов.
 - ✅ Memory-audit log содержит entries для каждого /learn.
 - ✅ Smoke-тест: `/learn` после успешного tool-call sequence → запись в LEARNED.md → видна в следующем turn'е (в system-prompt).
 
@@ -265,7 +265,7 @@ ALPHA не добавляет end-user-фич (кроме memory-related improve
 - **L1 SQLite FTS5 (SQLCipher)** — structured + lexical access к памяти (B-21).
 - **Memory-extractor LLM-worker** — auto-extraction facts/decisions/todos из разговоров (B-22).
 - **`/remember`, `/forget`, `/memory list/export/import`** — полный набор memory-команд (B-23).
-- **Memory injection в system-prompt** обновлён: инжектирует L0 (4 MD-файла), не произвольные past-summaries (B-11 updated).
+- **Memory injection в system-prompt** обновлён: инжектирует L0 (4 scored-файла из 6), не произвольные past-summaries (B-11 updated).
 
 Принцип BETA v6 (vs v5): **память — первый класс**. В v5 B-00 (Memory cross-session) — «как в v4 через PostgresStore», без конкретной стратегии. В v6 — трёхслойная гибридная память (L0 уже в MVP, L1 в BETA, L2 в PROD), соответствующая ADR-005.
 
@@ -307,7 +307,7 @@ ALPHA не добавляет end-user-фич (кроме memory-related improve
 
 #### 5.2.9. Memory injection в system-prompt (updated) 🆕 (B-11 updated)
 
-- `build_system_prompt` теперь инжектирует L0 (4 MD-файла через `MDStore.read_all()`), не произвольные past-summaries.
+- `build_system_prompt` теперь инжектирует L0 (4 scored-файла из 6 — LEARNED/PREFERENCES/FACTS/DECISIONS через `MDStore`), не произвольные past-summaries.
 - L1 items инжектируются selective (через retrieval в ContextManager), не целиком.
 
 ### 5.3. TRIZ-gates фазы (дополнение к v5 BETA)
@@ -538,7 +538,7 @@ ALPHA v6 (1.5 недели дополнительно к v5 ALPHA):
 BETA v6 (1 неделя дополнительно к v5 BETA):
   v5 BETA done + M-25 (MDStore) → B-21 (SQLiteStore L1 + outbox)
   B-21 → B-22 (memory-extractor), B-23 (memory commands)
-  B-11 (memory injection) updated: инжектирует L0 (4 MD-файла)
+  B-11 (memory injection) updated: инжектирует L0 (4 scored-файла из 6)
   B-00 (Memory via PostgresStore) — REMOVED, deprecated
 
 PROD v6 (1 неделя дополнительно к v5 PROD):
@@ -560,7 +560,7 @@ FUTURE v6 (не ограничено):
 ### 11.1. MVP → ALPHA (дополнение к v5)
 
 - ✅ (все exit-criteria из v5 MVP → ALPHA)
-- ✅ L0 MD-память работает: 4 файла, atomic-append, /learn, /memory/stats.
+- ✅ L0 MD-память работает: 6 файлов, atomic-append, /learn, /memory/stats.
 - ✅ Memory-audit log пишется.
 - ✅ Periodic compaction запускается раз в 24 часа.
 - ✅ Smoke-тест: /learn после успешного tool-call sequence → запись в LEARNED.md → видна в следующем turn'е.

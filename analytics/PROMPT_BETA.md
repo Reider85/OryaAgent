@@ -35,7 +35,7 @@
 ### 1.1. Цели v6 BETA (базовые, остаются в силе)
 
 1. **Трёхслойная память L0+L1+L2:**
-   - L0: MDStore (MVP) — 4 MD-файла.
+   - L0: MDStore (MVP) — 6 MD-файлов (в system-prompt-блоке — 4 scored).
    - L1: SQLiteStore (B-21) — FTS5 + SQLCipher, MemoryOutbox + drain-worker.
    - L2: Qdrant через OriaHS (P-18, PROD).
 2. **Memory-extractor LLM-worker (B-22)** — batch haiku, extracts facts после N сообщений.
@@ -703,7 +703,7 @@ app/
 │   │   ├── triggers.py             # triggers table
 │   │   └── context.py              # TurnContext
 │   ├── memory/                     # v6 B-21, B-22
-│   │   ├── mdstore.py              # L0 (from MVP M-25)
+│   │   ├── md_store.py            # L0, 6 файлов (from MVP M-25)
 │   │   ├── sqlitestore.py          # L1 (FTS5 + SQLCipher)
 │   │   ├── outbox.py               # MemoryOutbox + drain-worker
 │   │   ├── extractor.py            # memory-extractor (batch LLM)

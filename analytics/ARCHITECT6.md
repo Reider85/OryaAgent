@@ -200,13 +200,13 @@
 - Always-in-prompt bootstrap: 4 KB MD-файла в system-prompt — это ~1000 токенов; эквивалент из SQLite через retrieval — 50-100 мс latency + LLM round-trip.
 - Manual editing: пользователь открывает `LEARNED.md`, видит список, правит; с SQLite нужен CLI.
 
-**Принцип 20/80 здесь работает так:** 80% ценности памяти дают 4 MD-файла (L0), которые пишутся за 20% усилий от full SQLite+Qdrant. L1 и L2 — для масштаба и semantic, добавляются по фазам.
+**Принцип 20/80 здесь работает так:** 80% ценности памяти дают 6 MD-файлов L0 (4 scored-файла + `PROJECT.md` + `MEMORY_INDEX.md`), которые пишутся за 20% усилий от full SQLite+Qdrant. L1 и L2 — для масштаба и semantic, добавляются по фазам.
 
 ### 2.5. Что меняется относительно ADR-005
 
 ADR-005 описывает SQLite FTS5 + Qdrant как **основной** storage, MEMORY.md — как **bootstrap-слой**. v6 **сохраняет** это разделение, но:
 
-1. **Уточняет структуру MD-слоя:** не один `MEMORY.md`, а 4 специализированных файла (`PREFERENCES.md`, `LEARNED.md`, `FACTS.md`, `DECISIONS.md`) — это упрощает /learn (пишет только в `LEARNED.md`), упрощает compaction (каждый файл компактится отдельно), упрощает human-editing (один файл = одна ответственность).
+1. **Уточняет структуру MD-слоя:** не один `MEMORY.md`, а 6 специализированных файлов — 4 scored-файла (`PREFERENCES.md`, `LEARNED.md`, `FACTS.md`, `DECISIONS.md`) плюс `PROJECT.md` (project context, вне scored-записей) и `MEMORY_INDEX.md` (пустой индекс L1/L2 до BETA) — это упрощает /learn (пишет только в `LEARNED.md`/`FACTS.md`/`PREFERENCES.md`), упрощает compaction (компактятся только 4 scored-файла), упрощает human-editing (один файл = одна ответственность).
 2. **Вводит fast-update mechanism для MD:** atomic append + periodic compaction — этого нет в ADR-005, но критично для /learn.
 3. **Вводит команду `/learn`** — ADR-005 говорит про `/remember`, но `/learn` — другая семантика: `/remember` добавляет произвольный факт, `/learn` — автоматически фиксирует **успешно выполненную команду** (паттерн «tool-call sequence → result»).
 4. **Привязывает memory-write к observability:** каждый `/learn` эмитит `memory.write` span (см. §9), это даёт audit-trail и eval-данные.
@@ -223,10 +223,14 @@ ADR-005 описывает SQLite FTS5 + Qdrant как **основной** stor
 
 | Файл | Назначение | Источник записей | Макс. размер | Compaction |
 |---|---|---|---|---|
-| `PREFERENCES.md` | Короткие preferences пользователя/проекта | `/remember`, manual edit | 2 KB | Когда > 2 KB → low-confidence items переносятся в L1 |
+| `PROJECT.md` | Проект-контекст (mission, stack, conventions) — вне scored-записей | bootstrap, manual edit | 8 KB | Нет (контекст, не scored-записи; не компактится) |
 | `LEARNED.md` | Успешно выполненные команды (через `/learn`) | `/learn`, auto-learn | 4 KB | Когда > 4 KB → похожие паттерны мержатся |
+| `PREFERENCES.md` | Короткие preferences пользователя/проекта | `/remember`, manual edit | 2 KB | Когда > 2 KB → low-confidence items переносятся в L1 |
 | `FACTS.md` | Критические факты о проекте | `/remember fact`, agent-inferred (high-confidence) | 2 KB | Когда > 2 KB → low-confidence переносятся в L1 |
 | `DECISIONS.md` | Архитектурные решения (ADR-выжимки) | `/remember decision`, ADR-import | 2 KB | Когда > 2 KB → старые superseded-решения переносятся в L1 |
+| `MEMORY_INDEX.md` | Auto-generated индекс L1/L2 memory (пустой placeholder в MVP, full в BETA+) | auto-generated | 8 KB | Нет (placeholder до BETA) |
+
+Всего **6 файлов** (`MDStore.FILES`): 4 scored-файла выше + `PROJECT.md` + `MEMORY_INDEX.md`. Бюджеты — `MDStore.MAX_BYTES` / `DEFAULT_MAX_BYTES` (8 KB).
 
 **Формат записей (одна запись = один блок):**
 
@@ -259,14 +263,14 @@ def build_system_prompt(state, tools) -> list[BaseMessage]:
         tool_descriptions(tools),
         project_context_block(state),
         # 🆕 v6: long-term memory from L0 MD-files
-        long_term_memory_block(),  # читает 4 MD-файла, конкатенирует
+        long_term_memory_block(),  # читает 4 scored-файла L0 (из 6), конкатенирует
         behavior_rules_block(),
         untrusted_content_policy_block(),  # из v5
     ]
     return [SystemMessage(content="\n\n".join(sections))]
 ```
 
-`long_term_memory_block()` читает 4 MD-файла, проверяет общий размер (если > 8 KB — компактирует синхронно, блокирующе — это редко), и возвращает конкатенацию.
+`long_term_memory_block()` читает 4 scored-файла L0 (`LEARNED.md`, `PREFERENCES.md`, `FACTS.md`, `DECISIONS.md` — из 6 файлов `MDStore.FILES`; `PROJECT.md` подаётся отдельным `project_context_block()`, `MEMORY_INDEX.md` пуст до BETA), проверяет общий размер (если > 8 KB — компактирует синхронно, блокирующе — это редко), и возвращает конкатенацию.
 
 **Token-budget:** L0 memory ограничена ~2000 токенов (8 KB). Если превышено — compaction переносит low-value записи в L1.
 
@@ -455,7 +459,7 @@ async def compact_if_needed(self, filename: str, max_bytes: int = 4096) -> bool:
 **Compaction-trigger:**
 - Синхронно (блокирующе) — если MD > 8 KB (опасно для system-prompt).
 - Async (вне turn) — если MD > 4 KB (нормально, но пора чистить).
-- Periodic (cron) — каждые 24 часа проверка всех 4 файлов.
+- Periodic (cron) — каждые 24 часа проверка всех 6 файлов (компактятся только 4 scored-файла; `PROJECT.md`/`MEMORY_INDEX.md` без стратегии).
 
 ### 4.3. `/learn` как FastAPI endpoint + tool
 
@@ -622,7 +626,7 @@ flowchart TB
         end
 
         subgraph MEMORY_LAYER["Memory Layer 🆕 v6"]
-            MDSTORE["MDStore\n(4 MD-файла, atomic-append)"]
+            MDSTORE["MDStore\n(6 MD-файлов, atomic-append)"]
             SQLITESTORE["SQLiteStore\n(FTS5, SQLCipher)"]
             OUTBOX["MemoryOutbox\n→ drain to L2"]
             COMPACTOR["Compactor\n(async, periodic)"]
@@ -742,14 +746,26 @@ flowchart TB
 
 ```python
 class MDStore:
-    """L0 storage: 4 MD-файла, atomic-append, periodic compaction."""
+    """L0 storage: 6 MD-файлов, atomic-append, periodic compaction."""
 
-    FILES = ("PREFERENCES.md", "LEARNED.md", "FACTS.md", "DECISIONS.md")
-    MAX_BYTES = 4096  # per file
+    FILES = (
+        "PROJECT.md",
+        "LEARNED.md",
+        "PREFERENCES.md",
+        "FACTS.md",
+        "DECISIONS.md",
+        "MEMORY_INDEX.md",
+    )
+    MAX_BYTES = {  # per file; PROJECT.md/MEMORY_INDEX.md — DEFAULT_MAX_BYTES
+        "LEARNED.md": 4096,
+        "PREFERENCES.md": 2048,
+        "FACTS.md": 2048,
+        "DECISIONS.md": 2048,
+    }
 
     def __init__(self, memory_dir: Path): ...
-    def append(self, filename: str, entry: str) -> None: ...  # <1 ms, atomic
-    def read_all(self) -> dict[str, str]: ...  # для system-prompt injection
+    def append(self, filename: str, entry: str) -> None: ...  # O_APPEND + fsync, atomic
+    def read_all(self) -> dict[str, str]: ...  # 6 ключей, вход system-prompt injection
     async def compact_if_needed(self, filename: str) -> bool: ...
     def stats(self) -> dict[str, dict]: ...  # размер, кол-во, last-write
 ```
@@ -790,7 +806,7 @@ Outbox-drain-воркер (async background task) читает outbox, дела�
 class Compactor:
     """Periodic compaction: L0 → L1 when files exceed MAX_BYTES."""
 
-    STRATEGIES = {
+    STRATEGIES = {  # только 4 scored-файла; PROJECT.md/MEMORY_INDEX.md без стратегии
         "PREFERENCES.md": "keep-user-explicit",
         "LEARNED.md": "keep-recent-and-high-confidence",
         "FACTS.md": "keep-high-confidence",
@@ -798,7 +814,7 @@ class Compactor:
     }
 
     async def compact(self, filename: str) -> CompactionResult: ...
-    async def compact_all(self) -> dict[str, CompactionResult]: ...  # все 4 файла
+    async def compact_all(self) -> dict[str, CompactionResult]: ...  # 4 scored-файла (из 6)
 ```
 
 ### 6.2. system-prompt-builder + L0 memory injection 🆕
@@ -843,11 +859,13 @@ def long_term_memory_block() -> str:
 
 ```
 ~/.orya/memory/
-├── PREFERENCES.md       # ≤ 2 KB
-├── LEARNED.md           # ≤ 4 KB
-├── FACTS.md             # ≤ 2 KB
-├── DECISIONS.md         # ≤ 2 KB
-└── <project>.sqlite     # L1, SQLCipher-encrypted
+├── PROJECT.md         # ≤ 8 KB — project context (вне scored-записей)
+├── LEARNED.md         # ≤ 4 KB
+├── PREFERENCES.md     # ≤ 2 KB
+├── FACTS.md           # ≤ 2 KB
+├── DECISIONS.md       # ≤ 2 KB
+├── MEMORY_INDEX.md    # ≤ 8 KB — пустой placeholder до BETA
+└── <project>.sqlite   # L1, SQLCipher-encrypted
 ```
 
 ### 7.2. L1 SQLite-схема (BETA)
@@ -1298,7 +1316,7 @@ Volume mount: `./data/memory:/data/memory`. Backup: ежедневный cron `p
 | `agent.loop` span attribute `cost.over_budget=true` попадает в always-keep | `is_interesting_span()` в sampler_proxy.py | ✅ проверено |
 | LangGraph instrumentation через `agent_obs.instrument_langgraph` | TODO: wrapper в SDK (A-16) | ⚠️ needs wrapper |
 | `memory.write` span-type | OryaObservability ARCHITECT.md §2.3 уже определяет | ✅ |
-| 4 MD-файла + L1 SQLite + L2 Qdrant — consisent state через outbox | ADR-005 §6.3 outbox-pattern | ✅ |
+| 6 MD-файлов + L1 SQLite + L2 Qdrant — consisent state через outbox | ADR-005 §6.3 outbox-pattern | ✅ |
 
 ### 14.2. Оценка LOC v6 vs v5
 
@@ -1385,7 +1403,7 @@ Volume mount: `./data/memory:/data/memory`. Backup: ежедневный cron `p
 
 | Фаза ROADMAP6 | Что добавляет к ARCHITECT6 | Ключевые модули |
 |---|---|---|
-| **MVP** | L0 MD-память (4 файла) + /learn + /memory/stats + /memory/compact + memory-audit log | §3.1, §4, §6.1.1, §6.1.4 |
+| **MVP** | L0 MD-память (6 файлов: 4 scored + PROJECT + MEMORY_INDEX) + /learn + /memory/stats + /memory/compact + memory-audit log | §3.1, §4, §6.1.1, §6.1.4 |
 | **ALPHA** | OryaObservability SDK integration + sampler-proxy mode + memory-metrics + cost/security span attributes | §9.1–9.4, §6.5 |
 | **BETA** | L1 SQLite FTS5 (SQLCipher) + outbox + /remember, /forget, /memory list/export/import + memory injection в system-prompt | §3.2, §6.1.2, §6.1.3, §6.2 |
 | **PROD** | L2 Qdrant via OriaHS + memory_search tool + AutoLearnEvaluator + self_learn tool + distributed tracing + offline-eval для /learn | §3.3, §6.3, §9.5, §9.6 |

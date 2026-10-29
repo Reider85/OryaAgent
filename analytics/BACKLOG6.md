@@ -35,7 +35,7 @@
 
 | ID | Title | Фаза | Принцип | Estimate |
 |---|---|---|---|---|
-| **M-25** | MDStore: L0 MD-файлы (4 шт.) + atomic-append | MVP | #21 Rushing | 4 часа |
+| **M-25** | MDStore: L0 MD-файлы (6 шт.) + atomic-append | MVP | #21 Rushing | 4 часа |
 | **M-26** | `/learn` endpoint + Chainlit slash-command | MVP | #25 Self-service | 4 часа |
 | **M-27** | Compactor (L0 → L1 placeholder) + /memory/compact | MVP | #19 Periodic action | 4 часа |
 | **A-16** | OryaObservability SDK integration (instrument LangGraph) | ALPHA | #28 Mechanics substitution | 1 день |
@@ -59,7 +59,7 @@
 | M-13 | PermissionPolicy: /learn, /memory/* — без interrupt (trust user explicit command) |
 | M-18 | Smoke-тесты: добавлены проверки /learn, /memory/stats, atomic-append durability |
 | B-00 | Memory cross-session via PostgresStore → REMOVED, заменён на B-21 (SQLiteStore) + B-22 (extractor) + B-23 (commands) |
-| B-11 | Memory injection в system-prompt → обновлён: инжектирует L0 (4 MD-файла), не произвольные past-summaries |
+| B-11 | Memory injection в system-prompt → обновлён: инжектирует L0 (4 scored-файла из 6), не произвольные past-summaries |
 | A-04 | Observability: добавлен A-16 (OryaObservability SDK) и A-17 (sampler-proxy mode) |
 | A-13 | CostAwareRouter: добавлен emit `cost.over_budget` span attribute (см. A-17) |
 | M-22 | Prompt injection defense: добавлен emit `security.incident` span attribute (см. A-17) |
@@ -103,7 +103,7 @@
 #### Context
 
 В v5 B-00 (Memory cross-session) — «как в v4 через PostgresStore», без конкретной стратегии. В v6 вводится L0 — MD-файлы, которые:
-- Always-in-prompt (bootstrap): 4 KB на файл, ~1000 токенов на system-prompt.
+- Always-in-prompt (bootstrap): 2–8 KB на файл (бюджеты `MAX_BYTES`), ~1000 токенов на system-prompt.
 - Fast write через atomic-append (< 1 мс типично).
 - Human-readable & editable: пользователь открывает `LEARNED.md`, видит список, правит.
 - Git-diffable (если пользователь захочет версионировать memory-директорию в отдельном private-repo).
@@ -112,11 +112,13 @@ L0 — критичный слой, потому что /learn должен пи
 
 #### Goal
 
-Реализовать `app/core/memory/md_store.py::MDStore` с 4 MD-файлами:
-- `PREFERENCES.md` (≤ 2 KB) — preferences пользователя/проекта.
+Реализовать `app/core/memory/md_store.py::MDStore` с 6 MD-файлами:
+- `PROJECT.md` (≤ 8 KB) — проект-контекст (mission, stack, conventions); вне scored-записей, читается в project-context-блок.
 - `LEARNED.md` (≤ 4 KB) — успешно выполненные команды (через /learn).
+- `PREFERENCES.md` (≤ 2 KB) — preferences пользователя/проекта.
 - `FACTS.md` (≤ 2 KB) — критические факты о проекте.
 - `DECISIONS.md` (≤ 2 KB) — архитектурные решения (короткие выжимки).
+- `MEMORY_INDEX.md` (≤ 8 KB) — auto-generated индекс L1/L2 (пустой placeholder до BETA).
 
 Реализовать atomic-append через `open(path, "a") + fsync` с per-file `threading.Lock`.
 
@@ -128,16 +130,16 @@ L0 — критичный слой, потому что /learn должен пи
 - Atomic-append: для writes < 4096 bytes POSIX гарантирует atomicity в O_APPEND mode.
 - `fsync` после каждого append — durability при crash.
 - Per-file `threading.Lock` — защищает от lost-updates внутри процесса.
-- `read_all()` — для system-prompt injection, читает все 4 файла, возвращает `dict[filename, content]`.
+- `read_all()` — для system-prompt injection, читает все 6 файлов, возвращает `dict[filename, content]`.
 - `stats()` — для /memory/stats: размер, кол-во записей, last-write timestamp.
 
 #### Acceptance Criteria
 
-- ✅ `MDStore(Path("/tmp/test_memory"))` создаёт директорию и 4 пустых файла.
+- ✅ `MDStore(Path("/tmp/test_memory"))` создаёт директорию и 6 пустых файлов.
 - ✅ `md_store.append("LEARNED.md", entry)` пишет в конец файла, fsync.
 - ✅ Concurrent `append` из 10 threads — все 10 записей сохраняются (no lost-updates).
 - ✅ После crash (kill -9) в середине append — файл либо содержит старую запись полностью, либо новую полностью (no partial writes).
-- ✅ `md_store.read_all()` возвращает dict с 4 ключами.
+- ✅ `md_store.read_all()` возвращает dict с 6 ключами.
 - ✅ `md_store.stats()` возвращает размер, кол-во, last-write для каждого файла.
 - ✅ Запись размером 500 bytes завершается за < 1 мс (benchmark в test).
 - ✅ Если файл > 4 KB после append — `compact_if_needed()` вызывается async (см. M-27).
@@ -229,13 +231,13 @@ L0 MD-файлы имеют лимит 4 KB. Если /learn вызываетс�
 #### Goal
 
 Реализовать:
-1. `app/core/memory/compactor.py::Compactor` с 4 стратегиями (по одной на файл).
+1. `app/core/memory/compactor.py::Compactor` с 4 стратегиями (по одной на scored-файл; `PROJECT.md`/`MEMORY_INDEX.md` без стратегии — не компактятся).
 2. FastAPI endpoints:
-   - `POST /sessions/{thread_id}/memory/compact` — принудительная compaction всех 4 файлов.
-   - `GET /sessions/{thread_id}/memory/stats` — размер, кол-во, last-write для каждого файла.
-   - `GET /sessions/{thread_id}/memory` — показать содержимое 4 файлов (cat).
+   - `POST /sessions/{thread_id}/memory/compact` — принудительная compaction 4 scored-файлов (из 6).
+   - `GET /sessions/{thread_id}/memory/stats` — размер, кол-во, last-write для каждого из 6 файлов.
+   - `GET /sessions/{thread_id}/memory` — показать содержимое всех 6 файлов (cat).
 3. Chainlit slash-commands `/memory compact`, `/memory stats`, `/memory`.
-4. Periodic background-task: каждые 24 часа проверять все 4 файла, compact_if_needed.
+4. Periodic background-task: каждые 24 часа проверять все 6 файлов, `compact_if_needed` (компактятся 4 scored-файла).
 
 #### Constraints
 
@@ -253,9 +255,9 @@ L0 MD-файлы имеют лимит 4 KB. Если /learn вызываетс�
 
 - ✅ После 20 `/learn` вызовов (LEARNED.md > 4 KB) — `compact_if_needed` запускается async.
 - ✅ После compaction — LEARNED.md ≤ 4 KB, архив содержит перенесённые записи.
-- ✅ `POST /memory/compact` — синхронная compaction всех 4 файлов, возвращает result per file.
+- ✅ `POST /memory/compact` — синхронная compaction 4 scored-файлов, возвращает result per file.
 - ✅ `GET /memory/stats` — возвращает размеры, кол-во, last-write.
-- ✅ `GET /memory` — возвращает конкатенацию 4 файлов (markdown).
+- ✅ `GET /memory` — возвращает конкатенацию всех 6 файлов (markdown).
 - ✅ Periodic task запускается раз в 24 часа (проверить через mock time в test).
 - ✅ Atomic rewrite: после crash в середине rewrite — файл либо старый, либо новый (no partial).
 
@@ -862,7 +864,7 @@ BETA v6 (замена B-00):
   M-25 (MDStore) + M-27 (Compactor) → B-21 (SQLiteStore L1 + outbox + drain-worker)
   B-21 → B-22 (memory-extractor LLM-worker)
   B-21 + B-22 → B-23 (/remember, /forget, /memory list/export/import)
-  B-11 (memory injection в system-prompt) → updated: инжектирует L0 (4 MD-файла)
+  B-11 (memory injection в system-prompt) → updated: инжектирует L0 (4 scored-файла из 6)
 
 PROD v6 (дополнение к v5):
   P-00 (OriaHS bootstrap) + B-21 (outbox) → P-18 (L2 Qdrant + memory_search tool)

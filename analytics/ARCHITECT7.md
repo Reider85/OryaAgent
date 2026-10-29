@@ -281,7 +281,7 @@ class DFC:
 1. **System prompt** — константный внутри сессии.
 2. **Tool schemas** — константные.
 3. **Project summary** — константный внутри сессии (snapshot сессии LSP).
-4. **L0 memory (4 MD-файла)** — константный внутри сессии (из v6).
+4. **L0 memory (блок 4 scored-файлов из 6 L0-файлов)** — константный внутри сессии (из v6).
 5. Все динамические данные — в конце сообщений, после cache-breakpoint (`cache_control: ephemeral` для Anthropic, кэш-префикс для OpenAI).
 
 **20/80-оценка:** 8% усилий (DFC ≈ 1200 LOC + LangGraph state integration) → 80% ценности (контекст ≤16K на любой длине сессии, -50% cost, -40% latency на длинных сессиях). ✅
@@ -1138,7 +1138,7 @@ class PromptCacheLayout:
 1. System prompt — константный внутри сессии.
 2. Tool schemas — константные.
 3. Project summary — константный внутри сессии (LSP snapshot).
-4. L0 memory (4 MD-файла) — константный внутри сессии.
+4. L0 memory (блок 4 scored-файлов из 6 L0-файлов) — константный внутри сессии.
 5. Все динамические данные — в конце, после cache-breakpoint.
 6. На границе хода — Mid-Conversation System Message (как у OpenCode Context Epoch), помеченная `cache_control: ephemeral`.
 
@@ -1393,7 +1393,7 @@ class DFC:
             self._system_prompt(),
             self._tool_schemas(),
             self._project_summary(),
-            self._l0_memory(),  # 4 MD-файла из v6
+            self._l0_memory(),  # L0-блок: 4 scored-файла из 6 (v6)
         ]
         dynamic = [
             self._active_symbols(plan.prefetch_hints),
