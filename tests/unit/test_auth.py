@@ -419,3 +419,29 @@ def test_cli_without_secret_exits_nonzero(
     with pytest.raises(SystemExit) as excinfo:
         main()
     assert excinfo.value.code == 1
+
+
+# --- DoD: all auth-required endpoints reject without token (A-00) ----------------
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/sessions"),
+        ("POST", "/learn"),
+        ("GET", "/memory"),
+        ("GET", "/memory/stats"),
+        ("GET", "/sessions/some-id/memory"),
+    ],
+)
+def test_dod_endpoints_require_jwt(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, method: str, path: str
+) -> None:
+    """DoD: все /sessions, /learn, /memory/* endpoints требуют JWT (A-00)."""
+    _enable_auth(monkeypatch)
+    response = client.request(method, path)
+    assert response.status_code == 401
+    assert "Bearer" in response.headers.get("www-authenticate", "")
+    assert (
+        "missing" in response.json()["detail"] or "invalid" in response.json()["detail"]
+    )
