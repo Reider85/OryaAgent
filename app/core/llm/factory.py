@@ -17,6 +17,10 @@ API key resolution:
    env var from ``providers.yaml`` (e.g. ``DEEPSEEK_API_KEY``) -> 4. user
    config ``llm.providers.{name}.api_key`` (with ``${ENV_VAR}`` substitution)
    -> 5. ``api_key_placeholder`` for local servers -> fail-fast.
+
+Trace-wrapping (A-02): the returned model is wrapped in
+``TracedChatModel`` so every seam invocation emits an ``llm.call`` span;
+``ORYA_LLM_TRACE_ENABLED=false`` returns the raw adapter instead.
 """
 
 from __future__ import annotations
@@ -34,6 +38,7 @@ from app.core.llm.registry import (
     load_providers,
     resolve_model,
 )
+from app.core.llm.tracing import wrap_with_tracing
 
 DEFAULT_PROVIDER = "anthropic"
 DEFAULT_MODEL = "claude-sonnet-3.5"
@@ -241,19 +246,22 @@ def get_llm(
         entry = app_config.provider_block(spec.name, user_config)
         if isinstance(entry.get("extra_headers"), dict):
             extra.update(entry["extra_headers"])
-        return builder(
+        instance = builder(
             model_id=resolved.model_id,
             api_key=key,
             base_url=url or "",
             extra_headers=extra or None,
             **build_kwargs,
         )
+    else:
+        # anthropic and google_genai share the same call shape.
+        instance = builder(model_id=resolved.model_id, api_key=key, **build_kwargs)
 
-    if spec.adapter == "anthropic":
-        return builder(model_id=resolved.model_id, api_key=key, **build_kwargs)
-
-    # google_genai
-    return builder(model_id=resolved.model_id, api_key=key, **build_kwargs)
+    # A-02: span-wrapping at the seam — disabled (ORYA_LLM_TRACE_ENABLED=false)
+    # returns the raw provider adapter unchanged.
+    return wrap_with_tracing(
+        instance, provider=provider_name, model_name=resolved.model_id
+    )
 
 
 def list_providers() -> list[dict[str, Any]]:

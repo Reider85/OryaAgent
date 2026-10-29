@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Senior Python coding agent (FastAPI + LangGraph + LLM provider seam). MVP phase done through M-28 + MVP-POLISH (README lags at M-27; git log is truth).
+Senior Python coding agent (FastAPI + LangGraph + LLM provider seam). MVP phase done through M-28 + MVP-POLISH (README lags at M-27; git log is truth). ALPHA started: A-00 (auth middleware), A-02 (seam trace-wrapping).
 
 ## Ticket specs (read this first when implementing M-NN)
 
@@ -28,7 +28,7 @@ Senior Python coding agent (FastAPI + LangGraph + LLM provider seam). MVP phase 
 ## Architecture (dependency direction matters)
 
 - `app/main.py` — FastAPI app + `orya` CLI (`orya import --from opencode|continue|aider|cline`, `orya db migrate`).
-- `app/core/llm/` — single LLM seam: `get_llm(provider, model)` (`factory.py`). **Never import `langchain_anthropic`/`langchain_openai` outside this package.** Providers live in YAML: `providers.yaml`, `models.yaml` (aliases), `capabilities.yaml`, `pricing.yaml` — adding an OpenAI-compatible provider is YAML-only; tests in `tests/unit/test_llm_providers_yaml.py` enforce structure. `app/core/llm/settings.py` is a deprecated shim → import `app.core.config`.
+- `app/core/llm/` — single LLM seam: `get_llm(provider, model)` (`factory.py`). **Never import `langchain_anthropic`/`langchain_openai` outside this package.** Providers live in YAML: `providers.yaml`, `models.yaml` (aliases), `capabilities.yaml`, `pricing.yaml` — adding an OpenAI-compatible provider is YAML-only; tests in `tests/unit/test_llm_providers_yaml.py` enforce structure. `app/core/llm/settings.py` is a deprecated shim → import `app.core.config`. Since A-02 the factory wraps models in `TracedChatModel` (`tracing.py`, one `llm.call` span per invocation, buffer via `get_span_buffer()`); `ORYA_LLM_TRACE_ENABLED=false` returns the raw adapter (seam tests sandbox this).
 - `app/core/graph.py` — `build_graph(tools, model, checkpointer, policy, *, system_prompt_fn, trim_fn)`; nodes: `agent → human → tools → assess → (agent | recover → human)`. **The graph must not import `prompt.py`/`context.py`** — they're injected callables (cacheable-prefix ordering depends on it). M-28 adds failure recovery: `assess` triages `ToolMessage(status="error")` results, `recover` asks the model for alternatives (budgets `recovery_max_rounds`/`recovery_variants` from settings; recover-node tokens are dropped from the streamed reply in `app/core/agent.py`).
 - `app/core/tools.py` — `get_tools()` returns exactly `[read, write, edit, bash, grep, glob]` **in that order**; graph, prompt builder, and tests assert this. Never hardcode a tool list elsewhere.
 - `app/core/permissions.py` — `PermissionPolicy`: precedence deny → session allowlist → allowlist → mode. Fail-closed: no checkpointer ⇒ `ask` = deny; unknown resume answer = deny; a mixed approve/refuse batch is wholly refused.

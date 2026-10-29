@@ -113,6 +113,22 @@ class Settings(BaseSettings):
         default=120.0,
         validation_alias=AliasChoices("ORYA_LLM_TIMEOUT_S"),
     )
+    llm_trace_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("ORYA_LLM_TRACE_ENABLED"),
+        description=(
+            "A-02: wrap get_llm() models in TracedChatModel so every seam "
+            "invocation records an llm.call span; false returns the raw adapter"
+        ),
+    )
+    llm_trace_exporter: Literal["off", "stdout"] = Field(
+        default="off",
+        validation_alias=AliasChoices("ORYA_LLM_TRACE_EXPORTER"),
+        description=(
+            "A-02: span transport — off keeps records in the in-process "
+            "buffer only; stdout logs them as debug JSON"
+        ),
+    )
 
     # --- Database (M-03) -------------------------------------------------
     database_url: str = Field(

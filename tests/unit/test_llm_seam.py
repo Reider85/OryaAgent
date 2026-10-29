@@ -28,6 +28,9 @@ def isolated_llm_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
             "ANTHROPIC_API_KEY",
         }:
             monkeypatch.delenv(name, raising=False)
+    # A-02: this file asserts concrete adapter types/attrs — disable the
+    # TracedChatModel wrapper so get_llm() returns the raw provider model.
+    monkeypatch.setenv("ORYA_LLM_TRACE_ENABLED", "false")
     monkeypatch.chdir(tmp_path)  # ignore any project-root .env
     monkeypatch.setenv("ORYA_CONFIG_PATH", str(tmp_path / "config.yaml"))
     clear_settings_cache()
