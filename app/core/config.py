@@ -24,6 +24,7 @@ Usage::
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from functools import lru_cache
@@ -31,7 +32,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import AliasChoices, Field, SecretStr, field_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_VAR_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -240,7 +241,7 @@ class Settings(BaseSettings):
     )
 
     # --- Future phases (placeholders, unused in MVP) ---------------------
-    # ALPHA: auth
+    # ALPHA: auth (A-00)
     auth_secret_key: SecretStr | None = Field(
         default=None,
         validation_alias=AliasChoices("AUTH_SECRET_KEY", "ORYA_AUTH_SECRET_KEY"),
@@ -248,6 +249,29 @@ class Settings(BaseSettings):
     auth_algorithm: str = Field(
         default="HS256",
         validation_alias=AliasChoices("AUTH_ALGORITHM", "ORYA_AUTH_ALGORITHM"),
+    )
+    auth_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("AUTH_ENABLED", "ORYA_AUTH_ENABLED"),
+        description="Kill-switch: Bearer-JWT enforcement on all non-public "
+        "endpoints (A-00); off by default so dev/tests keep working",
+    )
+    auth_token_ttl_s: int = Field(
+        default=86_400,
+        validation_alias=AliasChoices("AUTH_TOKEN_TTL_S", "ORYA_AUTH_TOKEN_TTL_S"),
+        description="Lifetime of tokens minted by create_token()/`orya auth token`",
+    )
+    auth_public_paths: str = Field(
+        default="/health,/docs,/redoc,/openapi.json,/metrics",
+        validation_alias=AliasChoices("AUTH_PUBLIC_PATHS", "ORYA_AUTH_PUBLIC_PATHS"),
+        description="CSV (or JSON array) of path prefixes exempt from JWT "
+        "enforcement when auth is on",
+    )
+    # ALPHA: CORS (A-00)
+    cors_origins: str = Field(
+        default="*",
+        validation_alias=AliasChoices("CORS_ORIGINS", "ORYA_CORS_ORIGINS"),
+        description='Comma-separated allowed origins, or "*" for any',
     )
     # ALPHA: observability
     langsmith_api_key: SecretStr | None = Field(
@@ -300,6 +324,44 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return Path(value).expanduser()
         return value
+
+    @field_validator("auth_secret_key")
+    @classmethod
+    def _validate_auth_secret(cls, value: SecretStr | None) -> SecretStr | None:
+        """Reject weak JWT secrets (A-00: HS256 secret >= 32 chars, never plain)."""
+        if value is not None:
+            raw = value.get_secret_value()
+            if raw and len(raw) < 32:
+                raise ValueError("AUTH_SECRET_KEY must be at least 32 characters")
+        return value
+
+    @model_validator(mode="after")
+    def _require_secret_when_auth_enabled(self) -> Settings:
+        """Fail fast: enforcing JWT without a signing secret is a misconfiguration."""
+        if self.auth_enabled and self.auth_secret_key is None:
+            raise ValueError("AUTH_ENABLED=true requires AUTH_SECRET_KEY")
+        return self
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        """``cors_origins`` as a list (CSV ``a,b`` or JSON ``["a","b"]``)."""
+        return parse_env_list(self.cors_origins)
+
+    @property
+    def auth_public_path_list(self) -> list[str]:
+        """``auth_public_paths`` as a list of path prefixes."""
+        return parse_env_list(self.auth_public_paths)
+
+
+def parse_env_list(value: str) -> list[str]:
+    """Split a list-typed env value: JSON array if it looks like one, else CSV."""
+    text = value.strip()
+    if not text:
+        return []
+    if text.startswith("["):
+        parsed = json.loads(text)
+        return [str(item).strip() for item in parsed if str(item).strip()]
+    return [part.strip() for part in text.split(",") if part.strip()]
 
 
 def user_config_path() -> Path:

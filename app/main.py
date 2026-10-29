@@ -13,6 +13,7 @@ from app.api.learn import router as learn_router
 from app.api.llm import router as llm_router
 from app.api.memory import router as memory_router
 from app.api.metrics import router as metrics_router
+from app.api.middleware import install_middleware
 from app.api.sessions import router as sessions_router
 from app.api.workspace import router as workspace_router
 from app.core.logging_setup import (
@@ -89,6 +90,9 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 
+# A-00: Bearer-JWT enforcement, CORS, X-Request-ID (outermost last).
+install_middleware(app)
+
 app.include_router(llm_router)
 app.include_router(sessions_router)
 app.include_router(learn_router)
@@ -124,6 +128,16 @@ def main() -> None:
     db_parser = sub.add_parser("db", help="Database commands")
     db_sub = db_parser.add_subparsers(dest="db_command")
     db_sub.add_parser("migrate", help="Apply pending SQL migrations (M-03)")
+
+    auth_parser = sub.add_parser("auth", help="Auth commands (A-00)")
+    auth_sub = auth_parser.add_subparsers(dest="auth_command")
+    token_parser = auth_sub.add_parser("token", help="Mint a Bearer JWT for API access")
+    token_parser.add_argument(
+        "--user", default="dev", help="Token subject (request.state.user_id)"
+    )
+    token_parser.add_argument(
+        "--ttl", type=int, default=None, help="Lifetime in seconds (default: settings)"
+    )
 
     args = parser.parse_args()
     configure_cli_logging()
@@ -165,6 +179,15 @@ def main() -> None:
             logger.info("Applied migrations: %s", ", ".join(applied))
         else:
             logger.info("No pending migrations.")
+    elif args.command == "auth" and args.auth_command == "token":
+        from app.core.auth import AuthError, create_token
+
+        try:
+            token = create_token(args.user, ttl_s=args.ttl)
+        except AuthError as exc:
+            logger.error("Cannot mint token: %s", exc)
+            raise SystemExit(1) from exc
+        print(token)  # stdout carries the artifact (logs carry diagnostics)
     else:
         parser.print_help()
 
