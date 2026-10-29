@@ -358,13 +358,15 @@ OryaAgent MVP должен уметь читать конфиги провайд
 ### 3.6. Тесты и документация (M-18, M-19, M-20)
 
 **M-18 — Smoke-тесты 5 эталонных задач (расширенные)**
-- `tests/smoke/test_smoke.py` — 5 сценариев:
+- `tests/smoke/test_smoke.py` — детерминированные: scripted `FakeMessagesListChatModel`, **без real LLM-вызовов и без параметризации по провайдерам** (Forbidden pattern BACKLOG4 M-18). Мультипровайдерность проверяют integration-тесты `tests/integration/test_provider_*.py` (skip через `require_env`, если нет API-ключа).
+- 5 эталонных сценариев:
   1. Read + explain a Python file.
   2. Edit a function signature + call-site (atomic).
   3. Run `bash("pytest tests/")` and parse output.
   4. `grep` for a symbol across the project + report matches.
-  5. `/learn` a fact → use it in next turn (memory persistence).
-- + проверки `/learn`, `/memory/stats`, atomic-append durability (см. v6 M-18).
+  5. `/learn` a fact → use it in next turn (memory persistence; раскомментирован после M-25..M-27).
+- + 3 проверки v5 (BACKLOG5): cache-hit на повторном read, injection-warning в ToolMessage, bash → JSON-документ.
+- + проверки `/memory/stats` и atomic-append durability (см. v6 M-18; закрыты M-27). Итого 10 тестов.
 
 **M-19 — README + cross-links**
 - `README.md`: что это, как запустить (`make dev`), как настроить LLM-provider, как добавить свой tool.
@@ -437,7 +439,7 @@ OryaAgent MVP должен уметь читать конфиги провайд
 | Latency p50 (простой ход) | ≤ 3 s |
 | Tokens per turn (avg) | 30-60 K |
 | Cost per session (30 ходов) | ≤ $0.45 |
-| Smoke-тестов проходит | 5/5 |
+| Smoke-тестов проходит | 10/10 (5 эталонных задач + 5 расширенных) |
 | Prompt-injection detected | 100% (fail-closed) |
 | Session-log durability | 100% (PostgresSaver + JSONL dual-write) |
 
@@ -448,7 +450,7 @@ OryaAgent MVP должен уметь читать конфиги провайд
 - ✅ `make dev` запускает Chainlit UI на http://localhost:8000.
 - ✅ Первый чат создаёт сессию, персистит в PostgreSQL, виден в sidebar.
 - ✅ LLM-call проходит через `get_llm()` seam (default: Anthropic claude-sonnet-3.5).
-- ✅ **Мультипровайдерность:** smoke-тест проходит минимум на 5 провайдерах (Anthropic + DeepSeek + Qwen + GLM + Ollama local). Остальные 15+ провайдеров — integration tests с skip-флагом `@pytest.mark.skipif(not os.getenv("DEEPSEEK_API_KEY"))`.
+- ✅ **Мультипровайдерность:** live-проверка tool-calling минимум на 5 провайдерах (Anthropic + DeepSeek + Qwen + GLM + Ollama local) — `tests/integration/test_provider_*.py` c skip-флагом `require_env("<PROVIDER>_API_KEY")`. Остальные 15+ провайдеров — те же integration tests с тем skip-механизмом. Smoke-тесты (M-18) real LLM не вызывают (детерминированы fake-моделью).
 - ✅ **Capability-detection:** `get_llm(provider="deepseek", model="deepseek-reasoner")` — выдаёт понятную ошибку "Reasoning model without tool-calling — используйте deepseek-chat".
 - ✅ **Provider-picker в UI:** Chainlit sidebar показывает dropdown с 20+ провайдерами и их моделями (из `providers.yaml` + `models.yaml`).
 - ✅ **`/llm/health/{provider}`** endpoint возвращает status 200 если провайдер доступен.
@@ -469,7 +471,7 @@ OryaAgent MVP должен уметь читать конфиги провайд
 - ✅ `/memory/stats` → JSON с file-sizes/line-counts/last-modified.
 - ✅ `/memory/compact` → запускает Compactor (placeholder в MVP: подсчёт метрик без embeddings).
 - ✅ `memory_audit_log` пишется на каждое memory-operation.
-- ✅ Smoke-тесты 5/5 проходят на default провайдере (Anthropic).
+- ✅ Smoke-тесты 10/10 проходят детерминированно, без API-ключа (fake model): 5 эталонных задач + 3 v5-проверки (cache/injection/JSON) + 2 memory-проверки (`/memory/stats`, atomic-append).
 - ✅ README объясняет, как запустить и расширить (включая секцию «Как подключить новый провайдер»).
 
 ---
@@ -505,12 +507,12 @@ OryaAgent MVP должен уметь читать конфиги провайд
 | LM Studio модель не загружена | `GET http://localhost:1234/v1/models` check; warning «Загрузите модель в LM Studio» |
 | vLLM с длинным контекстом OOM | Передавать `max_model_len` через `extra_body`; auto-shrink context window |
 | Китайский провайдер возвращает 400 на `cache_control` | Provider-capability detection; PromptCacheLayout (ALPHA) fallback на plain SystemMessage |
-| Разные форматы tool-calling (Anthropic vs OpenAI-compat) | LangChain `bind_tools()` сам маппит; тесты на 5+ провайдерах в smoke |
+| Разные форматы tool-calling (Anthropic vs OpenAI-compat) | LangChain `bind_tools()` сам маппит; тесты на 5+ провайдерах в integration (`tests/integration/test_provider_*.py`) |
 | Prompt-injection через file-content | Markers + sanitization + audit log (M-22) |
 | Token-blowup на больших файлах | `read` с start_line/end_line, `bash` с token-efficient output (M-23) |
 | Concurrent session writes в MD-файлы | `fcntl.flock` file-lock в MDStore |
 | PostgresSaver checkpoint corruption | JSONL projection как fallback для replay |
-| Smoke-тесты flaky на CI | Изолированные test-fixtures, deterministic test data; skip-флаг для external-providers в CI |
+| Smoke-тесты flaky на CI | Изолированные test-fixtures, deterministic test data (scripted fake model, без внешних API); external-providers только в integration со skip без ключей |
 
 ---
 
@@ -617,7 +619,7 @@ tests/
 │   ├── test_provider_ollama.py         # local, always-run
 │   └── test_provider_lmstudio.py
 └── smoke/
-    └── test_smoke.py          # M-18: 5 эталонных задач (параметризованный по провайдерам)
+    └── test_smoke.py          # M-18: 5 эталонных задач + 3 v5-проверки + 2 memory-проверки (fake model; провайдеры — в integration)
 
 ~/.orya/
 ├── config.yaml                # M-02: multi-provider config
@@ -650,7 +652,7 @@ tests/
 - ✅ Все 6 tools работают end-to-end в UI.
 - ✅ Permission-policy работает (interrupt_before на write/edit/bash).
 - ✅ Session-log восстанавливается после restart.
-- ✅ README + 5 smoke-тестов в CI green.
+- ✅ README + smoke-тесты в CI green (10/10: 5 эталонных задач + 5 расширенных).
 
 ---
 
