@@ -15,12 +15,18 @@ from app.api.memory import router as memory_router
 from app.api.metrics import router as metrics_router
 from app.api.sessions import router as sessions_router
 from app.api.workspace import router as workspace_router
-from app.core.logging_setup import install_file_logger, route_uvicorn_logs_to_root
+from app.core.logging_setup import (
+    configure_cli_logging,
+    install_file_logger,
+    route_uvicorn_logs_to_root,
+)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _configured_level() -> int:
@@ -120,23 +126,28 @@ def main() -> None:
     db_sub.add_parser("migrate", help="Apply pending SQL migrations (M-03)")
 
     args = parser.parse_args()
+    configure_cli_logging()
     if args.command == "import":
         from app.core.llm.importers import IMPORTERS
 
         report = IMPORTERS[args.source]()
-        print(f"Imported from {report.source} ({report.source_path})")
-        print(f"  Config written:  {report.config_path}")
-        print(f"  Providers found: {', '.join(report.found_providers) or '(none)'}")
+        lines = [
+            f"Imported from {report.source} ({report.source_path})",
+            f"  Config written:  {report.config_path}",
+            f"  Providers found: {', '.join(report.found_providers) or '(none)'}",
+        ]
         if report.default_provider:
-            print(
+            lines.append(
                 f"  Default:         {report.default_provider}/{report.default_model or '?'}"
             )
-        if report.missing_env_vars:
-            print("  Set these env vars to activate providers:")
-            for var in report.missing_env_vars:
-                print(f"    export {var}=...")
         for note in report.notes:
-            print(f"  Note: {note}")
+            lines.append(f"  Note: {note}")
+        logger.info("\n".join(lines))
+        if report.missing_env_vars:
+            logger.warning(
+                "Set these env vars to activate providers: %s",
+                "; ".join(f"{var}=..." for var in report.missing_env_vars),
+            )
     elif args.command == "db" and args.db_command == "migrate":
         import asyncio
 
@@ -151,9 +162,9 @@ def main() -> None:
 
         applied = asyncio.run(_run_migrations())
         if applied:
-            print(f"Applied migrations: {', '.join(applied)}")
+            logger.info("Applied migrations: %s", ", ".join(applied))
         else:
-            print("No pending migrations.")
+            logger.info("No pending migrations.")
     else:
         parser.print_help()
 

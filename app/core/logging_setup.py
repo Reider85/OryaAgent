@@ -16,7 +16,10 @@ repository's ``logs/`` directory (not the process cwd):
 * :func:`route_uvicorn_logs_to_root` — make ``uvicorn*`` loggers
   propagate to the root. Must run from the FastAPI lifespan: uvicorn
   applies its own ``dictConfig`` *after* importing the app, so handlers
-  added at import time would be replaced.
+  added at import time would be replaced;
+* :func:`configure_cli_logging` — configure the root logger for the
+  ``orya`` CLI entry points (MVP-POLISH-3) so their ``logger.info``
+  summaries are actually emitted.
 """
 
 from __future__ import annotations
@@ -67,6 +70,26 @@ def install_file_logger(name: str, level: int = logging.INFO) -> Path | None:
             return path  # already installed (idempotent)
     root.addHandler(handler)
     return path
+
+
+def configure_cli_logging() -> None:
+    """Configure root logging for the ``orya`` CLI entry points (MVP-POLISH-3).
+
+    Both ``orya ...`` (``app.main:main``) and ``python -m app.db.migrate``
+    report their results through the ``logging`` module now — ``print()``
+    is reserved for interactive prompts. ``logging.basicConfig`` alone is
+    not enough: it is a no-op when the root logger already has handlers
+    (e.g. ``app.main`` was imported first), and ``python -m app.db.migrate``
+    never imports it at all — without configuration ``logger.info`` output
+    would be dropped (the module's fallback handler emits WARNING+ only).
+    The level follows ``settings.log_level`` like the file logger does.
+    """
+    from app.core.config import get_settings
+
+    name = str(get_settings().log_level or "INFO").upper()
+    level = getattr(logging, name, logging.INFO)
+    logging.basicConfig(level=level, format=_FORMAT)
+    logging.getLogger().setLevel(level)
 
 
 def route_uvicorn_logs_to_root() -> None:

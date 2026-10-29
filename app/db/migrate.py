@@ -77,17 +77,19 @@ async def apply_migrations(
 
 async def _main() -> None:
     """``python -m app.db.migrate`` — apply pending migrations and exit."""
+    from app.core.logging_setup import configure_cli_logging
     from app.db import close_pool, get_asyncpg_pool
 
+    configure_cli_logging()
     pool = await get_asyncpg_pool()
     try:
         applied = await apply_migrations(pool)
     finally:
         await close_pool()
     if applied:
-        print(f"Applied migrations: {', '.join(applied)}")
+        logger.info("Applied migrations: %s", ", ".join(applied))
     else:
-        print("No pending migrations.")
+        logger.info("No pending migrations.")
 
 
 if __name__ == "__main__":
