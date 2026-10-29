@@ -814,7 +814,9 @@ class Compactor:
     }
 
     async def compact(self, filename: str) -> CompactionResult: ...
-    async def compact_all(self) -> dict[str, CompactionResult]: ...  # 4 scored-файла (из 6)
+    async def compact_all(
+        self,
+    ) -> dict[str, CompactionResult]: ...  # 4 scored-файла (из 6)
 ```
 
 ### 6.2. system-prompt-builder + L0 memory injection 🆕

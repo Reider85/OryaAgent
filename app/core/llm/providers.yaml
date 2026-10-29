@@ -10,8 +10,10 @@
 #   env_var          - provider-specific API key env var
 #   default_model    - model used when nothing else is configured
 #   api_key_placeholder - non-empty dummy key for local servers that require one
+#   health_path      - health-check path joined to the server root (base_url
+#                      minus its /v1 suffix); defaults to /v1/models
 #   tier             - western | chinese | aggregator | local
-#   extra_headers    - extra HTTP headers (e.g. OpenRouter attribution)
+#   extra_headers     - extra HTTP headers (e.g. OpenRouter attribution)
 
 providers:
   # ---------------------------------------------------------------- western
@@ -263,6 +265,7 @@ providers:
     base_url: http://localhost:11434/v1
     env_var: null
     api_key_placeholder: ollama
+    health_path: /api/tags  # native endpoint; not the OpenAI-compat /v1 path
     default_model: qwen2.5-coder:14b
     tier: local
     description: Ollama (default local dev server)
@@ -272,6 +275,7 @@ providers:
     base_url: http://localhost:1234/v1
     env_var: null
     api_key_placeholder: lm-studio
+    health_path: /v1/models  # same as the default; explicit for documentation
     default_model: qwen2.5-coder-7b-instruct
     tier: local
     description: LM Studio local server

@@ -14,18 +14,13 @@ from __future__ import annotations
 
 from app.core.llm.adapters.anthropic import build_anthropic
 from app.core.llm.adapters.gemini import build_gemini
-from app.core.llm.adapters.local import (
-    check_lmstudio,
-    check_ollama,
-    check_openai_compat,
-)
+from app.core.llm.adapters.local import build_health_url, check_health
 from app.core.llm.adapters.openai_compat import build_openai_compat
 
 __all__ = [
     "build_anthropic",
     "build_gemini",
+    "build_health_url",
     "build_openai_compat",
-    "check_lmstudio",
-    "check_ollama",
-    "check_openai_compat",
+    "check_health",
 ]

@@ -1,4 +1,9 @@
-"""Health-check helpers for local LLM servers (Ollama, LM Studio, vLLM, ...)."""
+"""Health-check helpers for local LLM servers (Ollama, LM Studio, vLLM, ...).
+
+The URL to probe is declarative: ``ProviderSpec.health_path`` from
+``providers.yaml`` joined to the server root (``base_url`` minus its
+OpenAI-compat ``/v1`` suffix). No provider names are hardcoded here (MVP-POLISH-5).
+"""
 
 from __future__ import annotations
 
@@ -6,6 +11,19 @@ import time
 from typing import Any
 
 import httpx
+
+DEFAULT_HEALTH_PATH = "/v1/models"
+
+
+def build_health_url(base_url: str, health_path: str | None = None) -> str:
+    """Join the server root with ``health_path`` (default: ``/v1/models``).
+
+    The server root is ``base_url`` without a trailing OpenAI-compat ``/v1``
+    suffix, so ``health_path`` may address any endpoint on the server
+    (e.g. Ollama's native ``/api/tags``).
+    """
+    root = base_url.rstrip("/").removesuffix("/v1")
+    return f"{root}{health_path or DEFAULT_HEALTH_PATH}"
 
 
 async def _get(
@@ -32,27 +50,24 @@ async def _get(
         }
 
 
-async def check_ollama(base_url: str, timeout: float = 5.0) -> dict[str, Any]:
-    """Ollama health: GET {host}/api/tags (not the OpenAI-compat /v1 path)."""
-    host = base_url.rstrip("/").removesuffix("/v1")
-    return await _get(f"{host}/api/tags", timeout=timeout)
-
-
-async def check_lmstudio(base_url: str, timeout: float = 5.0) -> dict[str, Any]:
-    """LM Studio health: GET {base_url}/models; warns if no model loaded."""
-    result = await _get(f"{base_url.rstrip('/')}/models", timeout=timeout)
-    return result
-
-
-async def check_openai_compat(
+async def check_health(
     base_url: str,
+    *,
+    health_path: str | None = None,
     api_key: str | None = None,
+    headers: dict[str, str] | None = None,
     timeout: float = 5.0,
 ) -> dict[str, Any]:
-    """Generic OpenAI-compatible health: GET {base_url}/models."""
-    headers: dict[str, str] = {}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+    """GET the provider health URL (``build_health_url``) and report reachability.
+
+    ``headers`` takes precedence (e.g. Anthropic's ``x-api-key``); otherwise a
+    ``Bearer`` auth header is added when ``api_key`` is given.
+    """
+    final_headers = dict(headers or {})
+    if api_key and "Authorization" not in final_headers:
+        final_headers["Authorization"] = f"Bearer {api_key}"
     return await _get(
-        f"{base_url.rstrip('/')}/models", headers=headers, timeout=timeout
+        build_health_url(base_url, health_path),
+        headers=final_headers or None,
+        timeout=timeout,
     )

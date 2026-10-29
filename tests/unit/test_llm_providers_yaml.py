@@ -109,8 +109,33 @@ def test_gateway_and_zai_providers_present():
     assert zai.default_model == "glm-4.5-flash"
 
 
+def test_health_path_field_for_local_servers():
+    """MVP-POLISH-5: health-path dispatch is declarative, not name-based."""
+    providers = load_providers()
+    assert providers["ollama"].health_path == "/api/tags"
+    assert providers["lmstudio"].health_path == "/v1/models"
+    for name, spec in providers.items():
+        if spec.health_path is not None:
+            assert spec.health_path.startswith("/"), (
+                f"{name}: health_path must start with /"
+            )
+
+
 def test_provider_spec_validates_adapter_pattern():
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
         ProviderSpec(name="bad", adapter="bogus", default_model="x", env_var="X")
+
+
+def test_provider_spec_rejects_health_path_without_slash():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        ProviderSpec(
+            name="bad",
+            adapter="openai_compat",
+            default_model="x",
+            base_url="http://localhost:1/v1",
+            health_path="api/tags",
+        )

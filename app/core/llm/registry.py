@@ -28,6 +28,14 @@ class ProviderSpec(BaseModel):
     env_var: str | None = None
     default_model: str
     api_key_placeholder: str | None = None
+    health_path: str | None = Field(
+        default=None,
+        pattern="^/",
+        description=(
+            "Health-check path joined to the server root (base_url minus its "
+            "/v1 suffix); defaults to /v1/models"
+        ),
+    )
     tier: str = "western"
     extra_headers: dict[str, str] = Field(default_factory=dict)
     description: str = ""

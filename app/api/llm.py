@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import os
-import time
 
-import httpx
 from fastapi import APIRouter, HTTPException
 
-from app.core.llm.adapters import check_lmstudio, check_ollama, check_openai_compat
+from app.core.llm.adapters import check_health
 from app.core.llm.factory import list_models, list_providers
 from app.core.llm.registry import load_providers
 from app.core.llm.remote import (
@@ -68,37 +66,16 @@ async def health(provider: str) -> dict:
             status_code=400, detail=f"Provider '{provider}' has no base_url"
         )
 
-    if provider == "ollama":
-        result = await check_ollama(spec.base_url)
-    elif provider == "lmstudio":
-        result = await check_lmstudio(spec.base_url)
-    elif spec.adapter in ("openai", "openai_compat"):
-        api_key = os.environ.get(spec.env_var) if spec.env_var else None
-        result = await check_openai_compat(spec.base_url, api_key=api_key)
-    elif spec.adapter == "anthropic":
-        api_key = os.environ.get(spec.env_var) if spec.env_var else None
+    api_key = os.environ.get(spec.env_var) if spec.env_var else None
+    if spec.adapter == "anthropic":
         headers = {"x-api-key": api_key or "", "anthropic-version": "2023-06-01"}
-        started = time.monotonic()
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(
-                    f"{spec.base_url.rstrip('/')}/v1/models", headers=headers
-                )
-            result = {
-                "ok": resp.is_success,
-                "status_code": resp.status_code,
-                "latency_ms": round((time.monotonic() - started) * 1000, 1),
-                "detail": "" if resp.is_success else resp.text[:200],
-            }
-        except httpx.HTTPError as exc:
-            result = {
-                "ok": False,
-                "status_code": None,
-                "latency_ms": round((time.monotonic() - started) * 1000, 1),
-                "detail": str(exc),
-            }
+        result = await check_health(
+            spec.base_url, health_path=spec.health_path, headers=headers
+        )
     else:
-        result = await check_openai_compat(spec.base_url)
+        result = await check_health(
+            spec.base_url, health_path=spec.health_path, api_key=api_key
+        )
 
     body = {
         "provider": provider,
