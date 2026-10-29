@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Senior Python coding agent (FastAPI + LangGraph + LLM provider seam). MVP tickets M-00…M-13 are done.
+Senior Python coding agent (FastAPI + LangGraph + LLM provider seam). MVP phase done through M-28 + MVP-POLISH (README lags at M-27; git log is truth).
 
 ## Ticket specs (read this first when implementing M-NN)
 
@@ -20,7 +20,7 @@ Senior Python coding agent (FastAPI + LangGraph + LLM provider seam). MVP ticket
 
 ## Tests
 
-- Suites: `tests/unit` (always run), `tests/integration` (infra-conditional), `tests/smoke` (empty). `asyncio_mode=auto` — no `@pytest.mark.asyncio` needed. No custom pytest markers registered.
+- Suites: `tests/unit` (always run), `tests/integration` (infra-conditional), `tests/e2e` (fake-model HTTP/UI round trips — always run, no infra), `tests/smoke` (M-18 canonical tasks with a scripted fake model — always run). `asyncio_mode=auto` — no `@pytest.mark.asyncio` needed. No custom pytest markers registered.
 - Skips are conditional, not marker-based: Postgres tests probe asyncpg (2s) and self-skip unless `make db-up`; live-provider tests use `require_env("DEEPSEEK_API_KEY")` from `tests/integration/_helpers.py`; 3 grep tests skip if `rg` missing.
 - `tests/integration/test_tools_integration.py` always runs (mocks the `rg` subprocess seam via monkeypatch).
 - Config-touching tests MUST sandbox: `monkeypatch.chdir(tmp_path)`, delete `ORYA_*` env vars, call `clear_settings_cache()` (and `clear_registry_cache()` for LLM YAML registries) before and after — `get_settings()`/registry loaders are `lru_cache` singletons, and repo-root `.env` leaks otherwise. Copy the pattern from `tests/unit/test_config.py::isolated_config`.
@@ -29,13 +29,13 @@ Senior Python coding agent (FastAPI + LangGraph + LLM provider seam). MVP ticket
 
 - `app/main.py` — FastAPI app + `orya` CLI (`orya import --from opencode|continue|aider|cline`, `orya db migrate`).
 - `app/core/llm/` — single LLM seam: `get_llm(provider, model)` (`factory.py`). **Never import `langchain_anthropic`/`langchain_openai` outside this package.** Providers live in YAML: `providers.yaml`, `models.yaml` (aliases), `capabilities.yaml`, `pricing.yaml` — adding an OpenAI-compatible provider is YAML-only; tests in `tests/unit/test_llm_providers_yaml.py` enforce structure. `app/core/llm/settings.py` is a deprecated shim → import `app.core.config`.
-- `app/core/graph.py` — `build_graph(tools, model, checkpointer, policy, *, system_prompt_fn, trim_fn)`. **The graph must not import `prompt.py`/`context.py`** — they're injected callables (cacheable-prefix ordering depends on it).
+- `app/core/graph.py` — `build_graph(tools, model, checkpointer, policy, *, system_prompt_fn, trim_fn)`; nodes: `agent → human → tools → assess → (agent | recover → human)`. **The graph must not import `prompt.py`/`context.py`** — they're injected callables (cacheable-prefix ordering depends on it). M-28 adds failure recovery: `assess` triages `ToolMessage(status="error")` results, `recover` asks the model for alternatives (budgets `recovery_max_rounds`/`recovery_variants` from settings; recover-node tokens are dropped from the streamed reply in `app/core/agent.py`).
 - `app/core/tools.py` — `get_tools()` returns exactly `[read, write, edit, bash, grep, glob]` **in that order**; graph, prompt builder, and tests assert this. Never hardcode a tool list elsewhere.
 - `app/core/permissions.py` — `PermissionPolicy`: precedence deny → session allowlist → allowlist → mode. Fail-closed: no checkpointer ⇒ `ask` = deny; unknown resume answer = deny; a mixed approve/refuse batch is wholly refused.
 - `app/core/context.py` — `trim_messages(messages, max_tokens, *, model)` signature is an architectural invariant (v7 BETA keeps it).
 - `app/core/memory/` — L0 memory seam (M-25): `MDStore` over the six MD files in `settings.memory_dir` (`append/read/read_all/mtime/stats` + `compact_if_needed` hook), `get_md_store()` as the cached entry point, `record_memory_op()` for the best-effort `memory_audit_log` row (JSONL fallback). Prompt builder and `/learn` (M-26) go through it — never open the MD files directly. Append = one `os.write` into `O_APPEND` + `fsync` under a per-file lock (`O_BINARY` on Windows; tmp+`os.replace` only for rewrites); records use `MemoryItem.to_markdown()` (ARCHITECT6 §3.1.1). M-27 adds `Compactor` (`compactor.py`, re-exported from the package): strategies partition **raw blocks** (headers/free text always kept) → append to `memory/archive/{stem}_{UTCdate}.md` **first**, then `MDStore.rewrite(file, transform)` (locked read-modify-write) — never delete, never rewrite without the lock; `get_compactor()`/`compaction_worker(interval)` (lifespan, `ORYA_MEMORY_COMPACT_INTERVAL_SECONDS`, 0 = off). `/memory*` endpoints live in `app/api/memory.py` as **union paths** (`/memory/...` + `/sessions/{id}/memory/...` over shared handlers).
 - `app/db/` — app tables use **asyncpg** (`schema.sql` canonical + `migrations/NNNN_name.sql`); checkpoints use a **separate psycopg pool** (`checkpoints.py`, `AsyncPostgresSaver.setup()`). **A schema change requires editing BOTH `schema.sql` AND a new migration file** — `tests/unit/test_db_schema.py` fails on drift. Checkpoint tables are not in schema.sql.
-- `app/ui/` = Chainlit (M-15+), since M-24 a pure httpx client of FastAPI: `ORYA_API_URL` (default `http://127.0.0.1:8000`), sessions via `POST /sessions`, turns via `POST /sessions/{id}/messages?stream=true` + `/resume?stream=true` (SSE frames `token`/`tool_start`/`tool_end`/`interrupt`/`done`/`error`) ? the UI never builds or drives a graph. Redis backs the M-21 tool-result cache (`ORYA_CACHE_BACKEND=auto|memory|redis`, probed in the FastAPI lifespan only).
+- `app/ui/` = Chainlit (M-15+), since M-24 a pure httpx client of FastAPI: `ORYA_API_URL` (default `http://127.0.0.1:8000`), sessions via `POST /sessions`, turns via `POST /sessions/{id}/messages?stream=true` + `/resume?stream=true` (SSE frames `token`/`tool_start`/`tool_end`/`interrupt`/`done`/`error`) — the UI never builds or drives a graph. Redis backs the M-21 tool-result cache (`ORYA_CACHE_BACKEND=auto|memory|redis`, probed in the FastAPI lifespan only).
 
 ## Conventions
 
@@ -57,11 +57,11 @@ Precedence: env vars → `.env` (cwd) → `~/.orya/config.yaml` → defaults. YA
 - `rg` is often **not on the agent PATH** even though grep/glob tools need it. For log/DB analysis use `Select-String` or Python; installing ripgrep un-skips 3 unit tests.
 - Inline Python: pipe via here-string `$code = @'...'@ | python -` (nested quotes in `python -c` break in PS 5.1).
 - `analytics/*.md` may be **Windows-1251** (Cyrillic). Use `Get-Content -Encoding` / Python `encoding='cp1251'` if mojibake.
-- psycopg checkpoints **cannot** run on ProactorEventLoop → Postgres tests build an explicit `SelectorEventLoop` on win32 (copy from `tests/integration/test_db_postgres.py:213`). Uvicorn already uses Selector.
+- psycopg checkpoints **cannot** run on ProactorEventLoop → Postgres tests build an explicit `SelectorEventLoop` on win32 (copy from `tests/integration/test_db_postgres.py:214`). Uvicorn already uses Selector.
 - `bash.py` prefers Git Bash (`...\Git\bin\bash.exe`), explicitly skips the WSL `System32\bash.exe` shim, else `cmd.exe`.
 - Makefile uses `rm`/`find` → use the `uv run ...` equivalents directly if no Git Bash.
 
 ## External deps not in pyproject
 
-- `rg` (ripgrep) binary required by grep/glob tools (ToolException if missing).
-- `httpx` and `psycopg_pool` are used in app code but only arrive transitively — don't rely on them staying.
+- `rg` (ripgrep) binary required by grep/glob tools (ToolException if missing; both shell out through the shared seam `app/tools/_rg.py` — split out of `search.py` in MVP-POLISH-8).
+- `psycopg_pool` is used by checkpoints but only arrives transitively (via `langgraph-checkpoint-postgres`) — don't rely on it staying.
