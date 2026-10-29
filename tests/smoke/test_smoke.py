@@ -20,6 +20,7 @@ the ``/memory/stats`` endpoint and atomic-append durability (BACKLOG6).
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import sys
@@ -47,7 +48,10 @@ from app.core.prompt import build_system_prompt
 from app.core.security import UNTRUSTED_CONTENT_END, UNTRUSTED_CONTENT_START
 from app.core.tools import get_tools
 from app.tools import read
-from app.tools import search as search_module
+
+# The package re-exports the tool object under the same name, so the
+# module itself is loaded via importlib (MVP-POLISH-8 split).
+grep_module = importlib.import_module("app.tools.grep")
 
 
 @pytest.fixture(autouse=True)
@@ -260,7 +264,7 @@ async def test_smoke_grep_symbol_across_project(
             "",
         )
 
-    monkeypatch.setattr(search_module, "_run_rg", _fake_rg)
+    monkeypatch.setattr(grep_module, "_run_rg", _fake_rg)
 
     _, tool_messages = await _run_turn(
         [

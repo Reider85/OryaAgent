@@ -96,14 +96,14 @@ def _mock_rg(
     files: list[str] | None = None,
 ) -> None:
     """Replace the rg subprocess seam (mode-aware: grep vs glob)."""
-    module = importlib.import_module("app.tools.search")
 
     async def fake(argv, timeout, max_events, mode):  # noqa: ANN001, ANN202
         if mode == "match":
             return list(matches or []), False, 0, ""
         return list(files or []), False, 0, ""
 
-    monkeypatch.setattr(module, "_run_rg", fake)
+    for name in ("app.tools.grep", "app.tools.glob"):
+        monkeypatch.setattr(importlib.import_module(name), "_run_rg", fake)
 
 
 def _rg_event(file: str, line: int, text: str) -> str:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import os
 import platform
@@ -24,7 +25,6 @@ from app.core.security import (
 )
 from app.core.tools import get_tools
 from app.tools import bash, edit, glob, grep, read, write
-from app.tools import search as search_module
 from app.tools.bash import (
     DEDUP_THRESHOLD,
     MAX_CHARS_PER_STREAM,
@@ -34,6 +34,12 @@ from app.tools.bash import (
     _truncate_stream,
 )
 from app.tools.read import DEFAULT_MAX_LINES
+
+# The package re-exports the tool objects under the same names, so the
+# modules themselves are loaded via importlib (MVP-POLISH-8 split).
+glob_module = importlib.import_module("app.tools.glob")
+grep_module = importlib.import_module("app.tools.grep")
+rg_module = importlib.import_module("app.tools._rg")
 
 
 @pytest.fixture(autouse=True)
@@ -1140,7 +1146,8 @@ def _mock_rg(
         captured["calls"] += 1
         return list(lines), truncated, exit_code, stderr
 
-    monkeypatch.setattr(search_module, "_run_rg", fake_run_rg)
+    monkeypatch.setattr(grep_module, "_run_rg", fake_run_rg)
+    monkeypatch.setattr(glob_module, "_run_rg", fake_run_rg)
     return captured
 
 
@@ -1347,7 +1354,7 @@ async def test_glob_empty_pattern_raises():
 
 
 async def test_rg_not_found_raises_tool_exception(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(search_module.shutil, "which", lambda name: None)
+    monkeypatch.setattr(rg_module.shutil, "which", lambda name: None)
 
     with pytest.raises(ToolException, match="ripgrep \\(rg\\) not found in PATH"):
         await grep.ainvoke({"pattern": "x"})

@@ -13,6 +13,7 @@ No infrastructure required:
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 from pathlib import Path
@@ -32,7 +33,11 @@ from app.core.security import (
     UNTRUSTED_CONTENT_START,
 )
 from app.core.tools import get_tools
-from app.tools import search as search_module
+
+# The package re-exports the tool objects under the same names, so the
+# modules themselves are loaded via importlib (MVP-POLISH-8 split).
+glob_module = importlib.import_module("app.tools.glob")
+grep_module = importlib.import_module("app.tools.grep")
 
 EXPECTED_NAMES = ["read", "write", "edit", "bash", "grep", "glob"]
 
@@ -137,14 +142,12 @@ async def test_graph_runs_full_cycle_over_registered_tools(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """One conversation exercising write -> read -> edit -> bash -> grep -> glob."""
-    monkeypatch.setattr(
-        search_module,
-        "_run_rg",
-        _fake_rg(
-            [_rg_match_event("cycle.txt", 2, "gamma")],
-            ["cycle.txt"],
-        ),
+    fake_seam = _fake_rg(
+        [_rg_match_event("cycle.txt", 2, "gamma")],
+        ["cycle.txt"],
     )
+    monkeypatch.setattr(grep_module, "_run_rg", fake_seam)
+    monkeypatch.setattr(glob_module, "_run_rg", fake_seam)
     model = FakeMessagesListChatModel(
         responses=[
             _tool_call(
