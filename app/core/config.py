@@ -289,6 +289,45 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("CORS_ORIGINS", "ORYA_CORS_ORIGINS"),
         description='Comma-separated allowed origins, or "*" for any',
     )
+    # ALPHA: rate-limit (A-01)
+    rate_limit_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("RATE_LIMIT_ENABLED", "ORYA_RATE_LIMIT_ENABLED"),
+        description=(
+            "Kill-switch: per-user (60 rpm) + per-endpoint (/learn 10 rpm) "
+            "enforcement (A-01); off by default so dev/tests/UI keep working"
+        ),
+    )
+    rate_limit_rpm: int = Field(
+        default=60,
+        validation_alias=AliasChoices("RATE_LIMIT_RPM", "ORYA_RATE_LIMIT_RPM"),
+        description="Per-user requests-per-minute budget on every endpoint",
+    )
+    rate_limit_learn_rpm: int = Field(
+        default=10,
+        validation_alias=AliasChoices(
+            "RATE_LIMIT_LEARN_RPM", "ORYA_RATE_LIMIT_LEARN_RPM"
+        ),
+        description="Tighter per-user RPM for the /learn endpoints (anti-abuse)",
+    )
+    rate_limit_backend: Literal["auto", "memory", "redis"] = Field(
+        default="auto",
+        validation_alias=AliasChoices("RATE_LIMIT_BACKEND", "ORYA_RATE_LIMIT_BACKEND"),
+        description=(
+            "auto: probe Redis and fall back to in-memory counters; "
+            "redis: require Redis at startup; memory: never use Redis"
+        ),
+    )
+    rate_limit_trusted_clients: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "RATE_LIMIT_TRUSTED_CLIENTS", "ORYA_TRUSTED_CLIENTS"
+        ),
+        description=(
+            "CSV/JSON list of user ids or client IPs exempt from "
+            "rate limiting (PROMPT_ALPHA §11 whitelist)"
+        ),
+    )
     # ALPHA: observability
     langsmith_api_key: SecretStr | None = Field(
         default=None,
@@ -367,6 +406,11 @@ class Settings(BaseSettings):
     def auth_public_path_list(self) -> list[str]:
         """``auth_public_paths`` as a list of path prefixes."""
         return parse_env_list(self.auth_public_paths)
+
+    @property
+    def rate_limit_trusted_list(self) -> list[str]:
+        """``rate_limit_trusted_clients`` as a list of user ids / client IPs."""
+        return parse_env_list(self.rate_limit_trusted_clients)
 
 
 def parse_env_list(value: str) -> list[str]:

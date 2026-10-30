@@ -1,4 +1,4 @@
-"""Middleware: request-id, Bearer-JWT auth, CORS (A-00).
+"""Middleware: request-id, Bearer-JWT auth, CORS, rate-limit (A-00 + A-01).
 
 Pure-ASGI wrappers (not ``BaseHTTPMiddleware``) so the SSE endpoints
 (`/sessions/{id}/messages?stream=true`) stream through unbuffered.
@@ -7,15 +7,18 @@ env, call ``clear_settings_cache()`` and get enforcement on/off without
 rebuilding the app.
 
 Registration order in ``install_middleware`` matters: Starlette's
-``add_middleware`` makes the *last* added the outermost layer, so auth is
-added first (innermost of the three), then CORS (preflights must bypass
-auth), then request-id (outermost — it stamps even 401 rejections).
+``add_middleware`` makes the *last* added the outermost layer, so the
+execution order is request-id → CORS → auth → rate-limit → routes:
+auth is added before rate-limit (rate-limit reads the ``user_id`` auth
+stamps into scope state), and request-id/CORS stay outermost so even
+401/429 rejections carry the trace headers.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from typing import TYPE_CHECKING
 
@@ -24,6 +27,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.auth import AuthError, decode_token
+from app.core.auth.rate_limit import RateDecision, get_rate_limiter
 from app.core.config import get_settings
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -31,12 +35,16 @@ if TYPE_CHECKING:  # pragma: no cover
 
 __all__ = [
     "AuthMiddleware",
+    "RateLimitMiddleware",
     "RequestIdMiddleware",
     "SettingsCorsMiddleware",
     "install_middleware",
 ]
 
 logger = logging.getLogger(__name__)
+
+#: ``/learn`` + ``/sessions/{id}/learn`` — the anti-abuse 10 rpm endpoints.
+_LEARN_PATH = re.compile(r"^/(learn|sessions/[^/]+/learn)$")
 
 
 def _is_public(path: str, public_prefixes: list[str]) -> bool:
@@ -68,6 +76,25 @@ async def _reject(send: Send, detail: str) -> None:
                 (b"content-type", b"application/json"),
                 (b"content-length", str(len(body)).encode("latin-1")),
                 (b"www-authenticate", b"Bearer"),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body})
+
+
+async def _reject_too_many(send: Send, decision: RateDecision) -> None:
+    """Send a 429 JSON body with ``Retry-After`` (A-01)."""
+    body = json.dumps({"detail": "rate limit exceeded"}).encode("utf-8")
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 429,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("latin-1")),
+                (b"retry-after", str(decision.retry_after).encode("latin-1")),
+                (b"x-ratelimit-limit", str(decision.limit).encode("latin-1")),
+                (b"x-ratelimit-remaining", b"0"),
             ],
         }
     )
@@ -140,6 +167,62 @@ class AuthMiddleware:
         await self.app(scope, receive, send)
 
 
+class RateLimitMiddleware:
+    """Per-user (60 rpm) + per-endpoint (/learn 10 rpm) limits (A-01).
+
+    ``ORYA_RATE_LIMIT_ENABLED=false`` (default) passes everything through —
+    the same kill-switch stance as A-00 auth. Innermost layer: auth has
+    already stamped ``scope["state"]["user_id"]`` by the time we run; when
+    auth is off the bucket falls back to the client IP. ``ORYA_TRUSTED_CLIENTS``
+    entries (user ids or IPs) skip limiting entirely, and the auth public
+    prefixes (/health, /docs, ...) are exempt so probes never consume quota.
+
+    Counters come from the ``get_rate_limiter()`` seam — Redis-backed in
+    production, in-memory when Redis is unreachable (fail-open on Redis
+    mid-flight errors, logged as warnings by the backend).
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        settings = get_settings()
+        if not settings.rate_limit_enabled:
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        # OPTIONS is CORS preflight — handled by the CORS layer above us.
+        if scope.get("method") == "OPTIONS" or _is_public(
+            path, settings.auth_public_path_list
+        ):
+            await self.app(scope, receive, send)
+            return
+        user_id = scope.get("state", {}).get("user_id")
+        client_ip = (scope.get("client") or ("",))[0]
+        identity = str(user_id) if user_id else (client_ip or "anonymous")
+        trusted = settings.rate_limit_trusted_list
+        if identity in trusted or (client_ip and client_ip in trusted):
+            await self.app(scope, receive, send)
+            return
+
+        limiter = get_rate_limiter()
+        decision = await limiter.hit(f"user:{identity}", settings.rate_limit_rpm)
+        if decision.allowed and _LEARN_PATH.match(path):
+            decision = await limiter.hit(
+                f"ep:{identity}:learn", settings.rate_limit_learn_rpm
+            )
+        if decision.allowed:
+            await self.app(scope, receive, send)
+            return
+        logger.debug(
+            "rate-limit: rejected %s %s (%s)", scope.get("method"), path, identity
+        )
+        await _reject_too_many(send, decision)
+
+
 class SettingsCorsMiddleware:
     """CORSMiddleware with origins re-read whenever settings change.
 
@@ -169,7 +252,13 @@ class SettingsCorsMiddleware:
 
 
 def install_middleware(app: FastAPI) -> None:
-    """Wire the A-00 middleware stack: auth, CORS, request-id."""
+    """Wire the A-00/A-01 middleware stack: rate-limit, auth, CORS, request-id.
+
+    Last added is outermost, so requests execute request-id → CORS → auth →
+    rate-limit → routes: rate-limit needs the ``user_id`` auth resolves, and
+    401/429 rejections still pass back through CORS and get the trace header.
+    """
+    app.add_middleware(RateLimitMiddleware)
     app.add_middleware(AuthMiddleware)
     app.add_middleware(SettingsCorsMiddleware)
     app.add_middleware(RequestIdMiddleware)

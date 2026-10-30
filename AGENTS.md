@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Senior Python coding agent (FastAPI + LangGraph + LLM provider seam). MVP phase done through M-28 + MVP-POLISH (README lags at M-27; git log is truth). ALPHA started: A-00 (auth middleware), A-02 (seam trace-wrapping).
+Senior Python coding agent (FastAPI + LangGraph + LLM provider seam). MVP phase done through M-28 + MVP-POLISH (README lags at M-27; git log is truth). ALPHA started: A-00 (auth middleware), A-01 (rate-limit), A-02 (seam trace-wrapping).
 
 ## Ticket specs (read this first when implementing M-NN)
 
