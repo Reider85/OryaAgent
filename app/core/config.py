@@ -348,6 +348,11 @@ class Settings(BaseSettings):
             "ORYA_OTEL_EXPORTER_OTLP_ENDPOINT",
         ),
     )
+    sampler_proxy_url: str = Field(
+        default="http://sampler-proxy:4321",
+        description="URL of the sampler-proxy service (e.g., http://sampler-proxy:4321)",
+        env=["ORYA_SAMPLER_PROXY_URL"],
+    )
     # PROD: OriaHS
     oriahs_url: str | None = Field(
         default=None,

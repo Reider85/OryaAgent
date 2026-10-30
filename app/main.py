@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 
+from app.api.health import router as health_router
 from app.api.learn import router as learn_router
 from app.api.llm import router as llm_router
 from app.api.memory import router as memory_router
@@ -106,12 +107,7 @@ app.include_router(learn_router)
 app.include_router(memory_router)
 app.include_router(metrics_router)
 app.include_router(workspace_router)
-
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint for M-00 bootstrap verification."""
-    return {"status": "ok", "message": "OryaAgent API is running"}
+app.include_router(health_router)
 
 
 def main() -> None:
