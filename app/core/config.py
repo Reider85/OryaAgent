@@ -336,6 +336,27 @@ class Settings(BaseSettings):
             "rate limiting (PROMPT_ALPHA §11 whitelist)"
         ),
     )
+    # ALPHA: session-log encryption at rest (A-05)
+    session_log_encryption_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "SESSION_LOG_ENCRYPTION_ENABLED",
+            "ORYA_SESSION_LOG_ENCRYPTION_ENABLED",
+        ),
+        description=(
+            "Kill-switch: encrypt session-log payload columns "
+            "(messages.content, messages.tool_calls) with pgcrypto "
+            "pgp_sym_encrypt (A-05); off by default so dev/tests keep working"
+        ),
+    )
+    session_log_encryption_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "SESSION_LOG_ENCRYPTION_KEY",
+            "ORYA_SESSION_LOG_ENCRYPTION_KEY",
+        ),
+        description="Symmetric passphrase for pgp_sym_encrypt (>= 16 chars)",
+    )
     # ALPHA: observability
     langsmith_api_key: SecretStr | None = Field(
         default=None,
@@ -403,11 +424,37 @@ class Settings(BaseSettings):
                 raise ValueError("AUTH_SECRET_KEY must be at least 32 characters")
         return value
 
+    @field_validator("session_log_encryption_key")
+    @classmethod
+    def _validate_session_log_encryption_key(
+        cls, value: SecretStr | None
+    ) -> SecretStr | None:
+        """Reject weak session-log encryption keys (A-05: >= 16 chars)."""
+        if value is not None:
+            raw = value.get_secret_value()
+            if raw and len(raw) < 16:
+                raise ValueError(
+                    "SESSION_LOG_ENCRYPTION_KEY must be at least 16 characters"
+                )
+        return value
+
     @model_validator(mode="after")
     def _require_secret_when_auth_enabled(self) -> Settings:
         """Fail fast: enforcing JWT without a signing secret is a misconfiguration."""
         if self.auth_enabled and self.auth_secret_key is None:
             raise ValueError("AUTH_ENABLED=true requires AUTH_SECRET_KEY")
+        return self
+
+    @model_validator(mode="after")
+    def _require_key_when_session_log_encryption_enabled(self) -> Settings:
+        """Fail fast: encrypting the session log without a key is a misconfiguration."""
+        if (
+            self.session_log_encryption_enabled
+            and self.session_log_encryption_key is None
+        ):
+            raise ValueError(
+                "SESSION_LOG_ENCRYPTION_ENABLED=true requires SESSION_LOG_ENCRYPTION_KEY"
+            )
         return self
 
     @property

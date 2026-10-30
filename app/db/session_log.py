@@ -12,6 +12,14 @@ Two complementary stores for the session event stream:
   with ``type`` in ``user`` / ``ai`` / ``tool`` / ``system``. Used for
   replay/debug/audit (ARCHITECT4 §6.5).
 
+Encryption at rest (A-05): when ``ORYA_SESSION_LOG_ENCRYPTION_ENABLED=true``
+and a ``ORYA_SESSION_LOG_ENCRYPTION_KEY`` is configured, the payload columns
+``messages.content`` (TEXT) and ``messages.tool_calls`` (JSONB) are stored
+encrypted via PostgreSQL ``pgcrypto`` (``pgp_sym_encrypt``, armored). Reads
+transparently decrypt; the armor-prefix ``CASE`` guard means pre-existing
+plaintext rows remain readable (tolerant decrypt). The kill-switch is off by
+default so dev/tests keep working unchanged.
+
 Projection idempotency: every projection run reads
 ``{session_id}.meta.json`` (``last_processed_ts``), processes only
 checkpoints with a newer ``ts``, and emits only messages that appeared
@@ -62,6 +70,61 @@ SESSION_STATUSES = frozenset({"active", "closed", "aborted"})
 
 #: Seconds between projection passes in :func:`projection_worker`.
 PROJECTION_INTERVAL_S = 30.0
+
+#: Leading marker of pgcrypto ASCII-armored output (A-05 tolerant decrypt).
+_ARMOR_PREFIX = "-----BEGIN PGP MESSAGE-----"
+
+
+def _encryption_enabled() -> bool:
+    """True when session-log encryption at rest is switched on (A-05)."""
+    return get_settings().session_log_encryption_enabled
+
+
+def _encryption_key() -> str:
+    """Return the raw pgp passphrase (A-05).
+
+    Settings validation already fails fast when encryption is enabled
+    without a key; this is a defensive re-check so the seam never emits a
+    ``pgp_sym_encrypt`` call with an empty passphrase.
+    """
+    secret = get_settings().session_log_encryption_key
+    if secret is None or not secret.get_secret_value():
+        raise RuntimeError(
+            "session-log encryption enabled but SESSION_LOG_ENCRYPTION_KEY is empty"
+        )
+    return secret.get_secret_value()
+
+
+def _decrypt_content_sql(column: str, key_param: str) -> str:
+    """SQL fragment decrypting a TEXT content column in place (A-05).
+
+    Only values carrying the pgcrypto armor prefix are decrypted; plaintext
+    rows (written before encryption was enabled, or while the kill-switch
+    was off) pass through unchanged.
+    """
+    return (
+        f"CASE WHEN {column} LIKE '{_ARMOR_PREFIX}%' "
+        f"THEN convert_from(pgp_sym_decrypt({column}::bytea, ${key_param}), 'UTF8') "
+        f"ELSE {column} END"
+    )
+
+
+def _decrypt_tool_calls_sql(column: str, key_param: str) -> str:
+    """SQL fragment decrypting a JSONB ``tool_calls`` column back to jsonb (A-05).
+
+    The encrypted form stores the armored ciphertext as a JSON string
+    (``to_jsonb(armor(...))``); the ``#>> '{}'`` extraction unwraps it to
+    text before ``pgp_sym_decrypt``, and the result is cast back to ``jsonb``
+    so asyncpg returns a decoded Python object (identical shape to the
+    plaintext path).
+    """
+    return (
+        f"CASE WHEN {column} IS NULL THEN NULL "
+        f"WHEN {column} #>> '{{}}' LIKE '{_ARMOR_PREFIX}%' "
+        f"THEN convert_from(pgp_sym_decrypt(({column} #>> '{{}}')::bytea, "
+        f"${key_param}), 'UTF8')::jsonb "
+        f"ELSE {column} END"
+    )
 
 
 def session_jsonl_path(session_id: str) -> Path:
@@ -245,18 +308,36 @@ async def list_messages(
     offset: int = 0,
     pool: asyncpg.Pool | None = None,
 ) -> list[dict]:
-    """Return typed ``messages`` rows for a session in ``seq`` order."""
+    """Return typed ``messages`` rows for a session in ``seq`` order.
+
+    When session-log encryption is enabled (A-05), ``content`` and
+    ``tool_calls`` are decrypted in-place by the query; plaintext rows are
+    returned unchanged (tolerant decrypt).
+    """
     if pool is None:
         pool = await get_asyncpg_pool()
-    rows = await pool.fetch(
-        "SELECT id, seq, role, content, tool_calls, tool_call_id, created_at "
-        "FROM messages WHERE session_id = $1 "
-        "ORDER BY seq "
-        "LIMIT $2 OFFSET $3",
-        session_id,
-        limit,
-        offset,
-    )
+    if _encryption_enabled():
+        key = _encryption_key()
+        query = (
+            "SELECT id, seq, role, "
+            f"{_decrypt_content_sql('content', '4')}, "
+            f"{_decrypt_tool_calls_sql('tool_calls', '4')}, "
+            "tool_call_id, created_at "
+            "FROM messages WHERE session_id = $1 "
+            "ORDER BY seq "
+            "LIMIT $2 OFFSET $3"
+        )
+        rows = await pool.fetch(query, session_id, limit, offset, key)
+    else:
+        rows = await pool.fetch(
+            "SELECT id, seq, role, content, tool_calls, tool_call_id, created_at "
+            "FROM messages WHERE session_id = $1 "
+            "ORDER BY seq "
+            "LIMIT $2 OFFSET $3",
+            session_id,
+            limit,
+            offset,
+        )
     messages: list[dict] = []
     for row in rows:
         item = dict(row)
@@ -282,6 +363,10 @@ async def log_message(
     session. ``tool_calls`` is stored as JSONB (assistant tool-call
     requests); ``tool_call_id`` links tool results back to their request.
 
+    When session-log encryption is enabled (A-05), ``content`` (TEXT) is
+    stored as pgcrypto armored ciphertext and ``tool_calls`` (JSONB) as
+    ``to_jsonb(armor(...))``; both are decrypted transparently on read.
+
     Returns the inserted row id.
     """
     if role not in ROLES:
@@ -290,17 +375,36 @@ async def log_message(
         pool = await get_asyncpg_pool()
     await ensure_session(session_id, pool=pool)
     payload = json.dumps(tool_calls) if tool_calls is not None else None
-    row = await pool.fetchrow(
-        "INSERT INTO messages (session_id, seq, role, content, tool_calls, tool_call_id) "
-        "SELECT $1, COALESCE(MAX(seq), 0) + 1, $2, $3, $4, $5 "
-        "FROM messages WHERE session_id = $1 "
-        "RETURNING id",
-        session_id,
-        role,
-        content,
-        payload,
-        tool_call_id,
-    )
+    if _encryption_enabled():
+        key = _encryption_key()
+        row = await pool.fetchrow(
+            "INSERT INTO messages (session_id, seq, role, content, tool_calls, tool_call_id) "
+            "SELECT $1, COALESCE(MAX(seq), 0) + 1, $2, "
+            "armor(pgp_sym_encrypt(convert_to($3, 'UTF8'), $6)), "
+            "CASE WHEN $4::text IS NULL THEN NULL "
+            "ELSE to_jsonb(armor(pgp_sym_encrypt(convert_to($4, 'UTF8'), $6))) END, "
+            "$5 "
+            "FROM messages WHERE session_id = $1 "
+            "RETURNING id",
+            session_id,
+            role,
+            content,
+            payload,
+            tool_call_id,
+            key,
+        )
+    else:
+        row = await pool.fetchrow(
+            "INSERT INTO messages (session_id, seq, role, content, tool_calls, tool_call_id) "
+            "SELECT $1, COALESCE(MAX(seq), 0) + 1, $2, $3, $4, $5 "
+            "FROM messages WHERE session_id = $1 "
+            "RETURNING id",
+            session_id,
+            role,
+            content,
+            payload,
+            tool_call_id,
+        )
     if row is None:  # pragma: no cover - INSERT..SELECT always returns a row
         raise RuntimeError(f"failed to insert message for session {session_id!r}")
     return int(row["id"])

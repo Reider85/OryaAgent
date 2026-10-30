@@ -3,6 +3,11 @@
 -- LangGraph checkpoint tables (checkpoints, checkpoint_blobs, ...) are created
 -- and migrated separately by AsyncPostgresSaver.setup() — see app/db/checkpoints.py.
 
+-- pgcrypto: pgp_sym_encrypt/pgp_sym_decrypt for session-log encryption at
+-- rest (A-05). Created unconditionally; used only when
+-- ORYA_SESSION_LOG_ENCRYPTION_ENABLED=true (see app/db/session_log.py).
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- Sessions: one row per chat session (metadata for list views; events in messages).
 CREATE TABLE IF NOT EXISTS sessions (
     session_id       TEXT PRIMARY KEY,

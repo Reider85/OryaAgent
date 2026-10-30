@@ -78,3 +78,10 @@ def test_every_schema_table_appears_in_migrations():
     combined = "\n".join(sql for _, sql in load_migrations()).lower()
     for table in REQUIRED_TABLES:
         assert f"create table if not exists {table}" in combined
+
+
+def test_pgcrypto_declared_in_schema_and_migrations():
+    """A-05: pgcrypto extension must be enabled in both schema.sql and a migration."""
+    assert "create extension if not exists pgcrypto" in _schema_sql()
+    combined = "\n".join(sql for _, sql in load_migrations()).lower()
+    assert "create extension if not exists pgcrypto" in combined

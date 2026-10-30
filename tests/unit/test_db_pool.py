@@ -175,7 +175,8 @@ def test_load_migrations_reads_files(tmp_path: Path):
 
 
 async def test_apply_migrations_skips_already_applied():
-    conn = FakeConnection(fetch_rows=[{"version": "0001_init"}])
+    all_versions = [v for v, _ in load_migrations()]
+    conn = FakeConnection(fetch_rows=[{"version": v} for v in all_versions])
     pool = FakePool(conn)
     applied = await apply_migrations(pool)  # type: ignore[arg-type]
     assert applied == []
@@ -188,11 +189,13 @@ async def test_apply_migrations_skips_already_applied():
 
 
 async def test_apply_migrations_applies_pending_in_transaction():
+    all_versions = [v for v, _ in load_migrations()]
     conn = FakeConnection(fetch_rows=[])
     pool = FakePool(conn)
     applied = await apply_migrations(pool)  # type: ignore[arg-type]
-    assert applied == ["0001_init"]
-    assert conn.transactions == 1
+    assert applied == all_versions
+    # one transaction per pending migration file
+    assert conn.transactions == len(all_versions)
 
     executed_sql = [q for q, _ in conn.executed]
     assert any("create table if not exists sessions" in q.lower() for q in executed_sql)
@@ -200,7 +203,8 @@ async def test_apply_migrations_applies_pending_in_transaction():
         (q, args) for q, args in conn.executed if "INSERT INTO schema_migrations" in q
     ]
     assert inserts == [
-        ("INSERT INTO schema_migrations (version) VALUES ($1)", ("0001_init",))
+        ("INSERT INTO schema_migrations (version) VALUES ($1)", (version,))
+        for version in all_versions
     ]
 
 
