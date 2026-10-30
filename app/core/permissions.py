@@ -51,6 +51,7 @@ from typing import Any, Literal
 import yaml
 
 from app.core.config import get_settings
+from app.core.observability.spans import emit_span
 
 logger = logging.getLogger(__name__)
 
@@ -334,7 +335,10 @@ class PermissionPolicy:
 
         # 1. Explicit user commands never interrupt (PROMPT_MVP M-13).
         if name in TRUSTED_TOOLS or name.startswith(TRUSTED_PREFIXES):
-            return Decision("allow", "explicit user command")
+            decision = Decision("allow", "explicit user command")
+            # A-03: Emit permission audit span for trusted tools
+            self._emit_permission_span(name, decision, "")
+            return decision
 
         text = _rule_text(name, args)
 
@@ -342,31 +346,51 @@ class PermissionPolicy:
         for rule in self.config.deny_rules:
             if rule.matches(name, text):
                 logger.info("Permission deny: %s matched %r", name, rule.pattern)
-                return Decision(
+                decision = Decision(
                     "deny", rule.description or f"denied by rule {rule.pattern}"
                 )
+                # A-03: Emit permission audit span for deny (with security incident)
+                self._emit_permission_span(name, decision, text)
+                return decision
 
         # 3. Session allowlist ("Approve & don't ask again for this tool").
         if name in self._session_allowed | _session_allowed_tools(session_state):
-            return Decision("allow", "session allowlist")
+            decision = Decision("allow", "session allowlist")
+            # A-03: Emit permission audit span for session allowlist
+            self._emit_permission_span(name, decision, text)
+            return decision
 
         # 4. Allow-list bypasses the mode (ADR-004: matches ask-mode).
         for rule in self.config.allow_rules:
             if rule.matches(name, text):
-                return Decision("allow", rule.description or "allow-list")
+                decision = Decision("allow", rule.description or "allow-list")
+                # A-03: Emit permission audit span for allow-list
+                self._emit_permission_span(name, decision, text)
+                return decision
 
         # 5. Mode-specific interrupt rules.
         if self.mode == "strict":
             if name in STRICT_INTERRUPT_TOOLS:
-                return Decision("ask", f"{name} requires approval (strict mode)")
-            return Decision("allow")
+                decision = Decision("ask", f"{name} requires approval (strict mode)")
+                # A-03: Emit permission audit span for ask
+                self._emit_permission_span(name, decision, text)
+                return decision
+            decision = Decision("allow")
+            # A-03: Emit permission audit span for allow in strict mode
+            self._emit_permission_span(name, decision, text)
+            return decision
 
         # permissive: only bash with rm/mv/sudo is worth a prompt.
         if name == "bash" and PERMISSIVE_BASH_RE.search(text):
-            return Decision(
+            decision = Decision(
                 "ask", "bash with rm/mv/sudo requires approval (permissive mode)"
             )
-        return Decision("allow")
+        else:
+            decision = Decision("allow")
+
+        # A-03: Emit permission audit span
+        self._emit_permission_span(name, decision, text)
+        return decision
 
     def should_interrupt(
         self,
@@ -377,6 +401,44 @@ class PermissionPolicy:
         """PROMPT_MVP M-13 contract: does this call need user approval?"""
         decision = self.check({"name": tool_name, "args": args or {}}, session_state)
         return decision.action == "ask"
+
+    def _emit_permission_span(
+        self, tool_name: str, decision: Decision, text: str
+    ) -> None:
+        """Emit agent.permission span (A-03 audit-log spans)."""
+        try:
+            settings = get_settings()
+            if not settings.permission_audit_enabled:
+                return
+
+            attributes = {
+                "permission.tool": tool_name,
+                "permission.action": decision.action,
+                "permission.reason": decision.reason,
+                "permission.mode": self.mode,
+            }
+
+            # A-03: security.incident=true on deny-rule matches
+            if decision.action == "deny":
+                # Check if deny came from a deny-rule (not just mode)
+                for rule in self.config.deny_rules:
+                    if rule.matches(tool_name, text):
+                        attributes["security.incident"] = "true"
+                        attributes["permission.rule"] = rule.pattern
+                        break
+
+            emit_span(
+                span_type="agent.permission",
+                name=f"agent.permission:{tool_name}",
+                attributes=attributes,
+                status=decision.action,
+                provider="",  # Not applicable for permission spans
+                model="",  # Not applicable for permission spans
+            )
+        except (
+            Exception
+        ):  # pragma: no cover - defensive: observability never breaks the agent
+            logger.warning("Permission span emission failed", exc_info=True)
 
     def record_session_allow(self, tool_name: str) -> None:
         """Remember "Approve & don't ask again for this tool in session"."""

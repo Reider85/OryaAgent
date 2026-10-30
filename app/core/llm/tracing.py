@@ -20,14 +20,10 @@ Design notes (A-02 scope):
 
 from __future__ import annotations
 
-import json
 import logging
-import secrets
 import time
-from collections import deque
 from collections.abc import AsyncIterator, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
-from dataclasses import dataclass, field
 from typing import Any
 
 from langchain_core.callbacks import (
@@ -39,62 +35,16 @@ from langchain_core.messages import BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 from app.core.config import get_settings
+from app.core.observability.spans import (
+    SpanRecord,
+    clear_span_buffer,
+    get_span_buffer,
+)
 
 logger = logging.getLogger(__name__)
 
-#: How many finished span records the in-process buffer keeps (A-02:
-#: tests and future exporters read from it; A-16 replaces the transport).
-SPAN_BUFFER_MAX = 1000
-
-_span_buffer: deque[SpanRecord] = deque(maxlen=SPAN_BUFFER_MAX)
-
-
-@dataclass
-class SpanRecord:
-    """One ``llm.call`` span (A-02 internal; agent_obs-compatible names)."""
-
-    provider: str
-    model: str
-    trace_id: str
-    span_id: str
-    start_time: float
-    name: str = ""
-    span_type: str = "llm.call"
-    status: str = "unset"
-    end_time: float | None = None
-    attributes: dict[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        if not self.name:
-            self.name = f"llm.call:{self.model}"
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "trace_id": self.trace_id,
-            "span_id": self.span_id,
-            "name": self.name,
-            "span_type": self.span_type,
-            "start_time": self.start_time,
-            "end_time": self.end_time,
-            "status": self.status,
-            "provider": self.provider,
-            "model": self.model,
-            "attributes": dict(self.attributes),
-        }
-
-
-def get_span_buffer() -> deque[SpanRecord]:
-    """The process-local buffer of finished span records."""
-    return _span_buffer
-
-
-def clear_span_buffer() -> None:
-    """Drop all buffered span records (tests)."""
-    _span_buffer.clear()
-
-
-def _new_ids() -> tuple[str, str]:
-    return secrets.token_hex(16), secrets.token_hex(16)
+# SpanRecord and buffer now live in app/core/observability/spans.py
+# Re-exported for backward compatibility (see module end)
 
 
 def _attach_usage(record: SpanRecord, response: Any) -> None:
@@ -110,24 +60,17 @@ def _attach_usage(record: SpanRecord, response: Any) -> None:
         record.attributes["tokens.output"] = output_tokens
 
 
-def _finalize(record: SpanRecord) -> None:
-    """Close the span and hand it to the buffer/exporter — never raises."""
-    try:
-        record.end_time = time.time()
-        settings = get_settings()
-        _span_buffer.append(record)
-        if settings.llm_trace_exporter == "stdout":
-            logger.debug("llm_span %s", json.dumps(record.to_dict(), default=str))
-    except (
-        Exception
-    ):  # pragma: no cover - defensive: observability never breaks the agent
-        logger.warning("llm span finalization failed", exc_info=True)
+# _finalize moved to app/core/observability/spans.py
+# The version in this module is kept for compatibility but delegates to the new one
 
 
 @contextmanager
 def _llm_span_sync(provider: str, model: str) -> Iterator[SpanRecord]:
+    from app.core.observability.spans import _finalize, _new_ids
+
     trace_id, span_id = _new_ids()
     record = SpanRecord(
+        span_type="llm.call",
         provider=provider,
         model=model,
         trace_id=trace_id,
@@ -147,8 +90,11 @@ def _llm_span_sync(provider: str, model: str) -> Iterator[SpanRecord]:
 
 @asynccontextmanager
 async def _llm_span_async(provider: str, model: str) -> AsyncIterator[SpanRecord]:
+    from app.core.observability.spans import _finalize, _new_ids
+
     trace_id, span_id = _new_ids()
     record = SpanRecord(
+        span_type="llm.call",
         provider=provider,
         model=model,
         trace_id=trace_id,
@@ -286,3 +232,14 @@ def wrap_with_tracing(
     if not settings.llm_trace_enabled:
         return model
     return TracedChatModel(inner=model, llm_provider=provider, llm_model=model_name)
+
+
+# Backward compatibility: re-export observability.spans symbols
+# (A-02 tests and app/core/llm/__init__.py depend on these)
+__all__ = [
+    "TracedChatModel",
+    "wrap_with_tracing",
+    "SpanRecord",
+    "get_span_buffer",
+    "clear_span_buffer",
+]

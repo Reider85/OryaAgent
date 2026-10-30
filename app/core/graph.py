@@ -92,6 +92,7 @@ from langgraph.prebuilt import ToolNode
 from langgraph.types import Command, interrupt
 
 from app.core.config import get_settings
+from app.core.observability.spans import emit_span
 from app.core.security import sanitize_untrusted
 
 logger = logging.getLogger(__name__)
@@ -416,6 +417,42 @@ def recovery_nudge(messages: Sequence[BaseMessage], *, variants: int) -> HumanMe
     return HumanMessage(content="\n".join(lines))
 
 
+def _emit_user_decision_span(
+    tool_name: str,
+    action: str,
+    *,
+    session_allow: bool = False,
+    reason: str | None = None,
+) -> None:
+    """Emit user decision span (A-03 audit-log spans)."""
+    try:
+        settings = get_settings()
+        if not settings.permission_audit_enabled:
+            return
+
+        attributes = {
+            "permission.tool": tool_name,
+            "permission.action": action,
+        }
+        if session_allow:
+            attributes["permission.session_allow"] = "true"
+        if reason:
+            attributes["permission.reason"] = reason
+
+        emit_span(
+            span_type="agent.permission",
+            name=f"agent.permission:{tool_name}",
+            attributes=attributes,
+            status=action,
+            provider="",  # Not applicable for permission spans
+            model="",  # Not applicable for permission spans
+        )
+    except (
+        Exception
+    ):  # pragma: no cover - defensive: observability never breaks the agent
+        logger.warning("User decision span emission failed", exc_info=True)
+
+
 def build_human_node(
     policy: PolicyLike | None,
     *,
@@ -462,6 +499,8 @@ def build_human_node(
                 continue
             if not can_interrupt:
                 refusals.append((call, "Denied: permission prompting unavailable"))
+                # A-03: Emit fail-closed span (no checkpointer)
+                _emit_user_decision_span(name, "deny", reason="no_checkpointer")
                 continue
             if refusals:
                 refusals.append(
@@ -478,12 +517,24 @@ def build_human_node(
             if not _is_approved(answer):
                 logger.info("User denied tool call: %s", name)
                 refusals.append((call, "Denied by user"))
+                # A-03: Emit user deny span
+                _emit_user_decision_span(name, "user_deny")
                 continue
             if _is_always(answer):
                 policy.record_session_allow(name)
+                # A-03: Emit user always span (session allowlist)
+                _emit_user_decision_span(name, "user_always", session_allow=True)
 
         if not refusals:
             return Command(goto="tools")
+
+        # A-03: Emit batch refusal span if there are multiple refusals
+        if len(refusals) > 1:
+            tool_names = [str(call.get("name", "")) for call, _ in refusals]
+            _emit_user_decision_span(
+                "batch", "deny", attributes={"permission.tools": ",".join(tool_names)}
+            )
+
         # Batch semantics: one refusal refuses the whole batch — every
         # tool-call id must receive exactly one ToolMessage, so calls that
         # were approved (or allowed) still need a refusal placeholder.

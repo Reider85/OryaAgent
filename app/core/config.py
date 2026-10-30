@@ -129,6 +129,14 @@ class Settings(BaseSettings):
             "buffer only; stdout logs them as debug JSON"
         ),
     )
+    permission_audit_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("ORYA_PERMISSION_AUDIT_ENABLED"),
+        description=(
+            "A-03: emit agent.permission spans on permission decisions; "
+            "false disables span construction (buffer still empty, no overhead)"
+        ),
+    )
 
     # --- Database (M-03) -------------------------------------------------
     database_url: str = Field(
