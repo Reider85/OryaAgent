@@ -13,6 +13,11 @@ projection can join the session-log line with the Langfuse trace/span.
 Within a turn the ``trace_id`` comes from the turn-trace contextvar
 (``app.core.observability.spans.set_turn_trace``).
 
+A-13 (cost tracking): after ``usage_metadata`` is copied into the span,
+``invoke``/``ainvoke`` also feed ``app.core.cost_tracker.record_usage``
+— ``tokens x pricing.yaml`` into the current identity's daily counter
+(no-op without a stamped cost identity; never raises).
+
 Design notes (A-02 scope):
 - No message content is recorded — PII stays out of spans by omission
   (guardrail/content capture arrives with A-16/A-14).
@@ -26,6 +31,7 @@ Design notes (A-02 scope):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator, Iterator, Sequence
@@ -41,6 +47,7 @@ from langchain_core.messages import BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 from app.core.config import get_settings
+from app.core.cost_tracker import record_usage
 from app.core.observability.spans import (
     ORYA_SPAN_KEY,
     SpanRecord,
@@ -65,6 +72,31 @@ def _attach_usage(record: SpanRecord, response: Any) -> None:
         record.attributes["tokens.input"] = input_tokens
     if isinstance(output_tokens, int):
         record.attributes["tokens.output"] = output_tokens
+
+
+def _usage_tokens(record: SpanRecord) -> tuple[int, int] | None:
+    """Token counts attached by :func:`_attach_usage`, if both present."""
+    input_tokens = record.attributes.get("tokens.input")
+    output_tokens = record.attributes.get("tokens.output")
+    if isinstance(input_tokens, int) and isinstance(output_tokens, int):
+        return input_tokens, output_tokens
+    return None
+
+
+def _schedule_record_usage(
+    provider: str, model: str, input_tokens: int, output_tokens: int
+) -> None:
+    """Fire-and-forget cost recording on the running loop (A-13).
+
+    Sync ``invoke`` has no await point; the coroutine is scheduled only
+    when an event loop is running (a bare sync call in tests skips it —
+    cost accounting must never block or fail the turn).
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.create_task(record_usage(provider, model, input_tokens, output_tokens))
 
 
 def _stamp_span(message: Any, record: SpanRecord) -> None:
@@ -184,6 +216,9 @@ class TracedChatModel(BaseChatModel):
         with _llm_span_sync(self.llm_provider, self.llm_model) as record:
             result = self.inner.invoke(input, config=config, stop=stop, **kwargs)
             _attach_usage(record, result)
+            tokens = _usage_tokens(record)
+            if tokens is not None:
+                _schedule_record_usage(self.llm_provider, self.llm_model, *tokens)
             _stamp_span(result, record)
             return result
 
@@ -198,6 +233,11 @@ class TracedChatModel(BaseChatModel):
         async with _llm_span_async(self.llm_provider, self.llm_model) as record:
             result = await self.inner.ainvoke(input, config=config, stop=stop, **kwargs)
             _attach_usage(record, result)
+            tokens = _usage_tokens(record)
+            if tokens is not None:
+                await record_usage(
+                    self.llm_provider, self.llm_model, tokens[0], tokens[1]
+                )
             _stamp_span(result, record)
             return result
 

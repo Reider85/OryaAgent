@@ -66,6 +66,38 @@ def test_metrics_is_prometheus_text(client: TestClient):
     assert "# HELP orya_tool_cache_hits_total" in body
     assert "# TYPE orya_tool_cache_hits_total counter" in body
     assert "# TYPE orya_tool_cache_misses_total counter" in body
+    assert "# TYPE orya_cost_aware_switch_total counter" in body
+
+
+def test_metrics_reports_cost_aware_switches(client: TestClient):
+    """A-13: an actual degrade shows up as a labelled switch counter."""
+    import asyncio
+
+    from app.core.cost_tracker import MemoryCostStore, set_cost_store
+    from app.core.llm.cost_router import (
+        CostAwareRouter,
+        reset_switch_stats,
+    )
+
+    reset_switch_stats()
+    store = MemoryCostStore()
+
+    async def _degrade() -> None:
+        await store.set_limit("session:m1", 50.0)
+        await store.add_spend("session:m1", 40.0)
+        router = CostAwareRouter("claude-sonnet-3.5", "claude-haiku-3.5", store=store)
+        await router.get_model_for_user("session:m1")
+
+    asyncio.run(_degrade())
+    try:
+        body = client.get("/metrics").text
+        assert (
+            'orya_cost_aware_switch_total{from_model="claude-sonnet-3.5",'
+            'to_model="claude-haiku-3.5"} 1' in body
+        )
+    finally:
+        set_cost_store(None)
+        reset_switch_stats()
 
 
 def test_metrics_reports_per_tool_counters(client: TestClient):

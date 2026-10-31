@@ -12,6 +12,9 @@ process-local for both backends; the Redis mirror keys
 M-22 adds ``orya_prompt_injection_warnings_total{source,pattern}`` —
 the injection-detection counter of ``app.core.security``
 (BACKLOG5 M-22 AC), fed by read/bash/grep/user-input detections.
+A-13 adds ``orya_cost_aware_switch_total{from_model,to_model}`` — the
+CostAwareRouter's model-degrade counter (BACKLOG5 A-13 AC), incremented
+once per turn the budget actually forces a different model.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ from typing import Any
 from fastapi import APIRouter, Response
 
 from app.core.cache import get_cache_stats
+from app.core.llm.cost_router import get_switch_stats
 from app.core.security import get_injection_stats
 
 router = APIRouter(tags=["metrics"])
@@ -75,10 +79,30 @@ def _render_injection_counters() -> list[str]:
     return lines
 
 
+def _render_switch_counters() -> list[str]:
+    """Render the A-13 cost-aware model-switch counter (one HELP/TYPE)."""
+    metric = "orya_cost_aware_switch_total"
+    lines = [
+        f"# HELP {metric} Cost-aware router model switches by label pair (A-13).",
+        f"# TYPE {metric} counter",
+    ]
+    for (from_model, to_model), count in sorted(get_switch_stats().items()):
+        labels = (
+            f'from_model="{_escape_label(from_model)}",'
+            f'to_model="{_escape_label(to_model)}"'
+        )
+        lines.append(f"{metric}{{{labels}}} {count}")
+    return lines
+
+
 @router.get("/metrics")
 async def metrics() -> Response:
-    """Prometheus exposition: cache counters (M-21) + injection counter (M-22)."""
-    lines = _render_prometheus(get_cache_stats()) + _render_injection_counters()
+    """Prometheus exposition: cache (M-21), injection (M-22), switch (A-13)."""
+    lines = (
+        _render_prometheus(get_cache_stats())
+        + _render_injection_counters()
+        + _render_switch_counters()
+    )
     return Response(content="\n".join(lines) + "\n", media_type=PROMETHEUS_MEDIA_TYPE)
 
 

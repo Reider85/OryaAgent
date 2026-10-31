@@ -4,7 +4,7 @@ Senior Python coding agent with UI and long-term memory.
 
 ## Phase: ALPHA
 
-Tickets M-00…M-28 (bootstrap → failure recovery) and MVP-POLISH are implemented. ALPHA adds the production-safe baseline: A-00 (auth middleware), A-01 (rate-limit), A-02 (LLM-seam trace-wrapping), A-03 (permission audit spans), A-04 (health endpoints), A-05 (session-log encryption), A-06 (JSONL span cross-link), A-07 (cache LRU + Redis tuning), A-08 (smoke tests v2), A-09 (this deploy guide), A-10 (Docker compose v2), A-11 (Alembic migrations) and A-12 (Settings v2: `ORYA_ENV` prod-guard + `orya config` CLI). See [PROMPT_ALPHA.md](analytics/PROMPT_ALPHA.md) for the phase spec.
+Tickets M-00…M-28 (bootstrap → failure recovery) and MVP-POLISH are implemented. ALPHA adds the production-safe baseline: A-00 (auth middleware), A-01 (rate-limit), A-02 (LLM-seam trace-wrapping), A-03 (permission audit spans), A-04 (health endpoints), A-05 (session-log encryption), A-06 (JSONL span cross-link), A-07 (cache LRU + Redis tuning), A-08 (smoke tests v2), A-09 (this deploy guide), A-10 (Docker compose v2), A-11 (Alembic migrations), A-12 (Settings v2: `ORYA_ENV` prod-guard + `orya config` CLI) and A-13 (CostAwareRouter: budget-based model degrade). See [PROMPT_ALPHA.md](analytics/PROMPT_ALPHA.md) for the phase spec.
 
 ## Quick Start
 
@@ -281,6 +281,15 @@ Every knob recognized by `app/core/config.py`, by group. Most settings accept tw
 | `RATE_LIMIT_BACKEND` / `ORYA_RATE_LIMIT_BACKEND` | `auto` | `auto` \| `memory` \| `redis` |
 | `ORYA_TRUSTED_CLIENTS` | — | CSV/JSON list of user ids or client IPs exempt from limiting |
 
+### Cost router (A-13)
+
+| Env var | Default | Description |
+|---|---|---|
+| `COST_ROUTER_ENABLED` / `ORYA_COST_ROUTER_ENABLED` | `false` | Kill-switch: budget-based model degrade — fallback model at ≥ 70% of the daily budget, `429` at ≥ 100% |
+| `COST_ROUTER_FALLBACK_MODEL` / `ORYA_COST_ROUTER_FALLBACK_MODEL` | `claude-haiku-3.5` | `models.yaml` alias used once the budget degrade kicks in |
+| `COST_BUDGET_DEFAULT_USD` / `ORYA_COST_BUDGET_DEFAULT_USD` | `50.0` | Daily per-identity budget in USD when no admin-set limit exists (`orya:limit:{identity}` in Redis) |
+| `COST_BACKEND` / `ORYA_COST_BACKEND` | `auto` | `auto` \| `memory` \| `redis` — spend-counter backend |
+
 ### UI (M-15/M-17/M-24)
 
 | Env var | Default | Description |
@@ -545,6 +554,19 @@ Per-user request budgets enforced by middleware, **off by default** (`RATE_LIMIT
 
 Over-budget requests answer `429` with `Retry-After` (seconds) plus `x-ratelimit-limit` / `x-ratelimit-remaining: 0` headers. `RATE_LIMIT_BACKEND=auto` uses Redis when it is reachable and falls back to an in-process limiter (`memory` pins the fallback, `redis` fails fast). `ORYA_TRUSTED_CLIENTS` (CSV of user ids or client IPs) exempts operators from limiting.
 
+## Cost-aware routing (A-13)
+
+Budget-based model selection, **off by default** (`ORYA_COST_ROUTER_ENABLED=false`). Every LLM call records `tokens × pricing.yaml` (USD) into a per-identity daily counter (`orya:cost:{identity}:{YYYY-MM-DD}`; identity = JWT user when auth is on, else the session id). Before each turn the router compares today's spend with the daily limit (`orya:limit:{identity}` in Redis, else `COST_BUDGET_DEFAULT_USD`):
+
+| budget_ratio | Behaviour |
+|---|---|
+| `< 70%` | primary model (the request's model or `ORYA_LLM_MODEL`) |
+| `70–90%` | fallback model (`COST_ROUTER_FALLBACK_MODEL`), `degraded` — a `budget` SSE frame / `budget` payload field reports it |
+| `90–100%` | fallback model, `degraded` + `warning` |
+| `≥ 100%` | `429` before the graph is built (the turn never starts) |
+
+Switching happens only between turns (the graph is rebuilt per request), the budget always wins over an explicit per-turn model choice, and each actual switch increments `orya_cost_aware_switch_total{from_model,to_model}` on `/metrics`. `COST_BACKEND` mirrors the rate-limiter backend knob (auto → Redis with in-memory fallback). Cost accounting is fail-soft: a Redis outage skips the increment, never the turn.
+
 ## Health endpoints (A-04)
 
 | Endpoint | Purpose |
@@ -713,6 +735,7 @@ Strategies (ARCHITECT6 §4.2.2): `PREFERENCES.md` archives only `agent_inferred`
 - ✅ **A-10** - Docker compose v2: `deploy/Dockerfile` (uv + ripgrep, one image for api/chainlit), profile-based `docker-compose.yml` (`app`: api+chainlit; `observability`: Langfuse v3 stack + sampler-proxy), one-command deploy via `COMPOSE_PROFILES`, compose-structure unit tests
 - ✅ **A-11** - Alembic migrations: revision wrappers over the `.sql` files (`upgrade` reads the file, inline `downgrade` DDL), `alembic_version` bookkeeping with `schema_migrations` retirement, `orya db migrate|downgrade|current` CLI, isolated-schema rollback roundtrip test
 - ✅ **A-12** - Settings v2: `ORYA_ENV=dev|prod` prod-guard (fail-fast on auth/rate-limit/CORS, non-fatal `prod_warnings()` for encryption/localhost), `orya config show|check` CLI (redacted effective settings with per-field source), LOG_LEVEL allow-list
+- ✅ **A-13** - CostAwareRouter: per-identity daily budget counters (`orya:cost:*`, Redis/memory seam), model degrade at 70% / warning at 90% / `429` at 100% (kill-switch `ORYA_COST_ROUTER_ENABLED`), `budget` SSE frame + payload field, `orya_cost_aware_switch_total` metric, cost recording from the A-02 seam spans (`tokens × pricing.yaml`)
 - ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for the 28 MVP tickets and [PROMPT_ALPHA.md](analytics/PROMPT_ALPHA.md) for A-00…A-20)
 
 ## LLM Providers (M-01)

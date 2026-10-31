@@ -8,10 +8,10 @@ ARCHITECT5 §6.7) — it never assembles or drives a graph itself:
 ``on_chat_start`` creates the session through ``POST /sessions`` and
 keeps the ``thread_id`` in ``cl.user_session``; ``on_message`` posts the
 turn and renders the SSE frames (``token`` / ``tool_start`` /
-``tool_end`` / ``interrupt`` / ``done``) into ``cl.Message`` tokens and
-``cl.Step`` tool cards. Moving the graph into the server removes the
-streaming duplication between Chainlit and the future Next.js client —
-the reason M-24 exists.
+``tool_end`` / ``interrupt`` / ``budget`` / ``done``) into ``cl.Message``
+tokens and ``cl.Step`` tool cards. Moving the graph into the server
+removes the streaming duplication between Chainlit and the future
+Next.js client — the reason M-24 exists.
 
 M-16 closes the permission gate (M-13): an ``interrupt`` frame (or an
 ``interrupted`` ``done``) carries the pending tool call, the handler
@@ -215,6 +215,20 @@ async def _close_steps(steps: dict[str, cl.Step]) -> None:
         await step.update()
 
 
+async def _budget_step(data: dict[str, Any]) -> None:
+    """Show the A-13 cost-budget notice for a ``budget`` frame."""
+    ratio = data.get("ratio")
+    percent = f" ({float(ratio):.0%})" if isinstance(ratio, (int, float)) else ""
+    model = data.get("model") or "fallback model"
+    if data.get("warning"):
+        headline = f"cost budget nearly exhausted{percent} — using {model}"
+    else:
+        headline = f"cost budget degrade{percent} — using {model}"
+    step = cl.Step(name="cost budget", type="custom")
+    step.output = headline
+    await step.send()
+
+
 async def _render_events(
     reply: cl.Message,
     steps: dict[str, cl.Step],
@@ -246,6 +260,8 @@ async def _render_events(
             await _end_step(steps, data)
         elif kind == "interrupt" and isinstance(data, dict):
             pending = _pending_from(data)
+        elif kind == "budget" and isinstance(data, dict):
+            await _budget_step(data)
         elif kind == "error":
             error = str(data.get("detail") if isinstance(data, dict) else data)
         elif kind == "done" and isinstance(data, dict):

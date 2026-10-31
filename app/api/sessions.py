@@ -28,6 +28,16 @@ session (app/core/workspace.py): it is validated (400 when unusable),
 persisted on the ``sessions`` row and bound to the turn so every tool
 resolves relative paths and runs subprocesses against it.
 
+Cost-aware routing (A-13): while ``ORYA_COST_ROUTER_ENABLED`` is on,
+each turn first asks :func:`~app.core.llm.cost_router.resolve_turn_model`
+— the budget identity is the JWT user when auth stamped one, else the
+session id; at >=70% of the daily budget the graph is built with the
+fallback model (a ``budget`` SSE frame / ``budget`` payload field
+reports ``degraded``/``warning``), at >=100% the request is refused
+with 429. Selection happens before graph assembly, so switching is
+between turns only; LLM calls during the turn feed the counter through
+the cost-identity contextvar.
+
 Graph-build failures are mapped instead of leaking: a ``ValueError`` from
 the LLM seam (missing API key, unknown model) is a 400 with the reason —
 before this mapping every misconfiguration surfaced as a bare 500.
@@ -52,7 +62,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -68,7 +78,9 @@ from app.core.agent import (
     stream_resume,
     stream_turn,
 )
+from app.core.cost_tracker import set_cost_identity, with_cost_identity
 from app.core.graph import default_run_config
+from app.core.llm.cost_router import ModelSelection, resolve_turn_model
 from app.core.permissions import PermissionPolicy, build_policy
 from app.core.workspace import open_workspace, set_workspace, workspace_scope
 from app.db.session_log import (
@@ -231,6 +243,24 @@ async def _stream_in_workspace(
         set_workspace(None)
 
 
+async def _stream_with_cost_identity(
+    events: AsyncIterator[Any], identity: str
+) -> AsyncIterator[Any]:
+    """Bind the A-13 cost identity for the whole stream.
+
+    Same reason and reset contract as :func:`_stream_in_workspace`: the
+    SSE body is iterated *after* the endpoint returned, so the contextvar
+    must be bound inside the stream. LLM calls during the turn then bill
+    the identity's daily budget counter.
+    """
+    set_cost_identity(identity)
+    try:
+        async for event in events:
+            yield event
+    finally:
+        set_cost_identity(None)
+
+
 def _pending_dict(pending: PendingInterrupt | None) -> dict[str, Any] | None:
     """Serialize a :class:`PendingInterrupt` for the JSON/SSE payload."""
     if pending is None:
@@ -238,9 +268,21 @@ def _pending_dict(pending: PendingInterrupt | None) -> dict[str, Any] | None:
     return {"tool": pending.tool, "args": pending.args, "reason": pending.reason}
 
 
-def _result_dict(session_id: str, result: TurnResult, degraded: bool) -> dict[str, Any]:
+def _budget_payload(selection: ModelSelection | None) -> dict[str, Any] | None:
+    """Serializable budget report — only when the degrade is active (A-13)."""
+    if selection is None or not (selection.degraded or selection.warning):
+        return None
+    return selection.as_dict()
+
+
+def _result_dict(
+    session_id: str,
+    result: TurnResult,
+    degraded: bool,
+    budget: ModelSelection | None = None,
+) -> dict[str, Any]:
     """Build the shared response shape of the JSON /messages and /resume."""
-    return {
+    payload: dict[str, Any] = {
         "session_id": session_id,
         "status": result.status,
         "reply": result.reply,
@@ -248,6 +290,10 @@ def _result_dict(session_id: str, result: TurnResult, degraded: bool) -> dict[st
         "pending_interrupt": _pending_dict(result.pending),
         "degraded": degraded,
     }
+    budget_report = _budget_payload(budget)
+    if budget_report is not None:
+        payload["budget"] = budget_report
+    return payload
 
 
 def _sse(event: str, data: Any) -> str:
@@ -283,18 +329,38 @@ async def _sse_turn(
     session_id: str,
     events: AsyncIterator[Any],
     degraded: bool,
+    budget: ModelSelection | None = None,
 ) -> AsyncIterator[str]:
     """Forward a turn stream as SSE frames and log the assistant reply.
 
     Events flow through unchanged; the terminal ``done`` carries the
     aggregated outcome (plus ``degraded``), and a pause additionally
     emits the ``interrupt`` frame the UI asks the user about (M-16).
+    When the A-13 budget degraded the model, a ``budget`` frame goes
+    out first and the ``done`` payload carries the same report.
     Failures after the response started surface as ``error`` + a final
     ``done`` with ``status="error"`` so the client always sees an end.
     """
     reply = ""
     status = "ok"
     finished = False
+    budget_report = _budget_payload(budget)
+    if budget_report is not None:
+        yield _sse("budget", budget_report)
+
+    def _done_payload(data: dict[str, Any], status_: str) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "session_id": session_id,
+            "status": status_,
+            "reply": reply,
+            "tool_steps": data.get("tool_steps") or [],
+            "pending_interrupt": _pending_dict(data.get("pending")),
+            "degraded": degraded,
+        }
+        if budget_report is not None:
+            payload["budget"] = budget_report
+        return payload
+
     try:
         async for kind, data in events:
             if kind != "done":
@@ -303,34 +369,15 @@ async def _sse_turn(
             finished = True
             status = str(data.get("status", "ok"))
             reply = str(data.get("reply") or "")
-            pending = _pending_dict(data.get("pending"))
-            if status == "interrupted" and pending is not None:
-                yield _sse("interrupt", pending)
-            yield _sse(
-                "done",
-                {
-                    "session_id": session_id,
-                    "status": status,
-                    "reply": reply,
-                    "tool_steps": data.get("tool_steps") or [],
-                    "pending_interrupt": pending,
-                    "degraded": degraded,
-                },
-            )
+            if status == "interrupted":
+                pending = _pending_dict(data.get("pending"))
+                if pending is not None:
+                    yield _sse("interrupt", pending)
+            yield _sse("done", _done_payload(data, status))
     except Exception as exc:
         logger.exception("SSE run failed (session_id=%s)", session_id)
         yield _sse("error", {"detail": str(exc)})
-        yield _sse(
-            "done",
-            {
-                "session_id": session_id,
-                "status": "error",
-                "reply": reply,
-                "tool_steps": [],
-                "pending_interrupt": None,
-                "degraded": degraded,
-            },
-        )
+        yield _sse("done", _done_payload({}, "error"))
         return
 
     if not finished:
@@ -345,6 +392,43 @@ def _require_session(session: dict | None, session_id: str) -> dict:
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
     return session
+
+
+def _cost_identity(request: Request, session_id: str) -> str:
+    """Budget identity for the turn (A-13): JWT user or the session.
+
+    AuthMiddleware (A-00) stamps ``user_id`` into the ASGI scope state;
+    with auth off (the default) every session budgets independently,
+    matching PROMPT_ALPHA's «budget tracking per session».
+    """
+    user_id = getattr(request.state, "user_id", None)
+    if user_id:
+        return f"user:{user_id}"
+    return f"session:{session_id}"
+
+
+async def _resolve_turn_model_or_raise(
+    identity: str,
+    requested_model: str | None,
+    requested_provider: str | None,
+) -> ModelSelection:
+    """A-13 budget check for one turn; 429 when the daily budget is spent.
+
+    The selection's ``model`` alias is what the graph is built with —
+    switching therefore happens only between turns. With the
+    ``ORYA_COST_ROUTER_ENABLED`` kill-switch off this is a pass-through
+    (``model`` echoes the request, no counter reads).
+    """
+    selection = await resolve_turn_model(identity, requested_model, requested_provider)
+    if selection.blocked:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"daily budget exhausted ({selection.ratio:.0%} of limit spent); "
+                "retry after the counter resets or raise the limit"
+            ),
+        )
+    return selection
 
 
 def _build_graph_or_raise(
@@ -419,6 +503,7 @@ async def get_session_endpoint(session_id: str) -> dict:
 
 @router.post("/{session_id}/messages")
 async def post_message(
+    request: Request,
     session_id: str,
     body: MessageCreate,
     stream: bool = Query(False),
@@ -432,6 +517,10 @@ async def post_message(
     / ``interrupt`` / ``done``). When the M-13 permission gate pauses the
     run the response reports ``status="interrupted"`` with the pending
     tool call; the client answers via ``POST /sessions/{id}/resume``.
+
+    A-13: while the cost router is enabled the budget check runs first
+    (429 when spent), the graph is built with the selected alias, and a
+    ``budget`` frame / payload field reports an active degrade.
     """
     degraded = False
     session_row: dict | None = None
@@ -460,27 +549,30 @@ async def post_message(
 
     checkpointer, ck_degraded = await resolve_checkpointer()
     degraded = bool(degraded or ck_degraded)
+    identity = _cost_identity(request, session_id)
+    selection = await _resolve_turn_model_or_raise(identity, body.model, body.provider)
     graph = _build_graph_or_raise(
         session_id,
         checkpointer,
-        model=body.model,
+        model=selection.model,
         provider=body.provider,
         policy=_policy_for(session_id, body.permission_mode, body.allow_list),
     )
     config = default_run_config(session_id)
 
     if stream:
-        events = _stream_in_workspace(
-            stream_turn(graph, body.content, config), workspace
+        events = _stream_with_cost_identity(
+            _stream_in_workspace(stream_turn(graph, body.content, config), workspace),
+            identity,
         )
         return StreamingResponse(
-            _sse_turn(session_id, events, degraded),
+            _sse_turn(session_id, events, degraded, budget=selection),
             media_type="text/event-stream",
             headers=_SSE_HEADERS,
         )
 
     try:
-        with workspace_scope(workspace):
+        with workspace_scope(workspace), with_cost_identity(identity):
             result = await run_turn(graph, body.content, config)
     except Exception as exc:
         logger.exception("API run failed (session_id=%s)", session_id)
@@ -489,11 +581,12 @@ async def post_message(
     if result.status == "ok" and result.reply:
         await _db(log_message(session_id, "assistant", result.reply))
 
-    return _result_dict(session_id, result, degraded)
+    return _result_dict(session_id, result, degraded, budget=selection)
 
 
 @router.post("/{session_id}/resume")
 async def post_resume(
+    request: Request,
     session_id: str,
     body: ResumeRequest,
     stream: bool = Query(False),
@@ -516,10 +609,12 @@ async def post_resume(
 
     checkpointer, ck_degraded = await resolve_checkpointer()
     degraded = bool(ws_degraded or ck_degraded)
+    identity = _cost_identity(request, session_id)
+    selection = await _resolve_turn_model_or_raise(identity, body.model, body.provider)
     graph = _build_graph_or_raise(
         session_id,
         checkpointer,
-        model=body.model,
+        model=selection.model,
         provider=body.provider,
         policy=_policy_for(session_id, body.permission_mode, body.allow_list),
     )
@@ -538,15 +633,18 @@ async def post_resume(
 
     if stream:
         degraded |= await _soft_db(log_message(session_id, "system", permission_log))
-        events = _stream_in_workspace(stream_resume(graph, answer, config), workspace)
+        events = _stream_with_cost_identity(
+            _stream_in_workspace(stream_resume(graph, answer, config), workspace),
+            identity,
+        )
         return StreamingResponse(
-            _sse_turn(session_id, events, degraded),
+            _sse_turn(session_id, events, degraded, budget=selection),
             media_type="text/event-stream",
             headers=_SSE_HEADERS,
         )
 
     try:
-        with workspace_scope(workspace):
+        with workspace_scope(workspace), with_cost_identity(identity):
             result = await run_resume(graph, answer, config)
     except Exception as exc:
         logger.exception("API resume failed (session_id=%s)", session_id)
@@ -556,7 +654,7 @@ async def post_resume(
     if result.status == "ok" and result.reply:
         await _db(log_message(session_id, "assistant", result.reply))
 
-    return _result_dict(session_id, result, degraded)
+    return _result_dict(session_id, result, degraded, budget=selection)
 
 
 @router.patch("/{session_id}")

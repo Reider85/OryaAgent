@@ -373,6 +373,44 @@ class Settings(BaseSettings):
             "rate limiting (PROMPT_ALPHA §11 whitelist)"
         ),
     )
+    # ALPHA: cost-aware model router (A-13)
+    cost_router_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "COST_ROUTER_ENABLED", "ORYA_COST_ROUTER_ENABLED"
+        ),
+        description=(
+            "Kill-switch: budget-based model degrade (A-13) — at >=70% of the "
+            "daily budget the turn runs on the fallback model, at >=100% the "
+            "request is refused with 429; off by default so dev/tests/UI keep "
+            "working"
+        ),
+    )
+    cost_router_fallback_model: str = Field(
+        default="claude-haiku-3.5",
+        validation_alias=AliasChoices(
+            "COST_ROUTER_FALLBACK_MODEL", "ORYA_COST_ROUTER_FALLBACK_MODEL"
+        ),
+        description="models.yaml alias used when the budget degrade kicks in",
+    )
+    cost_budget_default_usd: float = Field(
+        default=50.0,
+        validation_alias=AliasChoices(
+            "COST_BUDGET_DEFAULT_USD", "ORYA_COST_BUDGET_DEFAULT_USD"
+        ),
+        description=(
+            "Daily per-identity budget in USD applied when no admin-set "
+            "limit exists (Redis key orya:limit:{identity})"
+        ),
+    )
+    cost_backend: Literal["auto", "memory", "redis"] = Field(
+        default="auto",
+        validation_alias=AliasChoices("COST_BACKEND", "ORYA_COST_BACKEND"),
+        description=(
+            "auto: probe Redis and fall back to in-memory spend counters; "
+            "redis: require Redis at startup; memory: never use Redis"
+        ),
+    )
     # ALPHA: session-log encryption at rest (A-05)
     session_log_encryption_enabled: bool = Field(
         default=False,
