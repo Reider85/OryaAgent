@@ -144,6 +144,46 @@ async def test_agent_with_tool_calls_loops_through_tools():
     assert isinstance(messages[-1], AIMessage)
 
 
+async def test_tool_messages_carry_turn_trace_stamp():
+    """A-06: ToolMessages are stamped with the active turn trace id."""
+    from app.core.observability.spans import set_turn_trace
+
+    graph = build_graph(
+        [echo],
+        _model(_ai_with_tool_call(), AIMessage(content="done")),
+        InMemorySaver(),
+        MockPolicy(),
+    )
+    config = default_run_config("thread-trace-stamp")
+    set_turn_trace("turn-stamp-1")
+    try:
+        result = await graph.ainvoke({"messages": [HumanMessage("hi")]}, config)
+    finally:
+        set_turn_trace(None)
+
+    tool_messages = [m for m in result["messages"] if isinstance(m, ToolMessage)]
+    assert tool_messages
+    for message in tool_messages:
+        assert message.additional_kwargs["orya_span"] == {"trace_id": "turn-stamp-1"}
+
+
+async def test_tool_messages_unstamped_without_turn_trace():
+    """Outside a turn (no trace bound) ToolMessages keep the v1 shape."""
+    graph = build_graph(
+        [echo],
+        _model(_ai_with_tool_call(), AIMessage(content="done")),
+        InMemorySaver(),
+        MockPolicy(),
+    )
+    config = default_run_config("thread-trace-none")
+
+    result = await graph.ainvoke({"messages": [HumanMessage("hi")]}, config)
+
+    tool_messages = [m for m in result["messages"] if isinstance(m, ToolMessage)]
+    assert tool_messages
+    assert all("orya_span" not in m.additional_kwargs for m in tool_messages)
+
+
 async def test_ask_decision_interrupts_in_human_node():
     graph = build_graph(
         [echo],

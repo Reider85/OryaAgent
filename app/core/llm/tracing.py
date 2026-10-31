@@ -7,6 +7,12 @@ so any ``ainvoke``/``invoke`` through the seam records a ``SpanRecord``
 attributes to the inner model (``model``, ``openai_api_base``, ``kwargs``
 after ``bind_tools``, ...) — the seam's observable behaviour is unchanged.
 
+A-06 (span cross-link): the result message is stamped with
+``additional_kwargs["orya_span"] = {"trace_id", "span_id"}`` so the JSONL
+projection can join the session-log line with the Langfuse trace/span.
+Within a turn the ``trace_id`` comes from the turn-trace contextvar
+(``app.core.observability.spans.set_turn_trace``).
+
 Design notes (A-02 scope):
 - No message content is recorded — PII stays out of spans by omission
   (guardrail/content capture arrives with A-16/A-14).
@@ -36,6 +42,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 
 from app.core.config import get_settings
 from app.core.observability.spans import (
+    ORYA_SPAN_KEY,
     SpanRecord,
     clear_span_buffer,
     get_span_buffer,
@@ -58,6 +65,25 @@ def _attach_usage(record: SpanRecord, response: Any) -> None:
         record.attributes["tokens.input"] = input_tokens
     if isinstance(output_tokens, int):
         record.attributes["tokens.output"] = output_tokens
+
+
+def _stamp_span(message: Any, record: SpanRecord) -> None:
+    """Attach the span ids to a LangChain message (A-06), best-effort.
+
+    ``additional_kwargs`` is checkpoint-serialized by LangGraph, so the
+    ids survive persistence and the JSONL projection worker picks them
+    up later. Never raises into the agent-loop.
+    """
+    kwargs = getattr(message, "additional_kwargs", None)
+    if not isinstance(kwargs, dict):
+        return
+    try:
+        kwargs[ORYA_SPAN_KEY] = {
+            "trace_id": record.trace_id,
+            "span_id": record.span_id,
+        }
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("span stamping failed", exc_info=True)
 
 
 # _finalize moved to app/core/observability/spans.py
@@ -158,6 +184,7 @@ class TracedChatModel(BaseChatModel):
         with _llm_span_sync(self.llm_provider, self.llm_model) as record:
             result = self.inner.invoke(input, config=config, stop=stop, **kwargs)
             _attach_usage(record, result)
+            _stamp_span(result, record)
             return result
 
     async def ainvoke(
@@ -171,6 +198,7 @@ class TracedChatModel(BaseChatModel):
         async with _llm_span_async(self.llm_provider, self.llm_model) as record:
             result = await self.inner.ainvoke(input, config=config, stop=stop, **kwargs)
             _attach_usage(record, result)
+            _stamp_span(result, record)
             return result
 
     def _generate(

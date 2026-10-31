@@ -13,6 +13,12 @@ Design:
 - Kill-switch control via settings (ORYA_*_TRACE_ENABLED for llm;
   ORYA_PERMISSION_AUDIT_ENABLED for permission spans).
 
+Turn-level trace correlation (A-06): ``set_turn_trace`` binds one
+trace id for the whole agent turn; every span created inside the turn
+(``llm.call``, ``agent.permission``, ...) reuses it as ``trace_id``
+(``_new_ids``). The same id is stamped onto the turn's messages and
+therefore lands in the JSONL projection — the cross-link to Langfuse.
+
 Usage::
 
     from app.core.observability.spans import emit_span, get_span_buffer
@@ -43,6 +49,7 @@ import secrets
 import time
 from collections import deque
 from collections.abc import Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -54,7 +61,18 @@ logger = logging.getLogger(__name__)
 #: Shared across span types (llm.call, agent.permission, etc.).
 SPAN_BUFFER_MAX = 1000
 
+#: Key in ``BaseMessage.additional_kwargs`` carrying the span cross-link
+#: (A-06): ``{"trace_id": ..., "span_id": ...}``. The LLM seam stamps it
+#: onto assistant messages (and the turn root onto user/tool messages);
+#: the JSONL projection copies it into each event so a session-log line
+#: can be joined with the matching Langfuse trace/span.
+ORYA_SPAN_KEY = "orya_span"
+
 _span_buffer: deque[SpanRecord] = deque(maxlen=SPAN_BUFFER_MAX)
+
+#: Turn-level trace id (A-06): bound once per agent turn so every span
+#: of the turn shares one Langfuse trace. ``None`` outside a turn.
+_turn_trace_id: ContextVar[str | None] = ContextVar("orya_turn_trace_id", default=None)
 
 
 @dataclass
@@ -102,9 +120,36 @@ def clear_span_buffer() -> None:
     _span_buffer.clear()
 
 
+def set_turn_trace(trace_id: str | None) -> None:
+    """Bind (or clear with ``None``) the turn trace id of this task.
+
+    Reset writes ``None`` instead of a token because a stream may be
+    driven from more than one task context (same pattern as
+    ``app/api/sessions.py::_stream_in_workspace``).
+    """
+    _turn_trace_id.set(trace_id)
+
+
+def current_turn_trace_id() -> str | None:
+    """The trace id bound for the current turn, or ``None`` outside one."""
+    return _turn_trace_id.get()
+
+
+def new_trace_id() -> str:
+    """A fresh random trace id (same shape as the span ids)."""
+    return secrets.token_hex(16)
+
+
 def _new_ids() -> tuple[str, str]:
-    """Generate new random trace_id and span_id."""
-    return secrets.token_hex(16), secrets.token_hex(16)
+    """Generate span ids; reuse the turn trace when one is active (A-06).
+
+    ``span_id`` is always fresh. ``trace_id`` comes from
+    :func:`set_turn_trace` when a turn is in progress (every span of the
+    turn then joins one Langfuse trace), otherwise a fresh random id —
+    behaviour outside a turn is unchanged.
+    """
+    trace_id = _turn_trace_id.get() or new_trace_id()
+    return trace_id, secrets.token_hex(16)
 
 
 def _finalize(record: SpanRecord) -> None:

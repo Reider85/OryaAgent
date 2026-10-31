@@ -12,6 +12,13 @@ Two complementary stores for the session event stream:
   with ``type`` in ``user`` / ``ai`` / ``tool`` / ``system``. Used for
   replay/debug/audit (ARCHITECT4 §6.5).
 
+Projection format v2 (A-06): events additionally carry optional
+top-level ``trace_id`` / ``span_id`` keys when the message was stamped
+by the observability seams (``additional_kwargs["orya_span"]``) — the
+cross-link that joins a session-log line with the matching Langfuse
+trace/span. v1 events without those keys stay valid; readers must use
+``.get()``.
+
 Encryption at rest (A-05): when ``ORYA_SESSION_LOG_ENCRYPTION_ENABLED=true``
 and a ``ORYA_SESSION_LOG_ENCRYPTION_KEY`` is configured, the payload columns
 ``messages.content`` (TEXT) and ``messages.tool_calls`` (JSONB) are stored
@@ -57,6 +64,7 @@ from langchain_core.messages import (
 )
 
 from app.core.config import get_settings
+from app.core.observability.spans import ORYA_SPAN_KEY
 from app.db import get_asyncpg_pool
 from app.db.checkpoints import get_checkpointer
 
@@ -455,8 +463,23 @@ def _message_type(message: BaseMessage) -> str:
     return type(message).__name__.removesuffix("Message").lower()
 
 
+def _span_stamp(message: BaseMessage) -> dict:
+    """The ``orya_span`` cross-link stamped on a message (A-06), or ``{}``."""
+    kwargs = getattr(message, "additional_kwargs", None)
+    if not isinstance(kwargs, dict):
+        return {}
+    value = kwargs.get(ORYA_SPAN_KEY)
+    return value if isinstance(value, dict) else {}
+
+
 def _message_event(message: BaseMessage, message_id: str, ts: str) -> dict:
-    """Build one JSONL event ``{"ts", "type", "payload"}`` (BACKLOG4 format)."""
+    """Build one JSONL event ``{"ts", "type", "payload"}`` (v2, A-06).
+
+    Projection format v2 adds optional top-level ``trace_id`` (turn
+    root, present on user/tool/ai events) and ``span_id`` (the ``llm.call``
+    span, present on stamped ai events) — the cross-link to Langfuse.
+    Unstamped messages keep the v1 shape (no extra keys).
+    """
     payload: dict[str, Any] = {
         "message_id": message_id,
         "content": _jsonable(message.content),
@@ -475,7 +498,19 @@ def _message_event(message: BaseMessage, message_id: str, ts: str) -> dict:
     name = getattr(message, "name", None)
     if name:
         payload["name"] = name
-    return {"ts": ts, "type": _message_type(message), "payload": payload}
+    event: dict[str, Any] = {
+        "ts": ts,
+        "type": _message_type(message),
+        "payload": payload,
+    }
+    stamp = _span_stamp(message)
+    trace_id = stamp.get("trace_id")
+    if trace_id:
+        event["trace_id"] = str(trace_id)
+    span_id = stamp.get("span_id")
+    if span_id:
+        event["span_id"] = str(span_id)
+    return event
 
 
 def _load_meta(session_id: str) -> dict:

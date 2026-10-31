@@ -48,6 +48,12 @@ from langgraph.graph.state import CompiledStateGraph
 from app.core.context import trim_messages
 from app.core.graph import RECOVER_NODE_NAME, build_graph, resume_command
 from app.core.llm import get_llm
+from app.core.observability.spans import (
+    ORYA_SPAN_KEY,
+    current_turn_trace_id,
+    new_trace_id,
+    set_turn_trace,
+)
 from app.core.permissions import get_policy
 from app.core.prompt import build_system_prompt
 from app.core.security import check_injection, session_id_from_config
@@ -182,6 +188,23 @@ async def _stream_normalized(
             )
 
 
+def _stamp_turn(message: Any) -> Any:
+    """Stamp a message with the current turn trace id (A-06).
+
+    User/tool events carry only the turn root (``trace_id``); the LLM
+    seam adds the full ``{"trace_id", "span_id"}`` on assistant
+    messages. The ids land in the JSONL projection via
+    ``additional_kwargs`` — the cross-link to Langfuse traces.
+    """
+    trace_id = current_turn_trace_id()
+    if trace_id is None:
+        return message
+    kwargs = getattr(message, "additional_kwargs", None)
+    if isinstance(kwargs, dict):
+        kwargs[ORYA_SPAN_KEY] = {"trace_id": trace_id}
+    return message
+
+
 async def stream_graph_events(
     graph: Any, user_input: str, config: dict[str, Any]
 ) -> AsyncIterator[StreamEvent]:
@@ -191,15 +214,25 @@ async def stream_graph_events(
     a suspected hit is audited into ``memory_audit_log`` and counted, but
     the message itself is never blocked or rewritten (BACKLOG5 M-22:
     «запретить нельзя — только warn»).
+
+    Every turn binds one trace id (A-06) so the spans it produces and
+    the JSONL events it projects share a single Langfuse trace. The
+    contextvar is bound inside the stream (not around it) — the reset
+    writes ``None`` because a stream may be driven from more than one
+    task context.
     """
     check_injection(
         user_input,
         source="user_input",
         session_id=session_id_from_config(config),
     )
-    payload = {"messages": [HumanMessage(user_input)]}
-    async for event in _stream_normalized(graph, payload, config):
-        yield event
+    set_turn_trace(new_trace_id())
+    try:
+        payload = {"messages": [_stamp_turn(HumanMessage(user_input))]}
+        async for event in _stream_normalized(graph, payload, config):
+            yield event
+    finally:
+        set_turn_trace(None)
 
 
 async def resume_graph_events(
@@ -209,10 +242,15 @@ async def resume_graph_events(
 
     The payload is ``resume_command(answer)`` — the same contract the
     ``human`` node (M-13) interprets (``approve`` / ``deny`` /
-    ``always``).
+    ``always``). A resume is a turn of its own (A-06): it binds a fresh
+    trace id for the spans it emits.
     """
-    async for event in _stream_normalized(graph, resume_command(answer), config):
-        yield event
+    set_turn_trace(new_trace_id())
+    try:
+        async for event in _stream_normalized(graph, resume_command(answer), config):
+            yield event
+    finally:
+        set_turn_trace(None)
 
 
 async def resolve_checkpointer() -> tuple[Any, bool]:

@@ -285,6 +285,53 @@ async def test_resume_graph_events_denies_and_always() -> None:
         assert payload.resume == answer
 
 
+# --- A-06: turn trace binding + user-message stamping ------------------------
+
+
+class _CaptureTraceGraph:
+    """Records the payload and the bound turn trace during the stream."""
+
+    def __init__(self) -> None:
+        self.seen: list[tuple[Any, str | None]] = []
+
+    async def astream_events(self, input, config=None, *, version=None):
+        from app.core.observability.spans import current_turn_trace_id
+
+        self.seen.append((input, current_turn_trace_id()))
+        return
+        yield  # pragma: no cover — makes this an async generator
+
+
+async def test_stream_graph_events_binds_turn_trace_and_stamps_user() -> None:
+    from app.core.observability.spans import (
+        ORYA_SPAN_KEY,
+        current_turn_trace_id,
+        set_turn_trace,
+    )
+
+    graph = _CaptureTraceGraph()
+    set_turn_trace(None)
+    [event async for event in agent.stream_graph_events(graph, "hi", {})]
+
+    payload, trace_id = graph.seen[0]
+    assert trace_id is not None
+    message = payload["messages"][0]
+    assert message.additional_kwargs[ORYA_SPAN_KEY] == {"trace_id": trace_id}
+    assert current_turn_trace_id() is None
+
+
+async def test_resume_graph_events_binds_turn_trace() -> None:
+    from app.core.observability.spans import current_turn_trace_id, set_turn_trace
+
+    graph = _CaptureTraceGraph()
+    set_turn_trace(None)
+    [event async for event in agent.resume_graph_events(graph, "approve", {})]
+
+    _, trace_id = graph.seen[0]
+    assert trace_id is not None
+    assert current_turn_trace_id() is None
+
+
 # --- stream_turn / stream_resume (M-24) ---------------------------------------
 
 

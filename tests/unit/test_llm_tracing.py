@@ -21,6 +21,7 @@ from app.core.llm.tracing import (
     get_span_buffer,
     wrap_with_tracing,
 )
+from app.core.observability.spans import set_turn_trace
 
 
 class FakeChatModel(BaseChatModel):
@@ -69,7 +70,9 @@ def isolated_llm_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     clear_settings_cache()
     clear_registry_cache()
     clear_span_buffer()
+    set_turn_trace(None)
     yield
+    set_turn_trace(None)
     clear_span_buffer()
     clear_settings_cache()
     clear_registry_cache()
@@ -244,3 +247,63 @@ def test_emitter_survives_broken_finalization():
         # Buffer should be cleared even if finalization failed
         clear_span_buffer()
         assert list(get_span_buffer()) == []
+
+
+# --- A-06: span-id stamping on result messages -------------------------------
+
+
+async def test_ainvoke_stamps_message_with_span_ids():
+    wrapped = wrap_with_tracing(
+        FakeChatModel(), provider="fakeprov", model_name="fakemodel"
+    )
+    result = await wrapped.ainvoke([AIMessage(content="ping")])
+
+    span = list(get_span_buffer())[0]
+    stamp = result.additional_kwargs["orya_span"]
+    assert stamp == {"trace_id": span.trace_id, "span_id": span.span_id}
+
+
+def test_invoke_sync_stamps_message_with_span_ids():
+    wrapped = wrap_with_tracing(
+        FakeChatModel(), provider="fakeprov", model_name="fakemodel"
+    )
+    result = wrapped.invoke([AIMessage(content="ping")])
+
+    span = list(get_span_buffer())[0]
+    assert result.additional_kwargs["orya_span"] == {
+        "trace_id": span.trace_id,
+        "span_id": span.span_id,
+    }
+
+
+async def test_stamped_trace_id_reuses_turn_trace():
+    """Inside a turn the stamped trace_id is the turn trace (A-06)."""
+    wrapped = wrap_with_tracing(
+        FakeChatModel(), provider="fakeprov", model_name="fakemodel"
+    )
+    set_turn_trace("turn-trace-xyz")
+    try:
+        result = await wrapped.ainvoke([AIMessage(content="ping")])
+    finally:
+        set_turn_trace(None)
+
+    stamp = result.additional_kwargs["orya_span"]
+    assert stamp["trace_id"] == "turn-trace-xyz"
+    assert list(get_span_buffer())[0].trace_id == "turn-trace-xyz"
+
+
+def test_stamp_span_ignores_non_message():
+    """Test doubles returning plain strings skip stamping without raising."""
+    from app.core.llm.tracing import _stamp_span
+    from app.core.observability.spans import SpanRecord
+
+    record = SpanRecord(
+        provider="p",
+        model="m",
+        trace_id="t",
+        span_id="s",
+        start_time=0.0,
+    )
+    assert _stamp_span("not-a-message", record) is None
+    assert _stamp_span(None, record) is None
+    assert _stamp_span(object(), record) is None

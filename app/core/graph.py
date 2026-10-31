@@ -76,7 +76,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any, Protocol
+from typing import Any, Optional, Protocol
 
 from langchain_core.messages import (
     AIMessage,
@@ -85,6 +85,7 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import ToolException
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -92,7 +93,11 @@ from langgraph.prebuilt import ToolNode
 from langgraph.types import Command, interrupt
 
 from app.core.config import get_settings
-from app.core.observability.spans import emit_span
+from app.core.observability.spans import (
+    ORYA_SPAN_KEY,
+    current_turn_trace_id,
+    emit_span,
+)
 from app.core.security import sanitize_untrusted
 
 logger = logging.getLogger(__name__)
@@ -555,6 +560,30 @@ def build_human_node(
     return human_node
 
 
+def _stamp_tool_messages(result: Any) -> Any:
+    """Stamp ToolMessages with the turn trace id (A-06), best-effort.
+
+    Tool results carry only the turn root (``trace_id``); the tool span
+    itself (``span_id``) arrives with A-16 ``agent.tool`` spans. The
+    stamp rides on ``additional_kwargs`` into the checkpoint and the
+    JSONL projection — the cross-link to the Langfuse turn trace.
+    """
+    trace_id = current_turn_trace_id()
+    if trace_id is None:
+        return result
+    if isinstance(result, list):
+        messages = result
+    elif isinstance(result, dict):
+        messages = result.get("messages") or []
+    else:
+        return result
+    for message in messages:
+        kwargs = getattr(message, "additional_kwargs", None)
+        if isinstance(kwargs, dict):
+            kwargs[ORYA_SPAN_KEY] = {"trace_id": trace_id}
+    return result
+
+
 def build_graph(
     tools: Sequence[Any],
     model: Any,
@@ -602,7 +631,18 @@ def build_graph(
     tool_list = list(tools)
     # M-28: convert tool failures into error ToolMessages (langgraph 1.2.x
     # re-raises them by default, which kills the run on a failed action).
-    tool_node = ToolNode(tool_list, handle_tool_errors=tool_error_text)
+    raw_tool_node = ToolNode(tool_list, handle_tool_errors=tool_error_text)
+
+    async def tools_node(
+        state: RecoveryState,
+        # langgraph matches the *string* "Optional[RunnableConfig]" when
+        # scanning node signatures under `from __future__ import annotations`.
+        config: Optional[RunnableConfig] = None,  # noqa: UP045
+    ) -> Any:
+        """Run the tool batch and stamp results with the turn trace (A-06)."""
+        result = await raw_tool_node.ainvoke(state, config)
+        return _stamp_tool_messages(result)
+
     bound_model = _bind_tools(model, tool_list)
 
     async def call_model(
@@ -712,7 +752,7 @@ def build_graph(
     human_node = build_human_node(policy, can_interrupt=checkpointer is not None)
 
     graph.add_node("agent", agent_node)
-    graph.add_node("tools", tool_node)
+    graph.add_node("tools", tools_node)
     graph.add_node("human", human_node)
     graph.add_node("assess", assess_node)
     graph.add_node(RECOVER_NODE_NAME, recover_node)

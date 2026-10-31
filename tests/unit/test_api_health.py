@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import clear_settings_cache
+from app.core.observability.spans import clear_span_buffer
 
 _MANAGED_ENV_VARS = frozenset(
     {
@@ -80,6 +81,19 @@ def isolated_fixture(request: pytest.FixtureRequest):
     """Apply the isolated fixture to all health tests."""
     if "health_isolated" in request.fixturenames:
         request.getfixturevalue("health_isolated")
+
+
+@pytest.fixture(autouse=True)
+def _fresh_span_buffer():
+    """Drop spans leaked by earlier suites — /health/observability counts the buffer.
+
+    The span buffer is process-global; suites that run before this module
+    (smoke, e2e) may leave records behind, which broke the
+    ``span_buffer_size == 0`` assertion regardless of this module's own tests.
+    """
+    clear_span_buffer()
+    yield
+    clear_span_buffer()
 
 
 # --- /health endpoint ---------------------------------------------------------

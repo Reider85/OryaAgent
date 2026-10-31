@@ -462,3 +462,69 @@ async def test_projection_worker_survives_pass_failure(monkeypatch):
     await projection_worker(stop=stop, interval_s=0.01)
     await setter
     assert len(calls) >= 2  # first pass failed, later pass(s) still ran
+
+
+# --- A-06: projection v2 — span-ids cross-link -------------------------------
+
+
+async def test_projection_v2_emits_trace_and_span_ids():
+    """Stamped messages yield top-level trace_id/span_id (v2 format)."""
+    m_user = HumanMessage(
+        content="hi",
+        id="m1",
+        additional_kwargs={"orya_span": {"trace_id": "turn-1"}},
+    )
+    m_ai = AIMessage(
+        content="done",
+        id="m2",
+        additional_kwargs={"orya_span": {"trace_id": "turn-1", "span_id": "span-1"}},
+    )
+    m_tool = ToolMessage(
+        content="ok",
+        tool_call_id="c1",
+        id="m3",
+        additional_kwargs={"orya_span": {"trace_id": "turn-1"}},
+    )
+    saver = FakeSaver(
+        [
+            {
+                "ts": "2026-01-01T00:00:01+00:00",
+                "messages": [m_user, m_ai, m_tool],
+            }
+        ]
+    )
+    await project_thread("s1", checkpointer=saver)
+
+    events = _read_events("s1")
+    user_event, ai_event, tool_event = events
+    assert user_event["trace_id"] == "turn-1"
+    assert "span_id" not in user_event
+    assert ai_event["trace_id"] == "turn-1"
+    assert ai_event["span_id"] == "span-1"
+    assert tool_event["trace_id"] == "turn-1"
+    assert "span_id" not in tool_event
+    # v1 keys stay intact
+    assert all({"ts", "type", "payload"} <= set(e) for e in events)
+
+
+async def test_projection_v1_events_omit_span_keys():
+    """Unstamped (v1) messages produce events without trace/span keys."""
+    m_user = HumanMessage(content="hi", id="m1")
+    m_ai = AIMessage(content="done", id="m2")
+    saver = FakeSaver([{"ts": "2026-01-01T00:00:01+00:00", "messages": [m_user, m_ai]}])
+    await project_thread("s1", checkpointer=saver)
+
+    events = _read_events("s1")
+    assert all("trace_id" not in e and "span_id" not in e for e in events)
+
+
+def test_span_stamp_ignores_unrelated_additional_kwargs():
+    message = AIMessage(content="x", id="m1", additional_kwargs={"foo": "bar"})
+    assert session_log._span_stamp(message) == {}
+
+
+def test_span_stamp_rejects_non_dict_stamp():
+    message = AIMessage(
+        content="x", id="m1", additional_kwargs={"orya_span": "not-a-dict"}
+    )
+    assert session_log._span_stamp(message) == {}

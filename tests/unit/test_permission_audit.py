@@ -221,3 +221,25 @@ def test_span_emission_never_raises():
     # Policy logic unaffected even if spans fail (buffer would be empty in real failure)
     spans = list(get_span_buffer())
     assert len(spans) == 1  # Span was emitted successfully
+
+
+# --- A-06: permission spans join the turn trace -----------------------------
+
+
+def test_permission_span_inherits_turn_trace():
+    """agent.permission spans reuse the bound turn trace id (A-06)."""
+    from app.core.observability.spans import set_turn_trace
+
+    clear_span_buffer()
+    set_turn_trace("turn-perm-1")
+    try:
+        policy = get_policy(mode="strict")
+        policy.check({"name": "read", "args": {"path": "/tmp/x"}})
+        policy.check({"name": "bash", "args": {"command": "rm -rf /"}})
+    finally:
+        set_turn_trace(None)
+
+    spans = list(get_span_buffer())
+    assert len(spans) == 2
+    assert {s.trace_id for s in spans} == {"turn-perm-1"}
+    assert spans[0].span_id != spans[1].span_id
