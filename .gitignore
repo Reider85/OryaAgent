@@ -144,8 +144,8 @@ memory/
 # Ruff
 .ruff_cache/
 
-# Docker
-.dockerignore
+# Docker (A-10: .dockerignore is tracked so image builds stay reproducible)
+data/
 
 # Background process runtime (scripts/start.* + stop.*): logs + PID files
 logs/

@@ -1,0 +1,30 @@
+# A-10: keep the build context small — the image only needs pyproject.toml,
+# uv.lock, README.md and app/.
+.git
+.gitignore
+.venv
+.env
+.env.example
+.opencode
+analytics
+tests
+scripts
+deploy
+docs
+logs
+data
+sessions
+memory
+.chainlit
+.files
+.pytest_cache
+.ruff_cache
+__pycache__
+*.pyc
+*.pyo
+*.log
+*.tmp
+docker-compose.yml
+Makefile
+AGENTS.md
+PROMPT*.md

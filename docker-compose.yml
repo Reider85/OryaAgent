@@ -1,3 +1,66 @@
+# A-10: Docker compose v2 — one-command deploy stack.
+#
+# Default (`docker compose up -d`) starts the stateful infra only (postgres +
+# redis) — unchanged for Makefile db-up/redis-up, scripts/start.* and the
+# Quick Start. Application containers live behind the `app` profile; the
+# observability stack (Langfuse v3 + sampler-proxy) behind `observability`.
+#
+# One-command full deploy:
+#   echo "COMPOSE_PROFILES=app,observability" >> .env
+#   docker compose up -d --build
+
+# Shared env for the `api` container (A-10). Container-network hostnames
+# override the host-side localhost defaults from .env — the `environment`
+# section wins over `env_file`.
+x-orya-app-env: &orya-app-env
+  DATABASE_URL: postgresql://orya:orya_password@postgres:5432/orya_sessions
+  REDIS_URL: redis://redis:6379
+  ORYA_MEMORY_DIR: /data/memory
+  ORYA_SAMPLER_PROXY_URL: http://sampler-proxy:4321
+  # Planned A-15/A-17 routing: in the compose stack traces go through the
+  # sampler-proxy; no code exports yet (see README "Langfuse setup").
+  LANGFUSE_HOST: http://sampler-proxy:4321
+
+# Shared env for langfuse-web and langfuse-worker (Langfuse v3, mirrored from
+# ../OryaObservability/infra/docker-compose.yml and adapted to the shared
+# postgres/redis). v3 stores traces in ClickHouse and needs an S3-compatible
+# bucket (MinIO) for event/media payloads. SALT/ENCRYPTION_KEY/NEXTAUTH_SECRET
+# have obviously-dev defaults — override them for anything non-local.
+x-langfuse-env: &langfuse-env
+  NEXTAUTH_URL: ${LANGFUSE_PUBLIC_URL:-http://localhost:3000}
+  NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-orya-dev-nextauth-secret-change-me}
+  DATABASE_URL: postgresql://orya:orya_password@postgres:5432/langfuse
+  SALT: ${LANGFUSE_SALT:-orya-dev-salt-0123456789abcdef01234567}
+  ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+  TELEMETRY_ENABLED: "false"
+
+  CLICKHOUSE_URL: http://clickhouse:8123
+  CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+  CLICKHOUSE_USER: ${CLICKHOUSE_USER:-clickhouse}
+  CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
+  CLICKHOUSE_CLUSTER_ENABLED: "false"
+
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  # Shared redis has no password (unlike OryaObservability's stack).
+  REDIS_AUTH: ${LANGFUSE_REDIS_AUTH:-}
+
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minio}
+  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-miniosecret}
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+
+  LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+  LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minio}
+  LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-miniosecret}
+  LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+
 services:
   postgres:
     image: postgres:16
@@ -28,5 +91,240 @@ services:
       timeout: 5s
       retries: 5
 
+  api:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    image: orya-agent:local
+    restart: unless-stopped
+    # Migrations are idempotent (A-11/Alembic replaces this later); fail-fast
+    # container exit + restart lets postgres come back after a reboot.
+    command: sh -c "orya db migrate && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *orya-app-env
+      AUTH_ENABLED: ${AUTH_ENABLED:-false}
+      AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-}
+      ORYA_RATE_LIMIT_ENABLED: ${ORYA_RATE_LIMIT_ENABLED:-false}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8001}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      # Agent workspace (tools validate_path allows cwd) + persistent ~/.orya
+      # (sessions JSONL, permissions) + L0 memory dir (ARCHITECT6 §13.1).
+      - ${ORYA_WORKSPACE:-.}:/workspace
+      - ./data/orya:/root/.orya
+      - ./data/memory:/data/memory
+    working_dir: /workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status == 200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  chainlit:
+    profiles: ["app"]
+    image: orya-agent:local
+    restart: unless-stopped
+    command: chainlit run app/ui/chainlit_app.py --host 0.0.0.0 --port 8001
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ORYA_API_URL: http://api:8000
+      CHAINLIT_PORT: "8001"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "${CHAINLIT_PORT:-8001}:8001"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/', timeout=3).status == 200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  # Idempotent CREATE DATABASE langfuse on the shared postgres. The stock
+  # entrypoint only runs docker-entrypoint-initdb.d on an EMPTY data dir, so an
+  # existing postgres_data volume never gets the langfuse DB — this one-shot
+  # does, on every `up` (safe to re-run).
+  db-init:
+    profiles: ["observability"]
+    image: postgres:16
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: orya_password
+    command:
+      - sh
+      - -c
+      - >
+        psql -h postgres -U orya -d postgres -tc
+        "SELECT 1 FROM pg_database WHERE datname='langfuse'" | grep -q 1
+        || psql -h postgres -U orya -d postgres -c "CREATE DATABASE langfuse"
+
+  # Langfuse v3 storage (mirrored from ../OryaObservability/infra). Langfuse
+  # runs its own ClickHouse migrations on web boot — no external DDL needed.
+  clickhouse:
+    profiles: ["observability"]
+    image: clickhouse/clickhouse-server:26.9
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-clickhouse}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  minio:
+    profiles: ["observability"]
+    image: quay.io/minio/minio:latest
+    restart: unless-stopped
+    entrypoint: sh
+    # Pre-create the langfuse bucket in the data dir (no init script needed).
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-miniosecret}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  langfuse:
+    profiles: ["observability"]
+    image: langfuse/langfuse:3
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      <<: *langfuse-env
+      # First-boot provisioning (v3 only runs it when ORG_ID is set).
+      LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:-org-orya-agent}
+      LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME:-Orya Agent}
+      LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID:-prj-orya-agent}
+      LANGFUSE_INIT_PROJECT_NAME: ${LANGFUSE_INIT_PROJECT_NAME:-orya-agent}
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-orya-agent}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-orya-agent}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-admin@example.com}
+      LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME:-Admin}
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-change-me-admin-password}
+    ports:
+      - "${LANGFUSE_PORT:-3000}:3000"
+    healthcheck:
+      # v3's Next.js server binds to the container IP ($HOSTNAME), not loopback,
+      # so probe the health endpoint via $HOSTNAME. Returns 503 until
+      # Postgres/ClickHouse are migrated, 200 once ready.
+      test: ["CMD", "node", "-e", "fetch('http://'+process.env.HOSTNAME+':3000/api/public/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  langfuse-worker:
+    profiles: ["observability"]
+    image: langfuse/langfuse-worker:3
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      <<: *langfuse-env
+    healthcheck:
+      # The worker image is Node-only (no python): liveness = runtime alive;
+      # actual crashes exit the container and hit the restart policy.
+      test: ["CMD", "node", "-e", "process.exit(0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # A-10 ships the service container (README A-09 promised it "with A-10");
+  # adaptive-rate behaviour, ClickHouse audit and policy tests land in A-17.
+  # Without a Prometheus the policy tick logs errors and keeps the default
+  # rate — harmless. Build needs the sibling ../OryaObservability checkout.
+  sampler-proxy:
+    profiles: ["observability"]
+    build:
+      context: ../OryaObservability
+      dockerfile: scripts/sampler/Dockerfile
+      # HTTP-only image: the last Dockerfile stage adds grpcio, pin the base.
+      target: sampler-base
+    image: agent-obs-sampler:latest
+    restart: unless-stopped
+    depends_on:
+      langfuse:
+        condition: service_healthy
+    environment:
+      PYTHONPATH: /app
+      DOWNSTREAM_URL: ${SAMPLER_DOWNSTREAM_URL:-http://langfuse:3000}
+      # Must match LANGFUSE_INIT_PROJECT_* above so kept traces authenticate.
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-orya-agent}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-orya-agent}
+      AGENT_OBS_SAMPLER_MODE: proxy
+      SAMPLER_PROXY_PORT_HTTP: "4321"
+      SAMPLER_PROXY_PORT_GRPC: "4320"
+      SAMPLER_PROXY_METRICS_PORT: "9095"
+      SAMPLER_RATE_FILE: /shared/sampler_rate.json
+      AGENT_OBS_LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - sampler_shared:/shared
+    ports:
+      # OTLP/HTTP — point LANGFUSE_HOST here in proxy mode (A-15/A-17).
+      - "${SAMPLER_PROXY_PORT:-4321}:4321"
+      # /metrics only; GET /sampler/status is on the OTLP/HTTP port above.
+      - "${SAMPLER_METRICS_PORT:-9095}:9095"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9095/metrics', timeout=3).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
 volumes:
   postgres_data:
+  clickhouse_data:
+  clickhouse_logs:
+  minio_data:
+  sampler_shared:

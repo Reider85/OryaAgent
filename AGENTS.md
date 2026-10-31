@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Senior Python coding agent (FastAPI + LangGraph + LLM provider seam). MVP phase done through M-28 + MVP-POLISH. ALPHA done through A-09: A-00 (auth middleware), A-01 (rate-limit), A-02 (seam trace-wrapping), A-03 (permission audit spans), A-04 (health endpoints), A-05 (session-log encryption), A-06 (JSONL span cross-link), A-07 (cache LRU + Redis tuning), A-08 (smoke tests v2), A-09 (README v2 deploy guide — env-var reference + README anchors test in `tests/unit/test_readme.py`). Remaining ALPHA: A-10…A-20 (Docker stack, Alembic, Settings v2, CostAwareRouter, cost-tracking, Langfuse, OryaObservability SDK, sampler-proxy, v7 additions).
+Senior Python coding agent (FastAPI + LangGraph + LLM provider seam). MVP phase done through M-28 + MVP-POLISH. ALPHA done through A-10: A-00 (auth middleware), A-01 (rate-limit), A-02 (seam trace-wrapping), A-03 (permission audit spans), A-04 (health endpoints), A-05 (session-log encryption), A-06 (JSONL span cross-link), A-07 (cache LRU + Redis tuning), A-08 (smoke tests v2), A-09 (README v2 deploy guide — env-var reference + README anchors test in `tests/unit/test_readme.py`), A-10 (Docker compose v2 — profile stack + `deploy/Dockerfile`, structure test in `tests/unit/test_docker_compose.py`). Remaining ALPHA: A-11…A-20 (Alembic, Settings v2, CostAwareRouter, cost-tracking, Langfuse, OryaObservability SDK, sampler-proxy, v7 additions).
 
 ## Ticket specs (read this first when implementing M-NN)
 
@@ -17,6 +17,7 @@ Senior Python coding agent (FastAPI + LangGraph + LLM provider seam). MVP phase 
 - Lint gate (both, no typechecker exists): `make lint` = `uv run ruff check .` + `uv run ruff format --check .`; fix with `make format`
 - Order before finishing: format → lint → test. No mypy/pre-commit/CI exist despite analytics docs claiming so.
 - DB: `make db-up` (docker compose postgres:16), `make db-migrate` (= `python -m app.db.migrate`). Host port: `POSTGRES_PORT=5435 make db-up` + matching `DATABASE_URL`.
+- Full stack (A-10): `make stack-up` = `docker compose up -d --build`; profiles come from `COMPOSE_PROFILES` in `.env` (`app` = api+chainlit from `deploy/Dockerfile`, `observability` = langfuse v3 + sampler-proxy — the latter builds from the sibling `../OryaObservability`). Bare `docker compose up -d` stays postgres+redis only (Makefile/start-scripts invariant, locked by `tests/unit/test_docker_compose.py`).
 
 ## Tests
 

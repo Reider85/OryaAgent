@@ -1,4 +1,4 @@
-.PHONY: dev ui test lint clean install format check-lint check-format setup db-up db-migrate db-down redis-up redis-down
+.PHONY: dev ui test lint clean install format check-lint check-format setup db-up db-migrate db-down redis-up redis-down stack-up stack-down
 
 # Install dependencies
 install:
@@ -63,3 +63,11 @@ redis-up:
 
 redis-down:
 	docker compose stop redis
+
+# Full compose stack (A-10): profiles from COMPOSE_PROFILES in .env
+# (app,observability = api + chainlit + langfuse v3 + sampler-proxy)
+stack-up:
+	docker compose up -d --build
+
+stack-down:
+	docker compose --profile app --profile observability down

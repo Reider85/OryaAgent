@@ -4,7 +4,7 @@ Senior Python coding agent with UI and long-term memory.
 
 ## Phase: ALPHA
 
-Tickets M-00…M-28 (bootstrap → failure recovery) and MVP-POLISH are implemented. ALPHA adds the production-safe baseline: A-00 (auth middleware), A-01 (rate-limit), A-02 (LLM-seam trace-wrapping), A-03 (permission audit spans), A-04 (health endpoints), A-05 (session-log encryption), A-06 (JSONL span cross-link), A-07 (cache LRU + Redis tuning), A-08 (smoke tests v2) and A-09 (this deploy guide). See [PROMPT_ALPHA.md](analytics/PROMPT_ALPHA.md) for the phase spec.
+Tickets M-00…M-28 (bootstrap → failure recovery) and MVP-POLISH are implemented. ALPHA adds the production-safe baseline: A-00 (auth middleware), A-01 (rate-limit), A-02 (LLM-seam trace-wrapping), A-03 (permission audit spans), A-04 (health endpoints), A-05 (session-log encryption), A-06 (JSONL span cross-link), A-07 (cache LRU + Redis tuning), A-08 (smoke tests v2), A-09 (this deploy guide) and A-10 (Docker compose v2). See [PROMPT_ALPHA.md](analytics/PROMPT_ALPHA.md) for the phase spec.
 
 ## Quick Start
 
@@ -107,26 +107,41 @@ settings = get_settings()
 
 ## Deploy guide
 
-Three supported ways to run OryaAgent, from a laptop to a single-host deployment:
+Four supported ways to run OryaAgent, from a laptop to a single-host deployment:
 
 | Mode | Command | What runs |
 |---|---|---|
 | Dev (manual) | `make dev` + `make ui` | API on `:8000`, Chainlit on `:8001`; infra via `make db-up` / `make redis-up` |
 | One-command | `scripts/start.sh` or `scripts\start.ps1` | `uv sync` → compose postgres/redis → migrations → background API + UI (see [One-command start](#one-command-start)) |
 | Infra in Docker | `docker compose up -d` | PostgreSQL 16 + Redis 7 only — the app itself runs on the host |
+| Full stack in Docker (A-10) | `docker compose up -d --build` with `COMPOSE_PROFILES=app,observability` | API + Chainlit containers, Langfuse v3 stack (web/worker/ClickHouse/MinIO) + sampler-proxy; see [Docker services (today)](#docker-services-today) |
 
 ### Docker services (today)
 
-`docker-compose.yml` provides the stateful dependencies only:
+`docker-compose.yml` (A-10, v2) is a profile-based stack. Without profiles a bare `docker compose up -d` still starts **only** the stateful dependencies — nothing changes for `make db-up`, `make redis-up`, `scripts/start.*` or the Quick Start. Set `COMPOSE_PROFILES=app,observability` in `.env` (or export it) to make the full stack the default, then `docker compose up -d --build` is the one-command deploy.
 
-| Service | Image | Host port | Notes |
-|---|---|---|---|
-| `postgres` | `postgres:16` | `${POSTGRES_PORT:-5432}` | db/user `orya`/`orya_sessions`, volume `postgres_data`, `pg_isready` healthcheck |
-| `redis` | `redis:7` | `${REDIS_PORT:-6379}` | `redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru` — server-side LRU (A-07); eviction = cache miss = safe |
+| Service | Profile | Image | Host port | Notes |
+|---|---|---|---|---|
+| `postgres` | — | `postgres:16` | `${POSTGRES_PORT:-5432}` | db/user `orya`/`orya_sessions`, volume `postgres_data`, `pg_isready` healthcheck; also hosts the `langfuse` database (created idempotently by `db-init`) |
+| `redis` | — | `redis:7` | `${REDIS_PORT:-6379}` | `redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru` — server-side LRU (A-07); eviction = cache miss = safe |
+| `api` | `app` | build `deploy/Dockerfile` → `orya-agent:local` | `${API_PORT:-8000}` | `orya db migrate` (idempotent) then uvicorn; workspace at `/workspace` (`ORYA_WORKSPACE`, default `.`), persistent `/root/.orya` + `/data/memory` under `./data/`; healthcheck on `/health` |
+| `chainlit` | `app` | `orya-agent:local` (same image) | `${CHAINLIT_PORT:-8001}` | `chainlit run --host 0.0.0.0`; `ORYA_API_URL=http://api:8000` — the UI is a pure HTTP client of the `api` service (M-24) |
+| `db-init` | `observability` | `postgres:16` | — | one-shot, idempotent `CREATE DATABASE langfuse` (initdb hooks never re-run on an existing volume) |
+| `clickhouse` | `observability` | `clickhouse/clickhouse-server:26.9` | — | Langfuse v3 trace store; Langfuse runs its own migrations on boot |
+| `minio` | `observability` | `quay.io/minio/minio` | — | S3-compatible bucket `langfuse` for events/media payloads |
+| `langfuse` | `observability` | `langfuse/langfuse:3` | `${LANGFUSE_PORT:-3000}` | first-boot provisioning (`LANGFUSE_INIT_*`, dev defaults for `SALT`/`ENCRYPTION_KEY`/`NEXTAUTH_SECRET` — override for anything non-local) |
+| `langfuse-worker` | `observability` | `langfuse/langfuse-worker:3` | — | async event processing (web alone receives, the worker ingests) |
+| `sampler-proxy` | `observability` | build `../OryaObservability` → `agent-obs-sampler:latest` | `4321` (OTLP/HTTP), `9095` (`/metrics`) | adaptive tail-sampler proxy; `DOWNSTREAM_URL=http://langfuse:3000`; rate policy needs Prometheus (absent → default rate, errors are logged and ignored). **Requires the sibling checkout `../OryaObservability`.** Behaviour/audit wiring lands in A-17 |
 
-Port conflicts: `POSTGRES_PORT=5435 make db-up` (plus a matching `DATABASE_URL`) and `REDIS_PORT=6381 make redis-up` (plus a matching `REDIS_URL`). The start scripts detect an already-running container and reuse its ports.
+Application containers (API/Chainlit), the `langfuse` stack and the `sampler-proxy` service are in place since **A-10** (Docker compose v2). Host-process deployment (`uv run uvicorn app.main:app`, `chainlit run app/ui/chainlit_app.py`) remains supported — `scripts/start.*` are the reference implementation. Port conflicts: `POSTGRES_PORT=5435 make db-up` (plus a matching `DATABASE_URL`) and `REDIS_PORT=6381 make redis-up` (plus a matching `REDIS_URL`); the start scripts detect an already-running container and reuse its ports.
 
-Application containers (API/Chainlit), the `langfuse` service and the `sampler-proxy` service are **not** in this compose file yet — they arrive with **A-10** (Docker compose v2). Until then the app is deployed as a host process (`uv run uvicorn app.main:app`, `chainlit run app/ui/chainlit_app.py`) supervised the way you prefer (systemd, nssm, pm2 — the repo's `scripts/start.*` are the reference implementation).
+```bash
+# one-command full deploy
+echo "COMPOSE_PROFILES=app,observability" >> .env
+docker compose up -d --build
+curl http://localhost:8000/health   # API
+# UI: http://localhost:8001 · Langfuse: http://localhost:3000 · sampler: http://localhost:4321/sampler/status
+```
 
 ### Production checklist
 
@@ -139,10 +154,13 @@ Application containers (API/Chainlit), the `langfuse` service and the `sampler-p
 - Keep `LOG_LEVEL=INFO` (or `WARNING`); logs go to stdout/journald (the start scripts write `logs/*.log`).
 - The API returns `X-Request-ID` on every response (echoed or minted) — propagate it through your reverse proxy.
 - `/health`, `/docs`, `/redoc`, `/openapi.json`, `/metrics` are JWT-exempt (`AUTH_PUBLIC_PATHS`); everything else requires `Authorization: Bearer <token>`.
+- Compose stack (A-10): override the dev Langfuse secrets (`LANGFUSE_SALT`, `LANGFUSE_ENCRYPTION_KEY`, `NEXTAUTH_SECRET`, `LANGFUSE_INIT_USER_PASSWORD`) for anything non-local; the `api` container runs as root — drop to a non-root user for hardened deployments; the shared Redis backs both the tool cache and the Langfuse queue (allkeys-lru) — give Langfuse its own Redis once trace volume grows.
 
 ### Langfuse setup (planned — A-15/A-16/A-17)
 
-Langfuse export is **not wired yet**. The in-process observability seam already works (A-02/A-03/A-04/A-06); the env contract below is what the ALPHA observability stack will consume, so infra and secrets can be prepared now.
+**Infra fact (A-10):** the Langfuse v3 stack itself runs in compose — `docker compose --profile observability up -d` brings up `langfuse` (web), `langfuse-worker`, `clickhouse`, `minio` and the `sampler-proxy` (plus the one-shot `db-init` that creates the `langfuse` database). UI on `http://localhost:3000` (dev login from `LANGFUSE_INIT_*`, see [Docker services (today)](#docker-services-today)).
+
+**Export is still not wired.** Nothing in `app/` sends spans to Langfuse yet — that is A-15/A-16/A-17. The in-process observability seam already works (A-02/A-03/A-04/A-06); the env contract below is what the ALPHA observability stack will consume, so infra and secrets can be prepared now.
 
 **Works today:**
 
@@ -281,7 +299,11 @@ Every knob recognized by `app/core/config.py`, by group. Most settings accept tw
 | `ORIAHS_TIMEOUT_S` / `ORYA_ORIAHS_TIMEOUT_S` | `30` | OriaHS request timeout |
 | `POSTGRES_PORT` | `5432` | Host port published by docker compose (not read by the app) |
 | `REDIS_PORT` | `6379` | Host port published by docker compose (not read by the app) |
-| `API_PORT` | `8000` | API port for the start scripts |
+| `API_PORT` | `8000` | API port for the start scripts and the compose `api` service |
+| `COMPOSE_PROFILES` | — | Docker Compose profiles to enable by default (A-10): `app,observability` = full stack; unset = infra only |
+| `ORYA_WORKSPACE` | `.` | Host dir bind-mounted to `/workspace` in the compose `api` container (agent cwd) |
+| `LANGFUSE_PORT` | `3000` | Host port of the compose `langfuse` web UI |
+| `SAMPLER_PROXY_PORT` / `SAMPLER_METRICS_PORT` | `4321` / `9095` | Host ports of the compose `sampler-proxy` (OTLP/HTTP, `/metrics`) |
 
 Provider API keys (`DEEPSEEK_API_KEY`, `DASHSCOPE_API_KEY`, `ZHIPUAI_API_KEY`, `OPENROUTER_API_KEY`, …) are read by the per-provider adapters via `providers.yaml` — see `.env.example` and [LLM Providers (M-01)](#llm-providers-m-01).
 
@@ -298,6 +320,8 @@ app/
 ├── api/                 # API endpoints (M-20+): middleware (A-00), health (A-04)
 └── ui/                  # Chainlit UI (M-15+)
 scripts/                 # one-command start/stop (sh + ps1)
+deploy/                  # Dockerfile for the api/chainlit image (A-10)
+docker-compose.yml       # profile-based stack: infra + app + observability (A-10)
 tests/                   # Test suites
 └── conftest.py          # Test configuration
 ```
@@ -679,6 +703,8 @@ Strategies (ARCHITECT6 §4.2.2): `PREFERENCES.md` archives only `agent_inferred`
 - ✅ **A-06** - JSONL projection v2: top-level `trace_id`/`span_id` stamped from the turn-trace contextvar — offline cross-link to Langfuse traces
 - ✅ **A-07** - CacheWrapper v2: `MemoryCache` LRU with `ORYA_CACHE_MAX_ENTRIES`, Redis client pool tuning, server-side `maxmemory 256mb --maxmemory-policy allkeys-lru`
 - ✅ **A-08** - Smoke tests v2: +5 deterministic scenarios covering auth enforcement, operator-loop, rate-limit buckets, observability chain and the tracing kill-switch (`tests/smoke/test_smoke_v2.py`)
+- ✅ **A-09** - README v2: deploy guide (modes, Docker services, production checklist, Langfuse contract), full env-var reference, ALPHA sections, README-anchor unit tests
+- ✅ **A-10** - Docker compose v2: `deploy/Dockerfile` (uv + ripgrep, one image for api/chainlit), profile-based `docker-compose.yml` (`app`: api+chainlit; `observability`: Langfuse v3 stack + sampler-proxy), one-command deploy via `COMPOSE_PROFILES`, compose-structure unit tests
 - ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for the 28 MVP tickets and [PROMPT_ALPHA.md](analytics/PROMPT_ALPHA.md) for A-00…A-20)
 
 ## LLM Providers (M-01)

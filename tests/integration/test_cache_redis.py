@@ -94,7 +94,10 @@ async def test_stats_counters_and_daily_redis_hash(wrapper: CacheWrapper):
     await wrapper.set(key, "v")
     await wrapper.get(key)  # hit
 
-    assert wrapper.stats() == {"grep": {"hits": 1, "misses": 1}}
+    # `evictions` per tool: added by A-07 (unit tests assert the same shape;
+    # this suite skips without Redis, which is how the stale expectation
+    # survived A-07).
+    assert wrapper.stats() == {"grep": {"hits": 1, "misses": 1, "evictions": 0}}
 
     # The daily hash is shared across runs - assert deltas, not absolutes.
     mirrored = await wrapper.redis.hgetall(stats_key)
