@@ -143,20 +143,12 @@ def test_main_db_migrate_logs(
     expected: str,
 ):
     """``orya db migrate`` reports through the logger (was ``print()``)."""
-    import app.db
+    import app.db.migrate as db_migrate
 
-    async def fake_pool():
-        return object()
-
-    async def fake_apply(pool):
+    async def fake_apply():
         return applied
 
-    async def fake_close():
-        return None
-
-    monkeypatch.setattr(app.db, "get_asyncpg_pool", fake_pool)
-    monkeypatch.setattr(app.db, "apply_migrations", fake_apply)
-    monkeypatch.setattr(app.db, "close_pool", fake_close)
+    monkeypatch.setattr(db_migrate, "apply_migrations", fake_apply)
     monkeypatch.setattr(sys, "argv", ["orya", "db", "migrate"])
 
     from app.main import main
@@ -181,23 +173,14 @@ def test_module_entry_migrate_logs(
     expected: str,
 ):
     """``python -m app.db.migrate`` configures logging itself and logs the summary."""
-    import app.db
     from app.db import migrate
 
-    async def fake_pool():
-        return object()
-
-    async def fake_apply(pool):
+    async def fake_apply():
         return applied
 
-    async def fake_close():
-        return None
-
-    monkeypatch.setattr(app.db, "get_asyncpg_pool", fake_pool)
-    monkeypatch.setattr(app.db, "close_pool", fake_close)
     monkeypatch.setattr(migrate, "apply_migrations", fake_apply)
 
     with caplog.at_level(logging.INFO):
-        asyncio.run(migrate._main())
+        asyncio.run(migrate._main([]))  # empty argv: ignore pytest's sys.argv
 
     assert expected in caplog.text

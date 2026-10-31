@@ -72,7 +72,7 @@ def test_readme_langfuse_section_is_forward_looking():
 
 def test_readme_phase_progress_covers_alpha_tickets():
     text = _readme()
-    for i in range(11):
+    for i in range(12):  # A-00..A-11 (A-11: Alembic migrations)
         marker = f"**A-{i:02d}**"
         assert marker in text, f"Phase Progress is missing {marker}"
 

@@ -61,7 +61,7 @@ def test_graph_checkpoints_in_postgres():
         pool = await get_asyncpg_pool()
         thread_id = f"m04-{uuid.uuid4().hex[:8]}"
         try:
-            await apply_migrations(pool)
+            await apply_migrations()
             checkpointer = await get_checkpointer()
             model = FakeMessagesListChatModel(
                 responses=[

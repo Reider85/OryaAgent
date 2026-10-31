@@ -1,4 +1,10 @@
-"""Unit tests for M-03 — asyncpg pool singleton and SQL migration runner (mocked)."""
+"""Unit tests for M-03 — asyncpg pool singleton and migration file loading.
+
+The migration *runner* itself is Alembic-backed since A-11 (it needs a real
+database for ``alembic_version`` bookkeeping): its static contract lives in
+``tests/unit/test_alembic.py``, the upgrade/downgrade flow is covered by
+``tests/integration/test_db_postgres.py`` (conditional on ``make db-up``).
+"""
 
 from __future__ import annotations
 
@@ -10,36 +16,16 @@ import pytest
 
 import app.db as db
 from app.core.config import clear_settings_cache
-from app.db.migrate import apply_migrations, load_migrations
+from app.db.migrate import load_migrations
 
 # --- fakes -----------------------------------------------------------------
 
 
 class FakeConnection:
-    def __init__(self, fetch_rows: list[dict] | None = None):
-        self.executed: list[tuple[str, tuple]] = []
-        self.fetch_rows = fetch_rows if fetch_rows is not None else []
-        self.transactions = 0
+    """Opaque stand-in for an asyncpg connection — pool tests never query."""
 
     async def execute(self, query: str, *args: Any) -> str:
-        self.executed.append((query, args))
         return "OK"
-
-    async def fetch(self, query: str, *args: Any) -> list[dict]:
-        self.executed.append((query, args))
-        return list(self.fetch_rows)
-
-    def transaction(self) -> Any:
-        conn = self
-
-        class _Tx:
-            async def __aenter__(self) -> None:
-                conn.transactions += 1
-
-            async def __aexit__(self, *exc: object) -> bool:
-                return False
-
-        return _Tx()
 
 
 class FakePool:
@@ -160,7 +146,9 @@ async def test_pool_recreated_when_loop_changes(monkeypatch: pytest.MonkeyPatch)
     db._pool_loop = object()  # type: ignore[assignment]
     second = await db.get_asyncpg_pool()
     assert first is not second
-    assert first.closed is True
+    # Cross-loop close would raise "attached to a different loop" for a real
+    # pool — the singleton is dropped unclosed instead (A-11 guard).
+    assert first.closed is False
 
 
 # --- migrate ---------------------------------------------------------------
@@ -172,45 +160,3 @@ def test_load_migrations_reads_files(tmp_path: Path):
     migrations = load_migrations(tmp_path)
     assert [v for v, _ in migrations] == ["0001_a", "0002_b"]
     assert migrations[0][1] == "SELECT 1;"
-
-
-async def test_apply_migrations_skips_already_applied():
-    all_versions = [v for v, _ in load_migrations()]
-    conn = FakeConnection(fetch_rows=[{"version": v} for v in all_versions])
-    pool = FakePool(conn)
-    applied = await apply_migrations(pool)  # type: ignore[arg-type]
-    assert applied == []
-    # schema_migrations bookkeeping table ensured, nothing else executed
-    assert any("schema_migrations" in q for q, _ in conn.executed)
-    assert not any(
-        q.lower().startswith("create table if not exists sessions")
-        for q, _ in conn.executed
-    )
-
-
-async def test_apply_migrations_applies_pending_in_transaction():
-    all_versions = [v for v, _ in load_migrations()]
-    conn = FakeConnection(fetch_rows=[])
-    pool = FakePool(conn)
-    applied = await apply_migrations(pool)  # type: ignore[arg-type]
-    assert applied == all_versions
-    # one transaction per pending migration file
-    assert conn.transactions == len(all_versions)
-
-    executed_sql = [q for q, _ in conn.executed]
-    assert any("create table if not exists sessions" in q.lower() for q in executed_sql)
-    inserts = [
-        (q, args) for q, args in conn.executed if "INSERT INTO schema_migrations" in q
-    ]
-    assert inserts == [
-        ("INSERT INTO schema_migrations (version) VALUES ($1)", (version,))
-        for version in all_versions
-    ]
-
-
-async def test_apply_migrations_with_empty_dir_is_noop(tmp_path: Path):
-    conn = FakeConnection(fetch_rows=[])
-    pool = FakePool(conn)
-    applied = await apply_migrations(pool, directory=tmp_path)  # type: ignore[arg-type]
-    assert applied == []
-    assert conn.transactions == 0

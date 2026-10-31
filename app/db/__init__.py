@@ -1,25 +1,30 @@
-"""Database access (M-03): asyncpg connection pool + SQL migrations.
+"""Database access (M-03 → A-11): asyncpg connection pool + Alembic migrations.
 
 Usage::
 
     from app.db import apply_migrations, close_pool, get_asyncpg_pool
 
+    applied = await apply_migrations()  # alembic upgrade head, worker thread
     pool = await get_asyncpg_pool()
-    await apply_migrations(pool)
 
 The pool is a process-wide lazy singleton bound to the running event loop
 (asyncpg pools cannot be shared across loops). First use reads
 ``settings.database_url`` / pool sizes from :mod:`app.core.config`.
+Migrations no longer use the pool — they run through Alembic's sync engine
+(see :mod:`app.db.migrate`).
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 import asyncpg
 
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "apply_migrations",
@@ -54,8 +59,12 @@ async def get_asyncpg_pool() -> asyncpg.Pool:
     if _pool is not None and _pool_loop is loop:
         return _pool
     if _pool is not None:
-        # Pool was created on a different (likely closed) loop — replace it.
-        await _pool.close()
+        # The pool is bound to the loop that created it — awaiting close()
+        # from another (usually dead) loop raises "attached to a different
+        # loop". Drop the singleton instead; the old pool dies with its own
+        # loop (per-function test loops hit this path).
+        logger.debug("Replacing asyncpg pool created on a different event loop")
+        _pool = None
     _pool = await asyncpg.create_pool(
         dsn=settings.database_url,
         min_size=settings.database_pool_size,
@@ -84,9 +93,10 @@ def get_pool_if_created() -> asyncpg.Pool | None:
 
 
 async def close_pool() -> None:
-    """Close the shared pool and drop the singleton (safe to call twice)."""
+    """Close the shared asyncpg pool and drop the singleton (safe to call twice)."""
     global _pool, _pool_loop
-    if _pool is not None:
+    if _pool is not None and _pool_loop is asyncio.get_running_loop():
         await _pool.close()
+    # Foreign-loop pools are dropped without close (cross-loop await raises).
     _pool = None
     _pool_loop = None

@@ -1,4 +1,4 @@
-.PHONY: dev ui test lint clean install format check-lint check-format setup db-up db-migrate db-down redis-up redis-down stack-up stack-down
+.PHONY: dev ui test lint clean install format check-lint check-format setup db-up db-migrate db-downgrade db-current db-down redis-up redis-down stack-up stack-down
 
 # Install dependencies
 install:
@@ -47,12 +47,19 @@ check-lint:
 check-format:
 	uv run ruff format --check .
 
-# Database (M-03)
+# Database (M-03, A-11: alembic-backed)
 db-up:
 	docker compose up -d postgres
 
 db-migrate:
 	uv run python -m app.db.migrate
+
+# Rollback helpers (ROADMAP5 §18.2): make db-downgrade REV=base
+db-downgrade:
+	uv run python -m app.db.migrate downgrade $(REV)
+
+db-current:
+	uv run python -m app.db.migrate current
 
 db-down:
 	docker compose down

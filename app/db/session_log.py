@@ -22,10 +22,10 @@ trace/span. v1 events without those keys stay valid; readers must use
 Encryption at rest (A-05): when ``ORYA_SESSION_LOG_ENCRYPTION_ENABLED=true``
 and a ``ORYA_SESSION_LOG_ENCRYPTION_KEY`` is configured, the payload columns
 ``messages.content`` (TEXT) and ``messages.tool_calls`` (JSONB) are stored
-encrypted via PostgreSQL ``pgcrypto`` (``pgp_sym_encrypt``, armored). Reads
-transparently decrypt; the armor-prefix ``CASE`` guard means pre-existing
-plaintext rows remain readable (tolerant decrypt). The kill-switch is off by
-default so dev/tests keep working unchanged.
+encrypted via PostgreSQL ``pgcrypto`` (``pgp_sym_encrypt`` serialized as
+``orya1:`` + base64). Reads transparently decrypt; the prefix ``CASE`` guard
+means pre-existing plaintext rows remain readable (tolerant decrypt). The
+kill-switch is off by default so dev/tests keep working unchanged.
 
 Projection idempotency: every projection run reads
 ``{session_id}.meta.json`` (``last_processed_ts``), processes only
@@ -79,8 +79,13 @@ SESSION_STATUSES = frozenset({"active", "closed", "aborted"})
 #: Seconds between projection passes in :func:`projection_worker`.
 PROJECTION_INTERVAL_S = 30.0
 
-#: Leading marker of pgcrypto ASCII-armored output (A-05 tolerant decrypt).
-_ARMOR_PREFIX = "-----BEGIN PGP MESSAGE-----"
+#: Leading marker of encrypted session-log values (A-05 tolerant decrypt).
+#: Format: ``orya1:`` + ``encode(ciphertext, 'base64')``. Base64 rather than
+#: pgcrypto's ``armor()``: the stock ``postgres:16`` image ships pgcrypto 1.3,
+#: whose ``pgp_sym_decrypt`` rejects ASCII-armored input ("Wrong key or
+#: corrupt data"; the binary roundtrip with the same ciphertext works, and
+#: that build has no ``unarmor`` either). Verified against postgres:16.15.
+_ENCRYPTED_PREFIX = "orya1:"
 
 
 def _encryption_enabled() -> bool:
@@ -106,13 +111,17 @@ def _encryption_key() -> str:
 def _decrypt_content_sql(column: str, key_param: str) -> str:
     """SQL fragment decrypting a TEXT content column in place (A-05).
 
-    Only values carrying the pgcrypto armor prefix are decrypted; plaintext
+    Only values carrying the encryption prefix are decrypted; plaintext
     rows (written before encryption was enabled, or while the kill-switch
-    was off) pass through unchanged.
+    was off) pass through unchanged. ``pgp_sym_decrypt`` already returns
+    text — no ``convert_from`` wrap (stock pgcrypto has no text overload
+    for it).
     """
+    offset = len(_ENCRYPTED_PREFIX) + 1
     return (
-        f"CASE WHEN {column} LIKE '{_ARMOR_PREFIX}%' "
-        f"THEN convert_from(pgp_sym_decrypt({column}::bytea, ${key_param}), 'UTF8') "
+        f"CASE WHEN {column} LIKE '{_ENCRYPTED_PREFIX}%' "
+        f"THEN pgp_sym_decrypt(decode(substring({column} from {offset}), "
+        f"'base64'), ${key_param}) "
         f"ELSE {column} END"
     )
 
@@ -120,17 +129,18 @@ def _decrypt_content_sql(column: str, key_param: str) -> str:
 def _decrypt_tool_calls_sql(column: str, key_param: str) -> str:
     """SQL fragment decrypting a JSONB ``tool_calls`` column back to jsonb (A-05).
 
-    The encrypted form stores the armored ciphertext as a JSON string
-    (``to_jsonb(armor(...))``); the ``#>> '{}'`` extraction unwraps it to
-    text before ``pgp_sym_decrypt``, and the result is cast back to ``jsonb``
-    so asyncpg returns a decoded Python object (identical shape to the
-    plaintext path).
+    The encrypted form stores the base64 ciphertext as a JSON string
+    (``to_jsonb('orya1:' || encode(...))``); the ``#>> '{}'`` extraction
+    unwraps it to text before ``pgp_sym_decrypt``, and the result is cast
+    back to ``jsonb`` so asyncpg returns a decoded Python object
+    (identical shape to the plaintext path).
     """
+    offset = len(_ENCRYPTED_PREFIX) + 1
     return (
         f"CASE WHEN {column} IS NULL THEN NULL "
-        f"WHEN {column} #>> '{{}}' LIKE '{_ARMOR_PREFIX}%' "
-        f"THEN convert_from(pgp_sym_decrypt(({column} #>> '{{}}')::bytea, "
-        f"${key_param}), 'UTF8')::jsonb "
+        f"WHEN {column} #>> '{{}}' LIKE '{_ENCRYPTED_PREFIX}%' "
+        f"THEN pgp_sym_decrypt(decode(substring({column} #>> '{{}}' from "
+        f"{offset}), 'base64'), ${key_param})::jsonb "
         f"ELSE {column} END"
     )
 
@@ -372,8 +382,9 @@ async def log_message(
     requests); ``tool_call_id`` links tool results back to their request.
 
     When session-log encryption is enabled (A-05), ``content`` (TEXT) is
-    stored as pgcrypto armored ciphertext and ``tool_calls`` (JSONB) as
-    ``to_jsonb(armor(...))``; both are decrypted transparently on read.
+    stored as ``orya1:`` + base64 pgcrypto ciphertext and ``tool_calls``
+    (JSONB) as ``to_jsonb`` of the same value; both are decrypted
+    transparently on read.
 
     Returns the inserted row id.
     """
@@ -388,9 +399,13 @@ async def log_message(
         row = await pool.fetchrow(
             "INSERT INTO messages (session_id, seq, role, content, tool_calls, tool_call_id) "
             "SELECT $1, COALESCE(MAX(seq), 0) + 1, $2, "
-            "armor(pgp_sym_encrypt(convert_to($3, 'UTF8'), $6)), "
-            "CASE WHEN $4::text IS NULL THEN NULL "
-            "ELSE to_jsonb(armor(pgp_sym_encrypt(convert_to($4, 'UTF8'), $6))) END, "
+            # pgp_sym_encrypt is (text, text) in stock pgcrypto; base64
+            # serialization instead of armor() — postgres:16's pgcrypto 1.3
+            # cannot decrypt ASCII-armored input (A-05 fix, see _ENCRYPTED_PREFIX).
+            f"'{_ENCRYPTED_PREFIX}' || encode(pgp_sym_encrypt($3, $6), 'base64'), "
+            f"CASE WHEN $4::text IS NULL THEN NULL "
+            f"ELSE to_jsonb('{_ENCRYPTED_PREFIX}' || "
+            f"encode(pgp_sym_encrypt($4, $6), 'base64')) END, "
             "$5 "
             "FROM messages WHERE session_id = $1 "
             "RETURNING id",

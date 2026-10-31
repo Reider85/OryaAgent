@@ -4,7 +4,7 @@ Senior Python coding agent with UI and long-term memory.
 
 ## Phase: ALPHA
 
-Tickets M-00…M-28 (bootstrap → failure recovery) and MVP-POLISH are implemented. ALPHA adds the production-safe baseline: A-00 (auth middleware), A-01 (rate-limit), A-02 (LLM-seam trace-wrapping), A-03 (permission audit spans), A-04 (health endpoints), A-05 (session-log encryption), A-06 (JSONL span cross-link), A-07 (cache LRU + Redis tuning), A-08 (smoke tests v2), A-09 (this deploy guide) and A-10 (Docker compose v2). See [PROMPT_ALPHA.md](analytics/PROMPT_ALPHA.md) for the phase spec.
+Tickets M-00…M-28 (bootstrap → failure recovery) and MVP-POLISH are implemented. ALPHA adds the production-safe baseline: A-00 (auth middleware), A-01 (rate-limit), A-02 (LLM-seam trace-wrapping), A-03 (permission audit spans), A-04 (health endpoints), A-05 (session-log encryption), A-06 (JSONL span cross-link), A-07 (cache LRU + Redis tuning), A-08 (smoke tests v2), A-09 (this deploy guide), A-10 (Docker compose v2) and A-11 (Alembic migrations). See [PROMPT_ALPHA.md](analytics/PROMPT_ALPHA.md) for the phase spec.
 
 ## Quick Start
 
@@ -148,7 +148,7 @@ curl http://localhost:8000/health   # API
 - `AUTH_ENABLED=true` + `AUTH_SECRET_KEY` (≥ 32 chars) — Bearer-JWT on every non-public endpoint (A-00).
 - `ORYA_RATE_LIMIT_ENABLED=true` — 60 rpm per user, 10 rpm on `/learn` (A-01).
 - `ORYA_SESSION_LOG_ENCRYPTION_ENABLED=true` + `ORYA_SESSION_LOG_ENCRYPTION_KEY` (≥ 16 chars) — pgcrypto at-rest encryption for `messages.content` / `messages.tool_calls` (A-05; needs `make db-migrate` for the `pgcrypto` extension).
-- Run `orya db migrate` (idempotent) as part of every deploy.
+- Run `orya db migrate` (idempotent) as part of every deploy; roll a release back with `orya db downgrade <revision>` (e.g. `base`) — A-11.
 - Set `DATABASE_URL` / `REDIS_URL` explicitly; do not rely on the localhost defaults.
 - Narrow `CORS_ORIGINS` to your UI origin(s) instead of the `*` default.
 - Keep `LOG_LEVEL=INFO` (or `WARNING`); logs go to stdout/journald (the start scripts write `logs/*.log`).
@@ -331,12 +331,16 @@ tests/                   # Test suites
 PostgreSQL stores session metadata, typed messages, tool-call audit and the memory audit log; LangGraph checkpoints live in separate tables managed by `AsyncPostgresSaver`.
 
 - **Schema:** `app/db/schema.sql` (canonical) — tables `sessions`, `messages`, `tool_calls`, `memory_audit_log`.
-- **Migrations:** plain SQL files in `app/db/migrations/` (`NNNN_name.sql`), tracked in `schema_migrations`, applied idempotently:
+- **Migrations (A-11):** plain SQL files in `app/db/migrations/` (`NNNN_name.sql`) wrapped by Alembic revisions in `alembic/versions/` — upgrades execute the `.sql` files (single source of truth, drift-checked by `tests/unit/test_db_schema.py`), downgrades are inline DDL, and Alembic owns bookkeeping in `alembic_version`:
 
   ```bash
-  make db-up       # start PostgreSQL via docker compose
-  make db-migrate  # apply pending migrations (or: orya db migrate / python -m app.db.migrate)
+  make db-up                  # start PostgreSQL via docker compose
+  make db-migrate             # apply pending migrations (orya db migrate / python -m app.db.migrate)
+  make db-current             # show the current revision (orya db current)
+  make db-downgrade REV=base  # roll the schema back (orya db downgrade base)
   ```
+
+  Pre-Alembic databases migrate transparently: every `.sql` file is idempotent, so only `alembic_version` gets stamped (the legacy `schema_migrations` table is dropped). Phase-boundary rollbacks use the file stem as revision id, e.g. `alembic downgrade 0002_session_log_encryption` (see [ROADMAP5 §18.2](analytics/ROADMAP5.md)).
 
   Host port conflicts can be resolved with `POSTGRES_PORT=5435 make db-up` (plus a matching `DATABASE_URL`).
 - **Pool:** `from app.db import get_asyncpg_pool` — lazy asyncpg singleton from `settings.database_url` / `DATABASE_POOL_SIZE` / `DATABASE_MAX_OVERFLOW`.
@@ -416,11 +420,11 @@ A background projection worker starts with the FastAPI app (lifespan in `app/mai
 
 ### Encryption at rest (A-05)
 
-With `SESSION_LOG_ENCRYPTION_ENABLED=true` and `SESSION_LOG_ENCRYPTION_KEY` (≥ 16 chars — validation fails fast otherwise), `log_message()` encrypts the payload columns through PostgreSQL `pgcrypto` (`pgp_sym_encrypt`, armored ASCII) and `list_messages()` decrypts them:
+With `SESSION_LOG_ENCRYPTION_ENABLED=true` and `SESSION_LOG_ENCRYPTION_KEY` (≥ 16 chars — validation fails fast otherwise), `log_message()` encrypts the payload columns through PostgreSQL `pgcrypto` (`pgp_sym_encrypt`, serialized as `orya1:` + base64) and `list_messages()` decrypts them:
 
-- **Covered:** `messages.content` (TEXT) and `messages.tool_calls` (JSONB, ciphertext wrapped via `to_jsonb(armor(...))`).
+- **Covered:** `messages.content` (TEXT) and `messages.tool_calls` (JSONB, ciphertext wrapped via `to_jsonb('orya1:' || encode(...))`).
 - **Not covered:** LangGraph checkpoint tables — they are written by `AsyncPostgresSaver` outside the app writer; at-rest protection for the whole database belongs at the volume/disk layer.
-- **Legacy tolerance:** rows written before encryption (plaintext) still decrypt — the reader only applies `pgp_sym_decrypt` when the payload carries `-----BEGIN PGP MESSAGE-----`.
+- **Legacy tolerance:** rows written before encryption (plaintext) still decrypt — the reader only applies `pgp_sym_decrypt` when the payload carries the `orya1:` prefix (base64 rather than pgcrypto `armor()`: the stock `postgres:16` image's pgcrypto 1.3 cannot decrypt ASCII-armored input).
 - **Off by default** (dev/tests keep byte-identical plaintext); enabling requires migration `0002_session_log_encryption.sql` (`CREATE EXTENSION IF NOT EXISTS pgcrypto`).
 
 ### Span cross-link (A-06)
@@ -705,6 +709,7 @@ Strategies (ARCHITECT6 §4.2.2): `PREFERENCES.md` archives only `agent_inferred`
 - ✅ **A-08** - Smoke tests v2: +5 deterministic scenarios covering auth enforcement, operator-loop, rate-limit buckets, observability chain and the tracing kill-switch (`tests/smoke/test_smoke_v2.py`)
 - ✅ **A-09** - README v2: deploy guide (modes, Docker services, production checklist, Langfuse contract), full env-var reference, ALPHA sections, README-anchor unit tests
 - ✅ **A-10** - Docker compose v2: `deploy/Dockerfile` (uv + ripgrep, one image for api/chainlit), profile-based `docker-compose.yml` (`app`: api+chainlit; `observability`: Langfuse v3 stack + sampler-proxy), one-command deploy via `COMPOSE_PROFILES`, compose-structure unit tests
+- ✅ **A-11** - Alembic migrations: revision wrappers over the `.sql` files (`upgrade` reads the file, inline `downgrade` DDL), `alembic_version` bookkeeping with `schema_migrations` retirement, `orya db migrate|downgrade|current` CLI, isolated-schema rollback roundtrip test
 - ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for the 28 MVP tickets and [PROMPT_ALPHA.md](analytics/PROMPT_ALPHA.md) for A-00…A-20)
 
 ## LLM Providers (M-01)

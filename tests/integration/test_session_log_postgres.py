@@ -76,10 +76,9 @@ def test_session_log_projection_and_restart(
     async def scenario() -> None:
         if not await _database_reachable():
             pytest.skip("PostgreSQL not reachable — run `make db-up` first")
-        pool = await get_asyncpg_pool()
         thread_id = f"m14-{uuid.uuid4().hex[:8]}"
         try:
-            await apply_migrations(pool)
+            await apply_migrations()
             checkpointer = await get_checkpointer()
             graph = build_graph([echo], _tool_turn_model(), checkpointer, None)
             config = default_run_config(thread_id)
@@ -141,7 +140,7 @@ def test_log_message_roundtrip(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         pool = await get_asyncpg_pool()
         session_id = f"m14-{uuid.uuid4().hex[:8]}"
         try:
-            await apply_migrations(pool)
+            await apply_migrations()
             await log_message(session_id, "user", "hello", pool=pool)
             await log_message(
                 session_id,

@@ -1,5 +1,5 @@
 # A-10: keep the build context small — the image only needs pyproject.toml,
-# uv.lock, README.md and app/.
+# uv.lock, README.md, app/ and the alembic wiring (alembic.ini, alembic/ — A-11).
 .git
 .gitignore
 .venv

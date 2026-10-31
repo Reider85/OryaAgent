@@ -130,7 +130,17 @@ def main() -> None:
 
     db_parser = sub.add_parser("db", help="Database commands")
     db_sub = db_parser.add_subparsers(dest="db_command")
-    db_sub.add_parser("migrate", help="Apply pending SQL migrations (M-03)")
+    db_sub.add_parser(
+        "migrate", help="Apply pending migrations (A-11: alembic upgrade head)"
+    )
+    db_down_parser = db_sub.add_parser(
+        "downgrade", help="Downgrade to a revision (e.g. base) — A-11"
+    )
+    db_down_parser.add_argument(
+        "revision",
+        help="Target revision id, e.g. base or 0002_session_log_encryption",
+    )
+    db_sub.add_parser("current", help="Print the current database revision (A-11)")
 
     auth_parser = sub.add_parser("auth", help="Auth commands (A-00)")
     auth_sub = auth_parser.add_subparsers(dest="auth_command")
@@ -165,23 +175,30 @@ def main() -> None:
                 "Set these env vars to activate providers: %s",
                 "; ".join(f"{var}=..." for var in report.missing_env_vars),
             )
-    elif args.command == "db" and args.db_command == "migrate":
+    elif args.command == "db" and args.db_command in {
+        "migrate",
+        "downgrade",
+        "current",
+    }:
         import asyncio
 
-        from app.db import apply_migrations, close_pool, get_asyncpg_pool
+        from app.db.migrate import apply_migrations, current_revision, downgrade
 
-        async def _run_migrations() -> list[str]:
-            pool = await get_asyncpg_pool()
-            try:
-                return await apply_migrations(pool)
-            finally:
-                await close_pool()
+        async def _run_db_command() -> str:
+            if args.db_command == "migrate":
+                applied = await apply_migrations()
+                if applied:
+                    return "Applied migrations: " + ", ".join(applied)
+                return "No pending migrations."
+            if args.db_command == "downgrade":
+                reverted = await downgrade(args.revision)
+                if reverted:
+                    return "Downgraded from: " + ", ".join(reverted)
+                return f"Already at revision {args.revision}."
+            revision = await current_revision()
+            return f"Current revision: {revision or '(none — database not migrated)'}"
 
-        applied = asyncio.run(_run_migrations())
-        if applied:
-            logger.info("Applied migrations: %s", ", ".join(applied))
-        else:
-            logger.info("No pending migrations.")
+        logger.info(asyncio.run(_run_db_command()))
     elif args.command == "auth" and args.auth_command == "token":
         from app.core.auth import AuthError, create_token
 

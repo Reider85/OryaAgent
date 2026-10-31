@@ -90,11 +90,13 @@ def test_short_encryption_key_rejected(monkeypatch: pytest.MonkeyPatch):
 # --- SQL fragment helpers --------------------------------------------------
 
 
-def test_decrypt_content_sql_uses_armor_prefix_and_key_param():
+def test_decrypt_content_sql_uses_prefix_and_key_param():
     fragment = _decrypt_content_sql("content", "4")
-    assert "-----BEGIN PGP MESSAGE-----" in fragment
+    assert "orya1:" in fragment
     assert "pgp_sym_decrypt" in fragment
-    assert "convert_from" in fragment
+    assert "decode(substring(content from 7), 'base64')" in fragment
+    # pgp_sym_decrypt returns text — no convert_from() wrap (A-05 fix).
+    assert "convert_from" not in fragment
     assert "$4" in fragment
     assert "ELSE content END" in fragment
 
@@ -104,6 +106,7 @@ def test_decrypt_tool_calls_sql_guards_null_and_jsonb():
     assert "IS NULL THEN NULL" in fragment
     assert "#>> '{}'" in fragment
     assert "pgp_sym_decrypt" in fragment
+    assert "decode(substring(tool_calls #>> '{}' from 7), 'base64')" in fragment
     assert "::jsonb" in fragment
     assert "$4" in fragment
 
@@ -118,7 +121,7 @@ async def test_log_message_flag_off_sql_unchanged():
     _, args = pool.executed[1]
     insert_query = pool.executed[1][0]
     assert "pgp_sym_encrypt" not in insert_query
-    assert "armor(" not in insert_query
+    assert "encode(" not in insert_query
     assert args == ("s1", "user", "hello", None, None)
 
 
@@ -136,10 +139,14 @@ async def test_log_message_flag_on_encrypts_content_and_tool_calls(
     await log_message("s1", "assistant", "secret", tool_calls=calls, pool=pool)
 
     insert_query, args = pool.executed[1]
-    assert "armor(pgp_sym_encrypt(convert_to($3, 'UTF8'), $6))" in insert_query
+    # (text, text) pgcrypto overload + base64 with the orya1: prefix (A-05 fix).
+    assert "'orya1:' || encode(pgp_sym_encrypt($3, $6), 'base64')" in insert_query
     assert (
-        "to_jsonb(armor(pgp_sym_encrypt(convert_to($4, 'UTF8'), $6)))" in insert_query
+        "to_jsonb('orya1:' || encode(pgp_sym_encrypt($4, $6), 'base64'))"
+        in insert_query
     )
+    assert "convert_to" not in insert_query
+    assert "armor(" not in insert_query
     # args = (session_id, role, content, payload, tool_call_id, key)
     assert args[0] == "s1"
     assert args[1] == "assistant"
@@ -181,7 +188,7 @@ async def test_list_messages_flag_on_decrypts_in_sql(
     await list_messages("s1", limit=10, offset=5, pool=pool)
     query, args = pool.executed[0]
     assert "pgp_sym_decrypt" in query
-    assert "convert_from" in query
+    assert "convert_from" not in query
     # args = (session_id, limit, offset, key)
     assert args == ("s1", 10, 5, _KEY)
 

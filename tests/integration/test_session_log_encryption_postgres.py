@@ -6,11 +6,11 @@ Start infrastructure first::
 
 Covers the A-05 acceptance criteria: with
 ``ORYA_SESSION_LOG_ENCRYPTION_ENABLED=true`` + a key, the payload columns
-``messages.content`` / ``messages.tool_calls`` are stored as pgcrypto armored
-ciphertext (verified via a raw ``SELECT`` that forces text extraction), reads
-through :func:`list_messages` return the original plaintext, and pre-existing
-plaintext rows remain readable (tolerant decrypt). The pgcrypto extension is
-installed by migration ``0002``.
+``messages.content`` / ``messages.tool_calls`` are stored as pgcrypto
+ciphertext (``orya1:`` + base64; verified via a raw ``SELECT`` that forces
+text extraction), reads through :func:`list_messages` return the original
+plaintext, and pre-existing plaintext rows remain readable (tolerant
+decrypt). The pgcrypto extension is installed by migration ``0002``.
 
 The raw-ciphertext assertions extract columns to ``text`` in SQL (``#>>`` for
 the JSONB ``tool_calls``) so they do not depend on asyncpg's json/jsonb codec
@@ -33,7 +33,7 @@ from app.db import apply_migrations, close_pool, get_asyncpg_pool
 from app.db.session_log import list_messages, log_message
 
 _KEY = "integration-passphrase-32chars!"
-_ARMOR = "-----BEGIN PGP MESSAGE-----"
+_ENCRYPTED_PREFIX = "orya1:"
 
 
 async def _database_reachable() -> bool:
@@ -89,7 +89,7 @@ def test_encrypted_roundtrip_and_tolerant_decrypt(
         pool = await get_asyncpg_pool()
         session_id = f"a05-{uuid.uuid4().hex[:8]}"
         try:
-            await apply_migrations(pool)
+            await apply_migrations()
 
             # AC: pgcrypto extension is installed by migration 0002.
             ext = await pool.fetchval(
@@ -107,18 +107,18 @@ def test_encrypted_roundtrip_and_tolerant_decrypt(
                 pool=pool,
             )
 
-            # AC: raw SELECT shows armored ciphertext, not plaintext. Content
-            # is TEXT; tool_calls is JSONB so we extract to text via #>> to
-            # force a string regardless of asyncpg's jsonb codec.
+            # AC: raw SELECT shows the orya1:+base64 ciphertext, not plaintext.
+            # Content is TEXT; tool_calls is JSONB so we extract to text via
+            # #>> to force a string regardless of asyncpg's jsonb codec.
             rows = await pool.fetch(
                 "SELECT seq, content, tool_calls #>> '{}' AS tc_text "
                 "FROM messages WHERE session_id = $1 ORDER BY seq",
                 session_id,
             )
             assert len(rows) == 2
-            assert rows[0]["content"].startswith(_ARMOR)
+            assert rows[0]["content"].startswith(_ENCRYPTED_PREFIX)
             assert "hello world" not in rows[0]["content"]
-            assert rows[1]["tc_text"].startswith(_ARMOR)
+            assert rows[1]["tc_text"].startswith(_ENCRYPTED_PREFIX)
             assert "done" not in rows[1]["tc_text"]
 
             # AC: reads via list_messages decrypt back to the original.
@@ -158,7 +158,7 @@ def test_plaintext_path_unchanged_when_flag_off(
         pool = await get_asyncpg_pool()
         session_id = f"a05-plain-{uuid.uuid4().hex[:8]}"
         try:
-            await apply_migrations(pool)
+            await apply_migrations()
             await log_message(session_id, "user", "plain text", pool=pool)
             raw = await pool.fetchval(
                 "SELECT content FROM messages WHERE session_id = $1", session_id

@@ -17,8 +17,12 @@ ENV UV_FROZEN=1 \
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --no-dev --no-install-project
 
-# Project layer: the `app` package (providers YAML included) + console scripts.
+# Project layer: the `app` package (providers YAML included) + console scripts
+# + alembic wiring (alembic.ini, alembic/) — the api container runs
+# `orya db migrate` on start (A-11).
 COPY app ./app
+COPY alembic.ini ./
+COPY alembic ./alembic
 RUN uv sync --no-dev
 
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim

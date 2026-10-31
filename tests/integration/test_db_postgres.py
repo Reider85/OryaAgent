@@ -49,15 +49,15 @@ async def pool():
 
 
 async def test_migrations_apply_idempotently(pool: asyncpg.Pool):
-    first = await apply_migrations(pool)
-    second = await apply_migrations(pool)
+    first = await apply_migrations()
+    second = await apply_migrations()
     assert second == []
     if first:
         assert "0001_init" in first
 
 
 async def test_schema_tables_and_indexes_exist(pool: asyncpg.Pool):
-    await apply_migrations(pool)
+    await apply_migrations()
     rows = await pool.fetch(
         "SELECT table_name FROM information_schema.tables "
         "WHERE table_schema = 'public' AND table_name = ANY($1)",
@@ -79,7 +79,7 @@ async def test_schema_tables_and_indexes_exist(pool: asyncpg.Pool):
 
 
 async def test_crud_roundtrip_all_tables(pool: asyncpg.Pool):
-    await apply_migrations(pool)
+    await apply_migrations()
     session_id = f"20261020-000000-{uuid.uuid4().hex[:8]}"
     try:
         await pool.execute(
@@ -160,7 +160,7 @@ async def test_crud_roundtrip_all_tables(pool: asyncpg.Pool):
 
 
 async def test_session_delete_cascades_messages_and_tool_calls(pool: asyncpg.Pool):
-    await apply_migrations(pool)
+    await apply_migrations()
     session_id = f"20261020-000000-{uuid.uuid4().hex[:8]}"
     await pool.execute("INSERT INTO sessions (session_id) VALUES ($1)", session_id)
     msg_row = await pool.fetchrow(
@@ -197,7 +197,7 @@ def test_checkpointer_setup_creates_tables():
             pytest.skip("PostgreSQL not reachable — run `make db-up` first")
         p = await get_asyncpg_pool()
         try:
-            await apply_migrations(p)
+            await apply_migrations()
             await get_checkpointer()
             rows = await p.fetch(
                 "SELECT tablename FROM pg_tables "
@@ -218,3 +218,63 @@ def test_checkpointer_setup_creates_tables():
             loop.close()
     else:
         asyncio.run(scenario())
+
+
+async def _tables_in_schema(pool: asyncpg.Pool, schema: str) -> set[str]:
+    rows = await pool.fetch(
+        "SELECT table_name FROM information_schema.tables "
+        "WHERE table_schema = $1 AND table_name = ANY($2)",
+        schema,
+        list(APP_TABLES),
+    )
+    return {row["table_name"] for row in rows}
+
+
+async def test_downgrade_base_and_reupgrade_roundtrip(pool: asyncpg.Pool):
+    """A-11: `alembic downgrade base` + re-upgrade — ROADMAP5 §18.2 rollback.
+
+    Runs against a throwaway schema (``options=-c search_path=...`` on the
+    URL) so the suite never drops the developer database's real tables.
+    pgcrypto is DB-wide, though: the downgrade drops it, so the finally
+    branch restores it (the CASCADE schema drop can take it with the
+    throwaway schema's objects).
+    """
+    from urllib.parse import quote
+
+    from app.core.config import get_settings
+    from app.db.migrate import (
+        apply_migrations,
+        current_revision,
+        downgrade,
+        sync_url,
+    )
+
+    await apply_migrations()  # public baseline: alembic_version at head
+
+    schema = "alembic_rt_a11"
+    await pool.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+    base = sync_url(get_settings().database_url)
+    separator = "&" if "?" in base else "?"
+    rt_url = f"{base}{separator}options={quote(f'-c search_path={schema}', safe='')}"
+
+    try:
+        applied = await apply_migrations(rt_url)
+        assert applied == ["0001_init", "0002_session_log_encryption"]
+        assert await _tables_in_schema(pool, schema) == set(APP_TABLES)
+        assert await current_revision(rt_url) == "0002_session_log_encryption"
+
+        reverted = await downgrade("base", rt_url)
+        assert reverted == ["0001_init", "0002_session_log_encryption"]
+        assert await _tables_in_schema(pool, schema) == set()
+        assert await current_revision(rt_url) is None
+
+        reapplied = await apply_migrations(rt_url)
+        assert reapplied == ["0001_init", "0002_session_log_encryption"]
+        assert await _tables_in_schema(pool, schema) == set(APP_TABLES)
+    finally:
+        await pool.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        # pgcrypto is database-wide: the rt downgrade drops it and the CASCADE
+        # schema drop can leave a partial install behind — reinstall a clean
+        # copy in public for the rest of the suite (A-05).
+        await pool.execute("DROP EXTENSION IF EXISTS pgcrypto CASCADE")
+        await pool.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")

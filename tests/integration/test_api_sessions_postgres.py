@@ -74,7 +74,7 @@ def test_api_sessions_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
         if not await _database_reachable():
             pytest.skip("PostgreSQL not reachable — run `make db-up` first")
         pool = await get_asyncpg_pool()
-        await apply_migrations(pool)
+        await apply_migrations()
 
         # Fake LLM layer: in-memory checkpointer + canned turn.
         async def _memory_checkpointer():
