@@ -152,8 +152,36 @@ def main() -> None:
         "--ttl", type=int, default=None, help="Lifetime in seconds (default: settings)"
     )
 
+    config_parser = sub.add_parser(
+        "config", help="Effective settings & prod readiness (A-12)"
+    )
+    config_sub = config_parser.add_subparsers(dest="config_command")
+    config_sub.add_parser("show", help="Print redacted effective settings with sources")
+    config_sub.add_parser(
+        "check",
+        help="Validate ORYA_ENV=prod guardrails (exit 1 on violations)",
+    )
+
     args = parser.parse_args()
-    configure_cli_logging()
+
+    # A-12: config diagnostics run before logging setup so a prod-guard
+    # violation is reported as a readable message, not a traceback.
+    if args.command == "config":
+        from app.core.config_cli import run_config_check, run_config_show
+
+        if args.config_command == "show":
+            raise SystemExit(run_config_show())
+        if args.config_command == "check":
+            raise SystemExit(run_config_check())
+        config_parser.print_help()
+        raise SystemExit(0)
+
+    from pydantic import ValidationError
+
+    try:
+        configure_cli_logging()
+    except ValidationError as exc:  # prod-guard / fail-fast misconfiguration
+        raise SystemExit(f"Configuration error: {exc}") from exc
     if args.command == "import":
         from app.core.llm.importers import IMPORTERS
 

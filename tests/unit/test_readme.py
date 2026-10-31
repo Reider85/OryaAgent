@@ -42,6 +42,7 @@ CRITICAL_ENV_VARS = (
     "REDIS_URL",
     "ORYA_TRUSTED_CLIENTS",
     "LANGFUSE_HOST",
+    "ORYA_ENV",
 )
 
 
@@ -72,7 +73,7 @@ def test_readme_langfuse_section_is_forward_looking():
 
 def test_readme_phase_progress_covers_alpha_tickets():
     text = _readme()
-    for i in range(12):  # A-00..A-11 (A-11: Alembic migrations)
+    for i in range(13):  # A-00..A-12 (A-12: Settings v2)
         marker = f"**A-{i:02d}**"
         assert marker in text, f"Phase Progress is missing {marker}"
 

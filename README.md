@@ -4,7 +4,7 @@ Senior Python coding agent with UI and long-term memory.
 
 ## Phase: ALPHA
 
-Tickets M-00…M-28 (bootstrap → failure recovery) and MVP-POLISH are implemented. ALPHA adds the production-safe baseline: A-00 (auth middleware), A-01 (rate-limit), A-02 (LLM-seam trace-wrapping), A-03 (permission audit spans), A-04 (health endpoints), A-05 (session-log encryption), A-06 (JSONL span cross-link), A-07 (cache LRU + Redis tuning), A-08 (smoke tests v2), A-09 (this deploy guide), A-10 (Docker compose v2) and A-11 (Alembic migrations). See [PROMPT_ALPHA.md](analytics/PROMPT_ALPHA.md) for the phase spec.
+Tickets M-00…M-28 (bootstrap → failure recovery) and MVP-POLISH are implemented. ALPHA adds the production-safe baseline: A-00 (auth middleware), A-01 (rate-limit), A-02 (LLM-seam trace-wrapping), A-03 (permission audit spans), A-04 (health endpoints), A-05 (session-log encryption), A-06 (JSONL span cross-link), A-07 (cache LRU + Redis tuning), A-08 (smoke tests v2), A-09 (this deploy guide), A-10 (Docker compose v2), A-11 (Alembic migrations) and A-12 (Settings v2: `ORYA_ENV` prod-guard + `orya config` CLI). See [PROMPT_ALPHA.md](analytics/PROMPT_ALPHA.md) for the phase spec.
 
 ## Quick Start
 
@@ -145,6 +145,7 @@ curl http://localhost:8000/health   # API
 
 ### Production checklist
 
+- Set `ORYA_ENV=prod` (A-12) — the app refuses to boot unless `AUTH_ENABLED=true` + `AUTH_SECRET_KEY`, `ORYA_RATE_LIMIT_ENABLED=true` and a narrowed `CORS_ORIGINS` are in place; run `orya config check` to validate and `orya config show` to inspect the effective settings (secrets redacted, per-field source).
 - `AUTH_ENABLED=true` + `AUTH_SECRET_KEY` (≥ 32 chars) — Bearer-JWT on every non-public endpoint (A-00).
 - `ORYA_RATE_LIMIT_ENABLED=true` — 60 rpm per user, 10 rpm on `/learn` (A-01).
 - `ORYA_SESSION_LOG_ENCRYPTION_ENABLED=true` + `ORYA_SESSION_LOG_ENCRYPTION_KEY` (≥ 16 chars) — pgcrypto at-rest encryption for `messages.content` / `messages.tool_calls` (A-05; needs `make db-migrate` for the `pgcrypto` extension).
@@ -187,7 +188,7 @@ Until A-15 lands, use `ORYA_LLM_TRACE_EXPORTER=stdout` plus the JSONL `trace_id`
 
 ## Environment variables
 
-Every knob recognized by `app/core/config.py`, by group. Most settings accept two spellings — the legacy unprefixed name and an `ORYA_`-prefixed twin (e.g. `AUTH_ENABLED` and `ORYA_AUTH_ENABLED` are equivalent); either may be used, and env vars always win over `.env` and `~/.orya/config.yaml`. `~` in path values is expanded. The copyable template is `.env.example`.
+Every knob recognized by `app/core/config.py`, by group. Most settings accept two spellings — the legacy unprefixed name and an `ORYA_`-prefixed twin (e.g. `AUTH_ENABLED` and `ORYA_AUTH_ENABLED` are equivalent); either may be used, and env vars always win over `.env` and `~/.orya/config.yaml`. `~` in path values is expanded. The copyable template is `.env.example`. Verify the merged result with `orya config show` (redacted values + per-field source: `env` / `.env` / `config.yaml` / `default`) and `orya config check` (A-12: `ORYA_ENV=prod` guardrail validation, exit 1 on violations).
 
 ### LLM (M-01/M-02)
 
@@ -293,7 +294,8 @@ Every knob recognized by `app/core/config.py`, by group. Most settings accept tw
 
 | Env var | Default | Description |
 |---|---|---|
-| `LOG_LEVEL` / `ORYA_LOG_LEVEL` | `INFO` | Python logging level |
+| `ORYA_ENV` | `dev` | Deployment profile (A-12): `prod` fail-fast-requires auth, rate-limit and a non-wildcard CORS; `dev` keeps the kill-switch defaults |
+| `LOG_LEVEL` / `ORYA_LOG_LEVEL` | `INFO` | Python logging level (`DEBUG` \| `INFO` \| `WARNING` \| `ERROR` \| `CRITICAL`, case-insensitive) |
 | `ORYA_CONFIG_PATH` | `~/.orya/config.yaml` | Relocates the user YAML config file |
 | `ORIAHS_URL` / `ORYA_ORIAHS_URL` | — | OriaHS endpoint (PROD placeholder) |
 | `ORIAHS_TIMEOUT_S` / `ORYA_ORIAHS_TIMEOUT_S` | `30` | OriaHS request timeout |
@@ -710,6 +712,7 @@ Strategies (ARCHITECT6 §4.2.2): `PREFERENCES.md` archives only `agent_inferred`
 - ✅ **A-09** - README v2: deploy guide (modes, Docker services, production checklist, Langfuse contract), full env-var reference, ALPHA sections, README-anchor unit tests
 - ✅ **A-10** - Docker compose v2: `deploy/Dockerfile` (uv + ripgrep, one image for api/chainlit), profile-based `docker-compose.yml` (`app`: api+chainlit; `observability`: Langfuse v3 stack + sampler-proxy), one-command deploy via `COMPOSE_PROFILES`, compose-structure unit tests
 - ✅ **A-11** - Alembic migrations: revision wrappers over the `.sql` files (`upgrade` reads the file, inline `downgrade` DDL), `alembic_version` bookkeeping with `schema_migrations` retirement, `orya db migrate|downgrade|current` CLI, isolated-schema rollback roundtrip test
+- ✅ **A-12** - Settings v2: `ORYA_ENV=dev|prod` prod-guard (fail-fast on auth/rate-limit/CORS, non-fatal `prod_warnings()` for encryption/localhost), `orya config show|check` CLI (redacted effective settings with per-field source), LOG_LEVEL allow-list
 - ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for the 28 MVP tickets and [PROMPT_ALPHA.md](analytics/PROMPT_ALPHA.md) for A-00…A-20)
 
 ## LLM Providers (M-01)

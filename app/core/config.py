@@ -30,6 +30,7 @@ import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import yaml
 from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
@@ -39,6 +40,9 @@ ENV_VAR_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 _DEFAULT_DATABASE_URL = "postgresql://orya:orya_password@localhost:5432/orya_sessions"
 _DEFAULT_REDIS_URL = "redis://localhost:6379"
+
+_ALLOWED_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
+_LOCALHOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 # field -> ((accepted env names), (yaml path inside ~/.orya/config.yaml))
 # A yaml fallback is applied only when none of the env names are set AND the
@@ -280,6 +284,17 @@ class Settings(BaseSettings):
         description="Context-window budget; conversation history is trimmed to fit",
     )
 
+    # --- Deployment profile (A-12) ----------------------------------------
+    app_env: Literal["dev", "prod"] = Field(
+        default="dev",
+        validation_alias=AliasChoices("ORYA_ENV"),
+        description=(
+            "Deployment profile: dev keeps the MVP kill-switch defaults; "
+            "prod refuses to boot unless auth, rate-limit and CORS are "
+            "production-safe (A-12 fail-fast guard)"
+        ),
+    )
+
     # --- Logging ---------------------------------------------------------
     log_level: str = Field(
         default="INFO",
@@ -393,8 +408,8 @@ class Settings(BaseSettings):
     )
     sampler_proxy_url: str = Field(
         default="http://sampler-proxy:4321",
+        validation_alias=AliasChoices("ORYA_SAMPLER_PROXY_URL"),
         description="URL of the sampler-proxy service (e.g., http://sampler-proxy:4321)",
-        env=["ORYA_SAMPLER_PROXY_URL"],
     )
     # PROD: OriaHS
     oriahs_url: str | None = Field(
@@ -434,6 +449,19 @@ class Settings(BaseSettings):
         """Expand ``~`` in path fields (env values arrive as plain strings)."""
         if isinstance(value, str):
             return Path(value).expanduser()
+        return value
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _normalize_log_level(cls, value: Any) -> Any:
+        """Uppercase and allow-list LOG_LEVEL (A-12: typo'd levels fail fast)."""
+        if isinstance(value, str):
+            text = value.strip().upper()
+            if text and text not in _ALLOWED_LOG_LEVELS:
+                raise ValueError(
+                    f"LOG_LEVEL must be one of {sorted(_ALLOWED_LOG_LEVELS)}"
+                )
+            return text
         return value
 
     @field_validator("auth_secret_key")
@@ -479,6 +507,31 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _require_prod_safe_settings(self) -> Settings:
+        """A-12 fail-fast: ``ORYA_ENV=prod`` rejects dev-default safety knobs.
+
+        Critical checklist items (auth, rate-limit, CORS) block startup with a
+        single aggregated error; softer items surface via :meth:`prod_warnings`.
+        """
+        if self.app_env != "prod":
+            return self
+        problems: list[str] = []
+        if not self.auth_enabled:
+            problems.append("AUTH_ENABLED=true (Bearer-JWT enforcement is off)")
+        if not self.rate_limit_enabled:
+            problems.append(
+                "ORYA_RATE_LIMIT_ENABLED=true (per-user rate limiting is off)"
+            )
+        if "*" in self.cors_origin_list:
+            problems.append("CORS_ORIGINS=<ui origins> (wildcard * is dev-only)")
+        if problems:
+            raise ValueError(
+                "ORYA_ENV=prod requires production-safe settings — fix: "
+                + "; ".join(problems)
+            )
+        return self
+
     @property
     def cors_origin_list(self) -> list[str]:
         """``cors_origins`` as a list (CSV ``a,b`` or JSON ``["a","b"]``)."""
@@ -494,6 +547,31 @@ class Settings(BaseSettings):
         """``rate_limit_trusted_clients`` as a list of user ids / client IPs."""
         return parse_env_list(self.rate_limit_trusted_clients)
 
+    def prod_warnings(self) -> list[str]:
+        """Non-fatal production-readiness notes (A-12; ``orya config check``).
+
+        Returns [] outside ``app_env="prod"`` — dev keeps kill-switch defaults.
+        """
+        if self.app_env != "prod":
+            return []
+        warnings: list[str] = []
+        if not self.session_log_encryption_enabled:
+            warnings.append(
+                "ORYA_SESSION_LOG_ENCRYPTION_ENABLED is off — session-log "
+                "messages.content/tool_calls are stored in plaintext (A-05)"
+            )
+        for name, url in (
+            ("DATABASE_URL", self.database_url),
+            ("REDIS_URL", self.redis_url),
+        ):
+            host = _url_host(url)
+            if host in _LOCALHOSTS:
+                warnings.append(
+                    f"{name} points at {host} — acceptable for single-host "
+                    "deploys, set an explicit remote URL for multi-host prod"
+                )
+        return warnings
+
 
 def parse_env_list(value: str) -> list[str]:
     """Split a list-typed env value: JSON array if it looks like one, else CSV."""
@@ -504,6 +582,14 @@ def parse_env_list(value: str) -> list[str]:
         parsed = json.loads(text)
         return [str(item).strip() for item in parsed if str(item).strip()]
     return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def _url_host(url: str) -> str:
+    """Hostname of a connection URL ("" when absent/unparsable)."""
+    try:
+        return (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return ""
 
 
 def user_config_path() -> Path:

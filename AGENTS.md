@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Senior Python coding agent (FastAPI + LangGraph + LLM provider seam). MVP phase done through M-28 + MVP-POLISH. ALPHA done through A-11: A-00 (auth middleware), A-01 (rate-limit), A-02 (seam trace-wrapping), A-03 (permission audit spans), A-04 (health endpoints), A-05 (session-log encryption), A-06 (JSONL span cross-link), A-07 (cache LRU + Redis tuning), A-08 (smoke tests v2), A-09 (README v2 deploy guide — env-var reference + README anchors test in `tests/unit/test_readme.py`), A-10 (Docker compose v2 — profile stack + `deploy/Dockerfile`, structure test in `tests/unit/test_docker_compose.py`), A-11 (Alembic migrations — revision wrappers over `app/db/migrations/*.sql`, `alembic_version` bookkeeping, wiring test in `tests/unit/test_alembic.py`). Remaining ALPHA: A-12…A-20 (Settings v2, CostAwareRouter, cost-tracking, Langfuse, OryaObservability SDK, sampler-proxy, v7 additions).
+Senior Python coding agent (FastAPI + LangGraph + LLM provider seam). MVP phase done through M-28 + MVP-POLISH. ALPHA done through A-12: A-00 (auth middleware), A-01 (rate-limit), A-02 (seam trace-wrapping), A-03 (permission audit spans), A-04 (health endpoints), A-05 (session-log encryption), A-06 (JSONL span cross-link), A-07 (cache LRU + Redis tuning), A-08 (smoke tests v2), A-09 (README v2 deploy guide — env-var reference + README anchors test in `tests/unit/test_readme.py`), A-10 (Docker compose v2 — profile stack + `deploy/Dockerfile`, structure test in `tests/unit/test_docker_compose.py`), A-11 (Alembic migrations — revision wrappers over `app/db/migrations/*.sql`, `alembic_version` bookkeeping, wiring test in `tests/unit/test_alembic.py`), A-12 (Settings v2 — `ORYA_ENV=dev|prod` prod-guard fail-fast on auth/rate-limit/CORS + `orya config show|check` CLI in `app/core/config_cli.py`). Remaining ALPHA: A-13…A-20 (CostAwareRouter, cost-tracking, Langfuse, OryaObservability SDK, sampler-proxy, v7 additions).
 
 ## Ticket specs (read this first when implementing M-NN)
 
@@ -50,7 +50,7 @@ Senior Python coding agent (FastAPI + LangGraph + LLM provider seam). MVP phase 
 
 ## Config
 
-Precedence: env vars → `.env` (cwd) → `~/.orya/config.yaml` → defaults. YAML fallback only applies to ~10 fields in `_YAML_FALLBACKS` and only when env/.env don't set them; `${ENV_VAR}` substitution, unresolved keys treated as missing. `get_settings()` is `@lru_cache` — never bind `settings` at import time; use `get_settings()`. `ORYA_CONFIG_PATH` relocates user config.
+Precedence: env vars → `.env` (cwd) → `~/.orya/config.yaml` → defaults. YAML fallback only applies to ~10 fields in `_YAML_FALLBACKS` and only when env/.env don't set them; `${ENV_VAR}` substitution, unresolved keys treated as missing. `get_settings()` is `@lru_cache` — never bind `settings` at import time; use `get_settings()`. `ORYA_CONFIG_PATH` relocates user config. Since A-12 `ORYA_ENV=prod` fail-fast-requires auth, rate-limit and non-wildcard CORS (validator in `Settings`; softer items via `prod_warnings()`); `orya config show|check` (`app/core/config_cli.py`) prints the redacted effective settings with per-field source.
 
 ## Windows / agent shell
 

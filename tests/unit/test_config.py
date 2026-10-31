@@ -326,3 +326,89 @@ def test_factory_seam_still_works_with_merged_settings(tmp_path: Path):
     llm = get_llm()
     assert llm.openai_api_base == "http://localhost:11434/v1"
     assert llm.model == "qwen2.5-coder:14b"
+
+
+# --- deployment profile / prod-guard (A-12) --------------------------------
+
+
+def test_app_env_defaults_to_dev():
+    assert get_settings().app_env == "dev"
+
+
+def test_prod_guard_aggregates_all_violations(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ORYA_ENV", "prod")
+    clear_settings_cache()
+    with pytest.raises(ValidationError) as excinfo:
+        get_settings()
+    message = str(excinfo.value)
+    assert "AUTH_ENABLED=true" in message
+    assert "ORYA_RATE_LIMIT_ENABLED=true" in message
+    assert "CORS_ORIGINS=" in message
+
+
+def test_prod_guard_passes_with_safe_settings(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ORYA_ENV", "prod")
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.setenv("AUTH_SECRET_KEY", "s" * 32)
+    monkeypatch.setenv("ORYA_RATE_LIMIT_ENABLED", "true")
+    monkeypatch.setenv("CORS_ORIGINS", "http://localhost:8001")
+    clear_settings_cache()
+    assert get_settings().app_env == "prod"
+
+
+def test_prod_guard_rejects_wildcard_cors(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ORYA_ENV", "prod")
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.setenv("AUTH_SECRET_KEY", "s" * 32)
+    monkeypatch.setenv("ORYA_RATE_LIMIT_ENABLED", "true")
+    monkeypatch.setenv("CORS_ORIGINS", "*")
+    clear_settings_cache()
+    with pytest.raises(ValidationError, match="CORS_ORIGINS"):
+        get_settings()
+
+
+def test_prod_guard_requires_auth_secret(monkeypatch: pytest.MonkeyPatch):
+    """auth_enabled without a secret still fails the A-00 validator first."""
+    monkeypatch.setenv("ORYA_ENV", "prod")
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.setenv("ORYA_RATE_LIMIT_ENABLED", "true")
+    monkeypatch.setenv("CORS_ORIGINS", "http://localhost:8001")
+    clear_settings_cache()
+    with pytest.raises(ValidationError, match="AUTH_SECRET_KEY"):
+        get_settings()
+
+
+def test_prod_warnings_empty_in_dev():
+    assert get_settings().prod_warnings() == []
+
+
+def test_prod_warnings_report_encryption_and_localhost(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("ORYA_ENV", "prod")
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.setenv("AUTH_SECRET_KEY", "s" * 32)
+    monkeypatch.setenv("ORYA_RATE_LIMIT_ENABLED", "true")
+    monkeypatch.setenv("CORS_ORIGINS", "http://localhost:8001")
+    clear_settings_cache()
+    warnings = get_settings().prod_warnings()
+    assert any("SESSION_LOG_ENCRYPTION" in w for w in warnings)
+    assert any("DATABASE_URL" in w for w in warnings)
+    assert any("REDIS_URL" in w for w in warnings)
+
+
+def test_log_level_normalized_to_uppercase(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LOG_LEVEL", "debug")
+    clear_settings_cache()
+    assert get_settings().log_level == "DEBUG"
+
+
+def test_log_level_invalid_rejected():
+    with pytest.raises(ValidationError, match="LOG_LEVEL"):
+        Settings(log_level="VERBOSE")
+
+
+def test_sampler_proxy_url_env_alias(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ORYA_SAMPLER_PROXY_URL", "http://custom-proxy:9999")
+    clear_settings_cache()
+    assert get_settings().sampler_proxy_url == "http://custom-proxy:9999"
