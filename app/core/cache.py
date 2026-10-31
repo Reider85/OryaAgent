@@ -47,6 +47,7 @@ import hashlib
 import json
 import logging
 import time
+from collections import OrderedDict
 from contextlib import suppress
 from datetime import date
 from typing import Any, Protocol, runtime_checkable
@@ -118,15 +119,18 @@ class _Stats:
     def __init__(self) -> None:
         self.hits = 0
         self.misses = 0
+        self.evictions = 0
         self._tools: dict[str, dict[str, int]] = {}
 
     def bump(self, tool: str, field: str) -> None:
-        counts = self._tools.setdefault(tool, {"hits": 0, "misses": 0})
+        counts = self._tools.setdefault(tool, {"hits": 0, "misses": 0, "evictions": 0})
         counts[field] += 1
         if field == "hits":
             self.hits += 1
-        else:
+        elif field == "misses":
             self.misses += 1
+        else:  # evictions
+            self.evictions += 1
 
     def snapshot(self) -> dict[str, dict[str, int]]:
         return {tool: dict(counts) for tool, counts in self._tools.items()}
@@ -134,21 +138,25 @@ class _Stats:
     def reset(self) -> None:
         self.hits = 0
         self.misses = 0
+        self.evictions = 0
         self._tools.clear()
 
 
 class MemoryCache:
-    """Process-local TTL cache with hit/miss counters.
+    """Process-local TTL cache with hit/miss counters and LRU eviction.
 
     Single-process only (dev/test default). ``init_cache()`` swaps it
     for the Redis :class:`CacheWrapper` when the server is reachable -
     tools keep calling :func:`get_cache` and stay backend-agnostic.
     """
 
-    def __init__(self, default_ttl: float = DEFAULT_TTL_SECONDS) -> None:
+    def __init__(
+        self, default_ttl: float = DEFAULT_TTL_SECONDS, max_entries: int = 1024
+    ) -> None:
         self.default_ttl = default_ttl
+        self.max_entries = max_entries
         self._stats = _Stats()
-        self._entries: dict[str, tuple[str, float | None]] = {}
+        self._entries: OrderedDict[str, tuple[str, float | None]] = OrderedDict()
         self._by_path: dict[str, set[str]] = {}
 
     @property
@@ -160,6 +168,11 @@ class MemoryCache:
     def misses(self) -> int:
         """Total cache misses (kept for existing tests/smoke checks)."""
         return self._stats.misses
+
+    @property
+    def evictions(self) -> int:
+        """Total cache evictions (A-07 LRU)."""
+        return self._stats.evictions
 
     def _alive(self, key: str) -> str | None:
         entry = self._entries.get(key)
@@ -177,6 +190,9 @@ class MemoryCache:
         if value is None:
             self._stats.bump(tool, "misses")
             return None
+        # LRU: move to end on access
+        if key in self._entries:
+            self._entries.move_to_end(key)
         self._stats.bump(tool, "hits")
         return value
 
@@ -193,6 +209,19 @@ class MemoryCache:
         self._entries[key] = (value, expires_at)
         if path:
             self._by_path.setdefault(path, set()).add(key)
+
+        # LRU eviction: remove oldest if over capacity
+        if self.max_entries > 0 and len(self._entries) > self.max_entries:
+            oldest_key, _ = self._entries.popitem(last=False)
+            # Remove from path index if present
+            for _path_key, keys in self._by_path.items():
+                if oldest_key in keys:
+                    keys.remove(oldest_key)
+                    # Remove empty path entries to keep index clean
+                    if not keys:
+                        del self._by_path[_path_key]
+                    break
+            self._stats.bump(_tool_from_key(oldest_key), "evictions")
 
     async def invalidate(self, path: str) -> None:
         """Drop every cached key registered for ``path`` (M-21 hook)."""
@@ -355,16 +384,28 @@ async def init_cache(*, force: bool = False) -> None:
 
     settings = get_settings()
     ttl = settings.cache_ttl_seconds
+    max_entries = settings.cache_max_entries
     backend = settings.cache_backend
     if backend == "memory":
-        set_cache(MemoryCache(default_ttl=ttl))
+        set_cache(MemoryCache(default_ttl=ttl, max_entries=max_entries))
         _initialized = True
-        logger.info("Tool cache backend: MemoryCache (TTL %.0fs)", ttl)
+        logger.info(
+            "Tool cache backend: MemoryCache (TTL %.0fs, max_entries=%s)",
+            ttl,
+            max_entries if max_entries > 0 else "unlimited",
+        )
         return
 
     from redis.asyncio import Redis
 
-    client = Redis.from_url(settings.redis_url, decode_responses=True)
+    client = Redis.from_url(
+        settings.redis_url,
+        decode_responses=True,
+        max_connections=settings.redis_pool_max_connections,
+        socket_connect_timeout=settings.redis_socket_timeout_seconds,
+        socket_timeout=settings.redis_socket_timeout_seconds,
+        health_check_interval=30,
+    )
     try:
         await asyncio.wait_for(client.ping(), timeout=REDIS_PROBE_TIMEOUT_S)
     except Exception as exc:
@@ -375,16 +416,18 @@ async def init_cache(*, force: bool = False) -> None:
         logger.warning(
             "Redis unavailable (%s); tool cache falling back to MemoryCache", exc
         )
-        set_cache(MemoryCache(default_ttl=ttl))
+        set_cache(MemoryCache(default_ttl=ttl, max_entries=max_entries))
         _initialized = True
         return
     _redis_client = client
     set_cache(CacheWrapper(client, ttl=ttl))
     _initialized = True
     logger.info(
-        "Tool cache backend: CacheWrapper/Redis at %s (TTL %.0fs)",
+        "Tool cache backend: CacheWrapper/Redis at %s (TTL %.0fs, max_connections=%d, socket_timeout=%.1fs)",
         settings.redis_url,
         ttl,
+        settings.redis_pool_max_connections,
+        settings.redis_socket_timeout_seconds,
     )
 
 
@@ -406,7 +449,7 @@ async def close_cache() -> None:
 def get_cache_stats() -> dict[str, Any]:
     """Aggregate stats for the metrics endpoints (M-21).
 
-    Returns ``{backend, ttl_seconds, tools: {tool: {hits, misses,
+    Returns ``{backend, ttl_seconds, max_entries, evictions, tools: {tool: {hits, misses,
     hit_rate}}}``. Counters are process-local for both backends (the
     Redis mirror keys are for cross-process tooling; A-15 formalizes
     Prometheus/Grafana + daily aggregation).
@@ -427,7 +470,15 @@ def get_cache_stats() -> dict[str, Any]:
     ttl = getattr(cache, "default_ttl", None)
     if ttl is None:
         ttl = getattr(cache, "ttl", None)
-    return {"backend": type(cache).__name__, "ttl_seconds": ttl, "tools": tools}
+    max_entries = getattr(cache, "max_entries", None)
+    evictions = getattr(cache, "_stats.evictions", 0) if hasattr(cache, "_stats") else 0
+    return {
+        "backend": type(cache).__name__,
+        "ttl_seconds": ttl,
+        "max_entries": max_entries,
+        "evictions": evictions,
+        "tools": tools,
+    }
 
 
 def build_cache_key(tool_name: str, args: dict[str, Any], mtime_ns: int) -> str:

@@ -19,6 +19,7 @@ services:
   redis:
     image: redis:7
     restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     ports:
       - "${REDIS_PORT:-6379}:6379"
     healthcheck:

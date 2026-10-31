@@ -172,6 +172,28 @@ class Settings(BaseSettings):
             "redis: require Redis at startup; memory: never use Redis"
         ),
     )
+    cache_max_entries: int = Field(
+        default=1024,
+        ge=0,
+        validation_alias=AliasChoices("ORYA_CACHE_MAX_ENTRIES", "CACHE_MAX_ENTRIES"),
+        description="MemoryCache LRU capacity; 0 = unlimited (default: 1024)",
+    )
+    redis_pool_max_connections: int = Field(
+        default=10,
+        ge=1,
+        validation_alias=AliasChoices(
+            "ORYA_REDIS_POOL_MAX_CONNECTIONS", "REDIS_POOL_MAX_CONNECTIONS"
+        ),
+        description="Redis client pool max connections",
+    )
+    redis_socket_timeout_seconds: float = Field(
+        default=5.0,
+        ge=0.1,
+        validation_alias=AliasChoices(
+            "ORYA_REDIS_SOCKET_TIMEOUT_SECONDS", "REDIS_SOCKET_TIMEOUT_SECONDS"
+        ),
+        description="Redis client socket timeout in seconds",
+    )
 
     # --- L0 memory (M-25, M-27) -------------------------------------------
     memory_dir: Path = Field(

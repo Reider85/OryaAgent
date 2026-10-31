@@ -150,7 +150,7 @@ async def test_memory_cache_miss_then_hit_counts():
     assert await cache.get(key) == "payload"
     assert cache.hits == 1
     assert cache.misses == 1
-    assert cache.stats() == {"read": {"hits": 1, "misses": 1}}
+    assert cache.stats() == {"read": {"hits": 1, "misses": 1, "evictions": 0}}
 
 
 async def test_memory_cache_ttl_expiry(monkeypatch: pytest.MonkeyPatch):
@@ -205,7 +205,7 @@ async def test_cache_wrapper_roundtrip_sets_ttl():
     _, expires_at = fake.store[key]
     assert expires_at is not None
     assert 0 < expires_at - time_module.monotonic() <= 120
-    assert wrapper.stats() == {"read": {"hits": 1, "misses": 1}}
+    assert wrapper.stats() == {"read": {"hits": 1, "misses": 1, "evictions": 0}}
 
 
 async def test_cache_wrapper_explicit_ttl_overrides_default():
@@ -254,7 +254,7 @@ async def test_cache_wrapper_softfails_when_redis_down():
     assert await wrapper.get(key) is None  # degrade to a miss, no raise
     await wrapper.set(key, "v", path="/abs/a")  # skipped, no raise
     await wrapper.invalidate("/abs/a")  # skipped, no raise
-    assert wrapper.stats() == {"read": {"hits": 0, "misses": 1}}
+    assert wrapper.stats() == {"read": {"hits": 0, "misses": 1, "evictions": 0}}
 
 
 # --- from_cache_result -------------------------------------------------------
@@ -394,4 +394,138 @@ async def test_get_cache_stats_shape():
     stats = get_cache_stats()
     assert stats["backend"] == "MemoryCache"
     assert stats["ttl_seconds"] == cache.default_ttl
+    assert stats["max_entries"] == 1024  # default
+    assert stats["evictions"] == 0
     assert stats["tools"]["read"] == {"hits": 1, "misses": 1, "hit_rate": 0.5}
+
+
+# --- LRU eviction tests (A-07) --------------------------------------------------
+
+
+async def test_memory_cache_lru_eviction_order():
+    """Test that entries are evicted in LRU order (oldest first)."""
+    cache = MemoryCache(max_entries=2)
+    key1 = _key("read", "a.py")
+    key2 = _key("read", "b.py")
+    key3 = _key("read", "c.py")
+
+    # Fill cache to capacity
+    await cache.set(key1, "a")
+    await cache.set(key2, "b")
+
+    # Both should be present
+    assert await cache.get(key1) == "a"
+    assert await cache.get(key2) == "b"
+    assert cache.evictions == 0
+
+    # Add third entry - should evict the oldest (key1)
+    await cache.set(key3, "c")
+    assert cache.evictions == 1
+    assert await cache.get(key1) is None  # evicted
+    assert await cache.get(key2) == "b"  # still there (was recently accessed)
+    assert await cache.get(key3) == "c"  # newest
+
+
+async def test_memory_cache_lru_access_order():
+    """Test that accessing an entry makes it 'recent' (LRU ordering)."""
+    cache = MemoryCache(max_entries=2)
+    key1 = _key("read", "a.py")
+    key2 = _key("read", "b.py")
+    key3 = _key("read", "c.py")
+
+    # Fill cache
+    await cache.set(key1, "a")
+    await cache.set(key2, "b")
+
+    # Access key1 to make it recent
+    await cache.get(key1)
+
+    # Add key3 - should evict key2 (not recently accessed)
+    await cache.set(key3, "c")
+    assert cache.evictions == 1
+    assert await cache.get(key1) == "a"  # still there (was recently accessed)
+    assert await cache.get(key2) is None  # evicted
+    assert await cache.get(key3) == "c"  # newest
+
+
+async def test_memory_cache_lru_unlimited_max_entries_zero():
+    """Test that max_entries=0 means unlimited (no LRU eviction)."""
+    cache = MemoryCache(max_entries=0)  # unlimited
+    key1 = _key("read", "a.py")
+    key2 = _key("read", "b.py")
+    key3 = _key("read", "c.py")
+    key4 = _key("read", "d.py")
+
+    # Add many entries
+    for i, key in enumerate([key1, key2, key3, key4], 1):
+        await cache.set(key, f"v{i}")
+
+    # All should be present
+    assert await cache.get(key1) == "v1"
+    assert await cache.get(key2) == "v2"
+    assert await cache.get(key3) == "v3"
+    assert await cache.get(key4) == "v4"
+    assert cache.evictions == 0  # no eviction with unlimited
+
+
+async def test_memory_cache_lru_evictions_counter():
+    """Test that evictions are counted per tool."""
+    cache = MemoryCache(max_entries=2)
+    key1 = _key("read", "a.py")
+    key2 = _key("read", "b.py")
+    key3 = _key("read", "c.py")
+    key4 = _key("grep", "x.txt")  # different tool
+
+    # Fill read cache
+    await cache.set(key1, "a")
+    await cache.set(key2, "b")
+
+    # Evict read entries
+    await cache.set(key3, "c")
+    assert cache.evictions == 1
+    assert cache._stats._tools["read"]["evictions"] == 1
+
+    # Add grep entry - should evict oldest entry (key2, still a read entry)
+    await cache.set(key4, "x")
+    assert cache.evictions == 2  # one more eviction (key2)
+    assert (
+        cache._stats._tools["read"]["evictions"] == 2
+    )  # both evictions were read entries
+    assert (
+        cache._stats._tools.get("grep", {}).get("evictions", 0) == 0
+    )  # no grep evictions
+
+
+async def test_memory_cache_lru_path_index_consistency():
+    """Test that LRU eviction also removes entries from path index."""
+    cache = MemoryCache(max_entries=2)
+    key1 = _key("read", "/a.py")
+    key2 = _key("read", "/b.py")
+    key3 = _key("read", "/c.py")
+
+    # Set with paths
+    await cache.set(key1, "a", path="/a.py")
+    await cache.set(key2, "b", path="/b.py")
+
+    # Both should be present in path index
+    assert "/a.py" in cache._by_path
+    assert "/b.py" in cache._by_path
+
+    # Add third entry - should evict key1 and remove from path index
+    await cache.set(key3, "c", path="/c.py")
+    assert cache.evictions == 1
+    assert "/a.py" not in cache._by_path  # path index cleaned up
+    assert "/b.py" in cache._by_path  # still there
+    assert "/c.py" in cache._by_path  # new entry
+
+
+async def test_init_cache_uses_max_entries_setting(monkeypatch: pytest.MonkeyPatch):
+    """Test that init_cache uses the ORYA_CACHE_MAX_ENTRIES setting."""
+    monkeypatch.setenv("ORYA_CACHE_BACKEND", "memory")
+    monkeypatch.setenv("ORYA_CACHE_MAX_ENTRIES", "512")
+    clear_settings_cache()
+
+    await init_cache(force=True)
+    cache = get_cache()
+    assert isinstance(cache, MemoryCache)
+    assert cache.max_entries == 512

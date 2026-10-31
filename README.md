@@ -266,6 +266,7 @@ Repeated tool calls for unchanged files are served from a cache instead of re-ru
 
 - **Keys:** `orya:tool_cache:{tool}:{sha256(args + mtime_ns)}` — the file mtime is part of the key, so any change makes the next call a miss automatically.
 - **Backends:** `CacheWrapper` (Redis) is the primary backend; `ORYA_CACHE_BACKEND` selects `auto` (probe Redis at startup, fall back to `MemoryCache` with a warning — the default), `redis` (fail fast) or `memory` (never touch Redis). TTL is `ORYA_CACHE_TTL_SECONDS` (default 300s per BACKLOG5).
+- **LRU eviction:** `MemoryCache` has configurable capacity (`ORYA_CACHE_MAX_ENTRIES=1024`); 0 = unlimited. Entries are evicted LRU when the capacity is exceeded. Redis uses server-side LRU (`maxmemory 256mb --maxmemory-policy allkeys-lru` in docker-compose).
 - **Cacheable:** `read`, `grep`, `glob`. Never cached: `write`, `edit`, `bash` (side effects) — write/edit instead call `invalidate_cache_for_path()` (`app/hooks/cache_invalidation.py`), which drops every entry registered for the changed path through the Redis `orya:tool_cache:idx:{path}` index.
 - **Cache-hit marker:** when a tool call goes through the graph, a hit returns a `ToolMessage` with `metadata={"from_cache": true}` (direct `ainvoke()` calls keep returning the plain payload).
 - **Stats:** process-local per-tool counters (Redis additionally mirrors `orya:cache_stats:{date}:{tool}` hashes).
@@ -273,7 +274,7 @@ Repeated tool calls for unchanged files are served from a cache instead of re-ru
 ```bash
 make redis-up   # start Redis (docker compose), optional — auto mode falls back to memory
 curl -s localhost:8000/metrics            # Prometheus text: orya_tool_cache_hits_total{tool="read"}
-curl -s localhost:8000/tools/cache-stats  # {"backend": "...", "tools": {"read": {"hits": 1, "misses": 1, "hit_rate": 0.5}}}
+curl -s localhost:8000/tools/cache-stats  # {"backend": "...", "max_entries": 1024, "evictions": 0, "tools": {"read": {"hits": 1, "misses": 1, "hit_rate": 0.5}}}
 ```
 
 Host port conflicts can be resolved with `REDIS_PORT=6381 make redis-up` (plus a matching `REDIS_URL`).
