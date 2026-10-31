@@ -146,17 +146,25 @@ def test_health_observability_stdout_exporter(client: TestClient):
     assert data["exporter_connected"] is True
 
 
-def test_health_observability_permission_disabled(client: TestClient):
+def test_health_observability_permission_disabled(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
     """Test /health/observability with permissions disabled."""
-    os.environ["ORYA_LLM_TRACE_ENABLED"] = "true"
-    os.environ["ORYA_PERMISSION_AUDIT_ENABLED"] = "false"
+    monkeypatch.setenv("ORYA_LLM_TRACE_ENABLED", "true")
+    monkeypatch.setenv("ORYA_PERMISSION_AUDIT_ENABLED", "false")
     clear_settings_cache()
 
-    response = client.get("/health/observability")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["sdk_enabled"] is True
-    assert data["guardrail_ready"] is False
+    try:
+        response = client.get("/health/observability")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["sdk_enabled"] is True
+        assert data["guardrail_ready"] is False
+    finally:
+        # Drop the poisoned lru_cache entry: monkeypatch restores the env
+        # only after teardown, and a stale False would leak into later
+        # modules (test_permission_audit reads it per check).
+        clear_settings_cache()
 
 
 # --- /health/sampler-proxy endpoint -------------------------------------------

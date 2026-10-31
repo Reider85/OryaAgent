@@ -16,9 +16,13 @@ def isolated_permission_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Sandbox config and start each test with an empty span buffer."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("ORYA_PERMISSION_AUDIT_ENABLED", raising=False)
+    # The lru_cache may still hold permission_audit_enabled=False from an
+    # earlier module that mutated the env raw — drop it (AGENTS sandbox rule).
+    clear_settings_cache()
     clear_span_buffer()
     yield
     clear_span_buffer()
+    clear_settings_cache()
 
 
 def test_permission_check_emits_span():

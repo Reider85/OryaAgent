@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Senior Python coding agent (FastAPI + LangGraph + LLM provider seam). MVP phase done through M-28 + MVP-POLISH (README lags at M-27; git log is truth). ALPHA started: A-00 (auth middleware), A-01 (rate-limit), A-02 (seam trace-wrapping), A-03 (permission audit spans).
+Senior Python coding agent (FastAPI + LangGraph + LLM provider seam). MVP phase done through M-28 + MVP-POLISH. ALPHA done through A-09: A-00 (auth middleware), A-01 (rate-limit), A-02 (seam trace-wrapping), A-03 (permission audit spans), A-04 (health endpoints), A-05 (session-log encryption), A-06 (JSONL span cross-link), A-07 (cache LRU + Redis tuning), A-08 (smoke tests v2), A-09 (README v2 deploy guide — env-var reference + README anchors test in `tests/unit/test_readme.py`). Remaining ALPHA: A-10…A-20 (Docker stack, Alembic, Settings v2, CostAwareRouter, cost-tracking, Langfuse, OryaObservability SDK, sampler-proxy, v7 additions).
 
 ## Ticket specs (read this first when implementing M-NN)
 

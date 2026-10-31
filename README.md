@@ -2,9 +2,9 @@
 
 Senior Python coding agent with UI and long-term memory.
 
-## Phase: MVP
+## Phase: ALPHA
 
-Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (PostgreSQL schema), M-04 (LangGraph core), M-05 (system-prompt builder), M-06 (context manager), M-07 (tool `read`), M-08 (tool `write`), M-09 (tool `edit`), M-10 (tool `bash`), M-11 (tools `grep`/`glob`), M-12 (tool-registry integration), M-13 (permissions), M-14 (session-log), M-15 (Chainlit UI), M-16 (permission ask-prompt), M-17 (sidebar/settings), M-18 (smoke tests), M-20 (sessions API), M-21 (Redis cache), M-22 (prompt-injection defense), M-23 (token-efficient output) and M-24 (Chainlit via FastAPI/SSE) are implemented.
+Tickets M-00…M-28 (bootstrap → failure recovery) and MVP-POLISH are implemented. ALPHA adds the production-safe baseline: A-00 (auth middleware), A-01 (rate-limit), A-02 (LLM-seam trace-wrapping), A-03 (permission audit spans), A-04 (health endpoints), A-05 (session-log encryption), A-06 (JSONL span cross-link), A-07 (cache LRU + Redis tuning), A-08 (smoke tests v2) and A-09 (this deploy guide). See [PROMPT_ALPHA.md](analytics/PROMPT_ALPHA.md) for the phase spec.
 
 ## Quick Start
 
@@ -45,12 +45,24 @@ Tickets M-00 (bootstrap), M-01 (LLM-provider-seam), M-02 (configuration), M-03 (
    curl http://localhost:8000/health
    # Should return: {"status": "ok", "message": "OryaAgent API is running"}
    ```
+   `/health` is always public; once `AUTH_ENABLED=true` every other endpoint requires a `Authorization: Bearer <token>` header (see [Authentication (A-00)](#authentication-a-00)).
 
 6. **Start the Chainlit UI (another terminal):**
    ```bash
    make ui
    ```
-   The chat opens on http://localhost:8001 and talks to the FastAPI server over HTTP/SSE (`ORYA_API_URL`, default `http://127.0.0.1:8000`) ? `make dev` must be running.
+   The chat opens on http://localhost:8001 and talks to the FastAPI server over HTTP/SSE (`ORYA_API_URL`, default `http://127.0.0.1:8000`) — `make dev` must be running.
+
+### One-command start
+
+Instead of running the steps above by hand:
+
+```bash
+scripts/start.sh              # Linux / macOS / Git Bash (Windows)
+powershell -ExecutionPolicy Bypass -File scripts\start.ps1   # native Windows
+```
+
+The script runs the full bring-up: `uv sync` → `docker compose up -d postgres redis` → `orya db migrate` (idempotent) → background API (`:8000`) → background Chainlit UI (`:8001`), waiting on `/health` at each stage. Logs go to `logs/api.log`, `logs/ui.log` (plus `.err.log` twins); ports and URLs are picked up from the environment or `.env` and recorded in `logs/runtime.env`. Stop everything with `scripts/stop.sh` / `scripts/stop.ps1`. Flags: `--skip-sync`, `--reload` (uvicorn autoreload).
 
 ### Development Commands
 
@@ -85,24 +97,209 @@ Settings are typed in `app/core/config.py` (pydantic-settings, M-02). Sources by
    ```
 3. **Defaults** in `Settings` (provider `anthropic`, model `claude-sonnet-3.5`, permission policy `strict`, ...).
 
+The full env-var reference — every knob, its aliases and defaults — lives in [Environment variables](#environment-variables) below.
+
 ```python
 from app.core.config import get_settings
 
 settings = get_settings()
 ```
 
+## Deploy guide
+
+Three supported ways to run OryaAgent, from a laptop to a single-host deployment:
+
+| Mode | Command | What runs |
+|---|---|---|
+| Dev (manual) | `make dev` + `make ui` | API on `:8000`, Chainlit on `:8001`; infra via `make db-up` / `make redis-up` |
+| One-command | `scripts/start.sh` or `scripts\start.ps1` | `uv sync` → compose postgres/redis → migrations → background API + UI (see [One-command start](#one-command-start)) |
+| Infra in Docker | `docker compose up -d` | PostgreSQL 16 + Redis 7 only — the app itself runs on the host |
+
+### Docker services (today)
+
+`docker-compose.yml` provides the stateful dependencies only:
+
+| Service | Image | Host port | Notes |
+|---|---|---|---|
+| `postgres` | `postgres:16` | `${POSTGRES_PORT:-5432}` | db/user `orya`/`orya_sessions`, volume `postgres_data`, `pg_isready` healthcheck |
+| `redis` | `redis:7` | `${REDIS_PORT:-6379}` | `redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru` — server-side LRU (A-07); eviction = cache miss = safe |
+
+Port conflicts: `POSTGRES_PORT=5435 make db-up` (plus a matching `DATABASE_URL`) and `REDIS_PORT=6381 make redis-up` (plus a matching `REDIS_URL`). The start scripts detect an already-running container and reuse its ports.
+
+Application containers (API/Chainlit), the `langfuse` service and the `sampler-proxy` service are **not** in this compose file yet — they arrive with **A-10** (Docker compose v2). Until then the app is deployed as a host process (`uv run uvicorn app.main:app`, `chainlit run app/ui/chainlit_app.py`) supervised the way you prefer (systemd, nssm, pm2 — the repo's `scripts/start.*` are the reference implementation).
+
+### Production checklist
+
+- `AUTH_ENABLED=true` + `AUTH_SECRET_KEY` (≥ 32 chars) — Bearer-JWT on every non-public endpoint (A-00).
+- `ORYA_RATE_LIMIT_ENABLED=true` — 60 rpm per user, 10 rpm on `/learn` (A-01).
+- `ORYA_SESSION_LOG_ENCRYPTION_ENABLED=true` + `ORYA_SESSION_LOG_ENCRYPTION_KEY` (≥ 16 chars) — pgcrypto at-rest encryption for `messages.content` / `messages.tool_calls` (A-05; needs `make db-migrate` for the `pgcrypto` extension).
+- Run `orya db migrate` (idempotent) as part of every deploy.
+- Set `DATABASE_URL` / `REDIS_URL` explicitly; do not rely on the localhost defaults.
+- Narrow `CORS_ORIGINS` to your UI origin(s) instead of the `*` default.
+- Keep `LOG_LEVEL=INFO` (or `WARNING`); logs go to stdout/journald (the start scripts write `logs/*.log`).
+- The API returns `X-Request-ID` on every response (echoed or minted) — propagate it through your reverse proxy.
+- `/health`, `/docs`, `/redoc`, `/openapi.json`, `/metrics` are JWT-exempt (`AUTH_PUBLIC_PATHS`); everything else requires `Authorization: Bearer <token>`.
+
+### Langfuse setup (planned — A-15/A-16/A-17)
+
+Langfuse export is **not wired yet**. The in-process observability seam already works (A-02/A-03/A-04/A-06); the env contract below is what the ALPHA observability stack will consume, so infra and secrets can be prepared now.
+
+**Works today:**
+
+| Knob | Effect |
+|---|---|
+| `ORYA_LLM_TRACE_ENABLED` (default `true`) | Wrap every `get_llm()` model in `TracedChatModel` — one `llm.call` span per invocation |
+| `ORYA_LLM_TRACE_EXPORTER=stdout` | Debug-export each finished span as a JSON line (default `off` = buffer only) |
+| `ORYA_PERMISSION_AUDIT_ENABLED` (default `true`) | `agent.permission` spans on permission decisions |
+| `GET /health/observability` | `{sdk_enabled, exporter_connected, guardrail_ready, span_buffer_size}` |
+| JSONL projection (A-06) | every event carries `trace_id` / `span_id` — the cross-link to a future Langfuse trace |
+
+**Planned env contract** (A-15 Langfuse integration, A-16 OryaObservability SDK, A-17 sampler-proxy) — placeholders, no code reads them yet:
+
+| Env var | Planned role |
+|---|---|
+| `LANGFUSE_HOST` | Tracing endpoint; in the A-10 compose stack it points at the sampler-proxy: `http://sampler-proxy:4321` |
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | Langfuse project credentials |
+| `LANGFUSE_DIRECT_URL` | Fail-open fallback straight to Langfuse when the sampler-proxy is down |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` (or `ORYA_OTEL_EXPORTER_OTLP_ENDPOINT`) | OTLP collector endpoint — the setting already exists in `Settings` |
+| `ORYA_SAMPLER_PROXY_URL` (default `http://sampler-proxy:4321`) | Sampler-proxy base URL probed by `GET /health/sampler-proxy` (A-04) |
+| `AGENT_OBS_ENABLED` / `AGENT_OBS_SAMPLER_AUDIT_ENABLED` | OryaObservability SDK kill-switch / sampler audit trail |
+
+Until A-15 lands, use `ORYA_LLM_TRACE_EXPORTER=stdout` plus the JSONL `trace_id` cross-link for offline debugging.
+
+## Environment variables
+
+Every knob recognized by `app/core/config.py`, by group. Most settings accept two spellings — the legacy unprefixed name and an `ORYA_`-prefixed twin (e.g. `AUTH_ENABLED` and `ORYA_AUTH_ENABLED` are equivalent); either may be used, and env vars always win over `.env` and `~/.orya/config.yaml`. `~` in path values is expanded. The copyable template is `.env.example`.
+
+### LLM (M-01/M-02)
+
+| Env var | Default | Description |
+|---|---|---|
+| `ORYA_LLM_PROVIDER` | `anthropic` | Default LLM provider key from `providers.yaml` |
+| `ORYA_LLM_MODEL` | `claude-sonnet-3.5` | Default model alias (`models.yaml`) or raw model id |
+| `ORYA_LLM_API_KEY` | — | Override API key; provider-specific env vars (`DEEPSEEK_API_KEY`, …) usually win |
+| `ORYA_LLM_BASE_URL` | — | Endpoint override for OpenAI-compatible providers |
+| `ORYA_LLM_TEMPERATURE` | `0.0` | Sampling temperature |
+| `ORYA_LLM_MAX_TOKENS` | `8192` | Max completion tokens |
+| `ORYA_LLM_TIMEOUT_S` | `120` | Per-call provider timeout (seconds) |
+| `ORYA_LLM_RETRY_ATTEMPTS` | `3` | Total attempts of one provider call (incl. the first) |
+| `ORYA_LLM_RETRY_BACKOFF_SECONDS` | `1.0` | Base delay of the exponential retry backoff |
+
+### Observability (A-02/A-03/A-04, planned A-15…A-17)
+
+| Env var | Default | Description |
+|---|---|---|
+| `ORYA_LLM_TRACE_ENABLED` | `true` | `TracedChatModel` wrapper: one `llm.call` span per `get_llm()` call; `false` = raw adapter |
+| `ORYA_LLM_TRACE_EXPORTER` | `off` | `off` \| `stdout` — debug JSON export of finished spans |
+| `ORYA_PERMISSION_AUDIT_ENABLED` | `true` | Emit `agent.permission` audit spans |
+| `LANGSMITH_API_KEY` | — | Placeholder (LangSmith) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` / `ORYA_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP collector endpoint (planned Langfuse export) |
+| `ORYA_SAMPLER_PROXY_URL` | `http://sampler-proxy:4321` | Sampler-proxy base URL for `/health/sampler-proxy` |
+
+### Database (M-03)
+
+| Env var | Default | Description |
+|---|---|---|
+| `DATABASE_URL` / `ORYA_DATABASE_URL` | `postgresql://orya:orya_password@localhost:5432/orya_sessions` | asyncpg connection string |
+| `DATABASE_POOL_SIZE` | `5` | asyncpg pool size |
+| `DATABASE_MAX_OVERFLOW` | `10` | asyncpg pool max overflow |
+
+### Redis / tool-result cache (M-21, A-07)
+
+| Env var | Default | Description |
+|---|---|---|
+| `REDIS_URL` / `ORYA_REDIS_URL` | `redis://localhost:6379` | Redis connection URL |
+| `ORYA_CACHE_BACKEND` | `auto` | `auto` \| `memory` \| `redis` — `auto` probes Redis at startup and falls back to memory |
+| `ORYA_CACHE_TTL_SECONDS` | `300` | Tool-result cache TTL |
+| `ORYA_CACHE_MAX_ENTRIES` | `1024` | `MemoryCache` LRU capacity; `0` = unlimited |
+| `ORYA_REDIS_POOL_MAX_CONNECTIONS` | `10` | Redis client pool max connections |
+| `ORYA_REDIS_SOCKET_TIMEOUT_SECONDS` | `5.0` | Redis client socket timeout |
+
+### Memory (M-25/M-27)
+
+| Env var | Default | Description |
+|---|---|---|
+| `ORYA_MEMORY_DIR` | `~/.orya/memory` | L0 MD files + `archive/` + audit fallback |
+| `ORYA_MEMORY_COMPACT_INTERVAL_SECONDS` | `86400` | Periodic L0 compaction worker; `0` disables it |
+
+### Sessions / session-log (M-14, A-05/A-06)
+
+| Env var | Default | Description |
+|---|---|---|
+| `ORYA_SESSIONS_DIR` | `~/.orya/sessions` | JSONL projection directory (`{session_id}.jsonl` + `.meta.json`) |
+| `SESSION_LOG_ENCRYPTION_ENABLED` / `ORYA_SESSION_LOG_ENCRYPTION_ENABLED` | `false` | pgcrypto at-rest encryption of `messages.content` / `messages.tool_calls` |
+| `SESSION_LOG_ENCRYPTION_KEY` / `ORYA_SESSION_LOG_ENCRYPTION_KEY` | — | Symmetric passphrase for `pgp_sym_encrypt` (≥ 16 chars, required when enabled) |
+
+### Permissions / agent loop (M-04/M-13, M-28)
+
+| Env var | Default | Description |
+|---|---|---|
+| `ORYA_PERMISSION_POLICY` | `strict` | `strict` \| `permissive` |
+| `ORYA_PERMISSIONS_PATH` | `~/.orya/permissions.yml` | User allow/deny rule overrides (ADR-004); absent → built-ins |
+| `ORYA_RECURSION_LIMIT` | `25` | Max agent-loop iterations (LangGraph `recursion_limit`) |
+| `ORYA_RECOVERY_MAX_ROUNDS` | `3` | How many times a failed tool batch may trigger the recover node (M-28) |
+| `ORYA_RECOVERY_VARIANTS` | `5` | Alternative approaches the recover nudge asks the model for |
+| `ORYA_CONTEXT_MAX_TOKENS` | `120000` | Context-window budget; history is trimmed to fit (M-06) |
+
+### Auth / CORS (A-00)
+
+| Env var | Default | Description |
+|---|---|---|
+| `AUTH_ENABLED` / `ORYA_AUTH_ENABLED` | `false` | Kill-switch: Bearer-JWT enforcement on all non-public endpoints |
+| `AUTH_SECRET_KEY` / `ORYA_AUTH_SECRET_KEY` | — | HS256 signing secret (≥ 32 chars); required when auth is on — also used by `orya auth token` |
+| `AUTH_ALGORITHM` / `ORYA_AUTH_ALGORITHM` | `HS256` | JWT algorithm |
+| `AUTH_TOKEN_TTL_S` / `ORYA_AUTH_TOKEN_TTL_S` | `86400` | Lifetime of tokens minted by `orya auth token` |
+| `AUTH_PUBLIC_PATHS` / `ORYA_AUTH_PUBLIC_PATHS` | `/health,/docs,/redoc,/openapi.json,/metrics` | CSV (or JSON array) of path prefixes exempt from JWT |
+| `CORS_ORIGINS` / `ORYA_CORS_ORIGINS` | `*` | CSV of allowed browser origins |
+
+### Rate limit (A-01)
+
+| Env var | Default | Description |
+|---|---|---|
+| `RATE_LIMIT_ENABLED` / `ORYA_RATE_LIMIT_ENABLED` | `false` | Kill-switch: 429 + `Retry-After` per request |
+| `RATE_LIMIT_RPM` / `ORYA_RATE_LIMIT_RPM` | `60` | Per-user requests-per-minute on every endpoint |
+| `RATE_LIMIT_LEARN_RPM` / `ORYA_RATE_LIMIT_LEARN_RPM` | `10` | Tighter per-user RPM for `/learn` (anti-abuse) |
+| `RATE_LIMIT_BACKEND` / `ORYA_RATE_LIMIT_BACKEND` | `auto` | `auto` \| `memory` \| `redis` |
+| `ORYA_TRUSTED_CLIENTS` | — | CSV/JSON list of user ids or client IPs exempt from limiting |
+
+### UI (M-15/M-17/M-24)
+
+| Env var | Default | Description |
+|---|---|---|
+| `ORYA_API_URL` | `http://127.0.0.1:8000` | FastAPI base URL the Chainlit UI calls over HTTP/SSE |
+| `CHAINLIT_PORT` / `ORYA_CHAINLIT_PORT` | `8001` | Chainlit port (`make ui`, start scripts) |
+| `ORYA_UI_SETTINGS_PATH` | `~/.orya/settings.json` | Settings-panel state: model, permission mode, allow-list |
+| `NEXTJS_PORT` / `ORYA_NEXTJS_PORT` | `3000` | Next.js UI port (BETA placeholder) |
+
+### Misc / infra
+
+| Env var | Default | Description |
+|---|---|---|
+| `LOG_LEVEL` / `ORYA_LOG_LEVEL` | `INFO` | Python logging level |
+| `ORYA_CONFIG_PATH` | `~/.orya/config.yaml` | Relocates the user YAML config file |
+| `ORIAHS_URL` / `ORYA_ORIAHS_URL` | — | OriaHS endpoint (PROD placeholder) |
+| `ORIAHS_TIMEOUT_S` / `ORYA_ORIAHS_TIMEOUT_S` | `30` | OriaHS request timeout |
+| `POSTGRES_PORT` | `5432` | Host port published by docker compose (not read by the app) |
+| `REDIS_PORT` | `6379` | Host port published by docker compose (not read by the app) |
+| `API_PORT` | `8000` | API port for the start scripts |
+
+Provider API keys (`DEEPSEEK_API_KEY`, `DASHSCOPE_API_KEY`, `ZHIPUAI_API_KEY`, `OPENROUTER_API_KEY`, …) are read by the per-provider adapters via `providers.yaml` — see `.env.example` and [LLM Providers (M-01)](#llm-providers-m-01).
+
 ## Project Structure
 
 ```
 app/
-├── main.py              # FastAPI entry point
-├── core/               # Core components (M-01+)
-│   └── memory/         # L0 MDStore memory seam (M-25)
-├── tools/              # Coding tools (M-07+)
-├── api/                # API endpoints (M-20+)
-└── ui/                 # Chainlit UI (M-15+)
-tests/                  # Test suites
-└── conftest.py         # Test configuration
+├── main.py              # FastAPI entry point + orya CLI
+├── core/                # Core components (M-01+)
+│   ├── auth/            # JWT issuance/verification (A-00)
+│   ├── memory/          # L0 MDStore memory seam (M-25)
+│   └── observability/   # span buffer + emitters (A-02/A-03)
+├── tools/               # Coding tools (M-07+)
+├── api/                 # API endpoints (M-20+): middleware (A-00), health (A-04)
+└── ui/                  # Chainlit UI (M-15+)
+scripts/                 # one-command start/stop (sh + ps1)
+tests/                   # Test suites
+└── conftest.py          # Test configuration
 ```
 
 ## Database (M-03)
@@ -193,9 +390,22 @@ Projection is idempotent: each thread has a `{session_id}.meta.json` marker (`la
 
 A background projection worker starts with the FastAPI app (lifespan in `app/main.py`) and periodically discovers threads from the `checkpoints` table. It soft-fails without PostgreSQL — the API stays up and retries on the next pass.
 
+### Encryption at rest (A-05)
+
+With `SESSION_LOG_ENCRYPTION_ENABLED=true` and `SESSION_LOG_ENCRYPTION_KEY` (≥ 16 chars — validation fails fast otherwise), `log_message()` encrypts the payload columns through PostgreSQL `pgcrypto` (`pgp_sym_encrypt`, armored ASCII) and `list_messages()` decrypts them:
+
+- **Covered:** `messages.content` (TEXT) and `messages.tool_calls` (JSONB, ciphertext wrapped via `to_jsonb(armor(...))`).
+- **Not covered:** LangGraph checkpoint tables — they are written by `AsyncPostgresSaver` outside the app writer; at-rest protection for the whole database belongs at the volume/disk layer.
+- **Legacy tolerance:** rows written before encryption (plaintext) still decrypt — the reader only applies `pgp_sym_decrypt` when the payload carries `-----BEGIN PGP MESSAGE-----`.
+- **Off by default** (dev/tests keep byte-identical plaintext); enabling requires migration `0002_session_log_encryption.sql` (`CREATE EXTENSION IF NOT EXISTS pgcrypto`).
+
+### Span cross-link (A-06)
+
+The JSONL projection is additive: every event carries the observability ids of the turn it belongs to — `trace_id` on user/ai/tool events and `span_id` where the emitter knows it (AI/tool-call messages stamped from `additional_kwargs["orya_span"]`). One LangGraph turn shares one `trace_id` (the turn-trace contextvar set by the runtime), so a future Langfuse trace (A-15) and the local JSONL projection can be joined on it. v1 readers are unaffected — the fields are top-level additions consumed with `.get()`.
+
 ## Sessions API (M-20)
 
-`app/api/sessions.py` exposes the session lifecycle for every client: CI and batch jobs over JSON, the Chainlit UI (M-24) over SSE. The UI never touches the graph ? `Chainlit → FastAPI → LangGraph` ? and both response modes share the session-agent runtime in `app/core/agent.py` (graph assembly, checkpointer fallback, `stream_turn`/`run_turn`).
+`app/api/sessions.py` exposes the session lifecycle for every client: CI and batch jobs over JSON, the Chainlit UI (M-24) over SSE. The UI never touches the graph — `Chainlit → FastAPI → LangGraph` — and both response modes share the session-agent runtime in `app/core/agent.py` (graph assembly, checkpointer fallback, `stream_turn`/`run_turn`).
 
 | Endpoint | Purpose |
 |---|---|
@@ -259,6 +469,74 @@ SID=$(curl -s -X POST localhost:8000/sessions -H 'content-type: application/json
 curl -s -X POST localhost:8000/sessions/$SID/messages \
   -H 'content-type: application/json' -d '{"content":"run the tests"}'
 ```
+
+## Authentication (A-00)
+
+FastAPI-level Bearer-JWT enforcement as pure ASGI middleware (so SSE streams pass through unbuffered). **Off by default** (`AUTH_ENABLED=false`) for dev/tests compatibility.
+
+| Piece | Behavior |
+|---|---|
+| Token | HS256 JWT; `sub` claim = user id (`request.state.user_id`), default TTL 86 400 s (`AUTH_TOKEN_TTL_S`) |
+| Enforcement | every endpoint except `AUTH_PUBLIC_PATHS` (`/health`, `/docs`, `/redoc`, `/openapi.json`, `/metrics`) answers `401` without a valid `Authorization: Bearer <token>` |
+| Secret | `AUTH_SECRET_KEY` must be ≥ 32 chars; auth without it fails fast |
+| Request id | every response carries `X-Request-ID` (echoed from the request or minted — even on 401) |
+| CORS | `CORS_ORIGINS` (CSV, default `*`) |
+| Identity | the JWT `sub` feeds the A-01 per-user rate-limit buckets |
+
+Operator loop — mint a token on the server, then call the API:
+
+```bash
+# server-side (e.g. in .env or the service environment)
+export AUTH_ENABLED=true
+export AUTH_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+
+# mint a token — the raw JWT goes to stdout
+TOKEN=$(uv run orya auth token --user alice)
+
+curl -s -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"title":"deploy check"}' http://localhost:8000/sessions
+
+# without the header the same call is rejected
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  -H 'content-type: application/json' -d '{}' http://localhost:8000/sessions
+# -> 401
+```
+
+`orya auth token` signs with `AUTH_SECRET_KEY` (required even when the middleware kill-switch is off). The Chainlit UI has no login flow yet (UI login is outside ALPHA scope) — with auth enabled, drive the API from scripts/CI, or keep `AUTH_ENABLED=false` on localhost.
+
+## Rate limiting (A-01)
+
+Per-user request budgets enforced by middleware, **off by default** (`RATE_LIMIT_ENABLED=false`):
+
+| Bucket | Default | Scope |
+|---|---|---|
+| Per-user | `RATE_LIMIT_RPM=60` | every endpoint, keyed by JWT `sub` (or client IP when auth is off) |
+| `/learn` | `RATE_LIMIT_LEARN_RPM=10` | `POST /learn` + `POST /sessions/{id}/learn` — tighter anti-abuse bucket |
+
+Over-budget requests answer `429` with `Retry-After` (seconds) plus `x-ratelimit-limit` / `x-ratelimit-remaining: 0` headers. `RATE_LIMIT_BACKEND=auto` uses Redis when it is reachable and falls back to an in-process limiter (`memory` pins the fallback, `redis` fails fast). `ORYA_TRUSTED_CLIENTS` (CSV of user ids or client IPs) exempts operators from limiting.
+
+## Health endpoints (A-04)
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /health` | Liveness — `{"status": "ok", "message": "OryaAgent API is running"}`; always public, no auth |
+| `GET /health/observability` | Observability seam — `{"sdk_enabled", "exporter_connected", "guardrail_ready", "span_buffer_size"}` |
+| `GET /health/sampler-proxy` | Probes `ORYA_SAMPLER_PROXY_URL/sampler/status` — `200` when reachable, `503` when unconfigured/unreachable (the proxy itself ships with A-17) |
+
+All three are JWT-exempt public paths, so load balancers and uptime checks work without credentials.
+
+## LLM tracing & audit spans (A-02, A-03)
+
+Every model returned by `get_llm()` is wrapped in `TracedChatModel`: one `llm.call` span per invocation (provider, model, tokens, duration) buffered in-process. Permission decisions add `agent.permission` spans. The seam is fail-soft — span emission never raises into the agent loop.
+
+| Knob | Effect |
+|---|---|
+| `ORYA_LLM_TRACE_ENABLED` (default `true`) | `false` returns the raw provider adapter — zero spans, zero overhead |
+| `ORYA_LLM_TRACE_EXPORTER=stdout` | each finished span also prints as a JSON debug line (default: buffer only) |
+| `ORYA_PERMISSION_AUDIT_ENABLED` (default `true`) | permission-decision audit spans |
+| `GET /health/observability` | live view of the buffer and kill-switch state |
+
+Spans carry `trace_id`/`span_id`; the same ids land in the JSONL projection (A-06), which is the offline cross-link until the Langfuse exporter ships (see [Langfuse setup](#langfuse-setup-planned--a-15a-16a-17)). Smoke coverage: `tests/smoke/test_smoke_v2.py` scenario 5 drives a scripted turn and asserts the span → health chain.
 
 ## Tool-result cache (M-21)
 
@@ -360,6 +638,7 @@ Strategies (ARCHITECT6 §4.2.2): `PREFERENCES.md` archives only `agent_inferred`
 - [Roadmap v7](analytics/ROADMAP7.md)
 - [Backlog v7](analytics/BACKLOG7.md)
 - [MVP Phase Prompt](analytics/PROMPT_MVP.md)
+- [ALPHA Phase Prompt](analytics/PROMPT_ALPHA.md)
 
 ## Phase Progress
 
@@ -390,7 +669,17 @@ Strategies (ARCHITECT6 §4.2.2): `PREFERENCES.md` archives only `agent_inferred`
 - ✅ **M-25** - Long-term memory: `MDStore` L0 (six MD files in `ORYA_MEMORY_DIR`, atomic `O_APPEND`+`fsync` append with per-file locks, size budgets + compaction hook, best-effort `memory_audit_log` audit), `MemoryItem` record model, system prompt reads L0 through the store seam
 - ✅ **M-26** - `/learn`: `POST /sessions/{id}/learn` (last successful tool sequence from the M-14 JSONL projection → `[learned]` block in `LEARNED.md`, auto pattern names, 400 on a failed last call), `POST /learn` content contract (`fact|preference|project`), Chainlit `/learn [name] [description]` slash-command, `learn` audit records (`memory_id`/`source`/`trace_id`)
 - ✅ **M-27** - Compactor: strategy-based soft compaction into `memory/archive/` (4 strategies + LEARNED size-guard, archive-first crash ordering, locked atomic rewrite), union endpoints `POST /memory/compact` + `GET /memory/stats` + `GET /memory` (and their `/sessions/{id}/memory*` twins), `memory.compact` audit + `compaction.json`, periodic worker (`ORYA_MEMORY_COMPACT_INTERVAL_SECONDS`), Chainlit `/memory [stats|compact]` commands, M-18 memory-AC unblocked (smoke task 5, `/memory/stats`, append durability)
-- ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for full 28 tickets)
+- ✅ **M-28** - Failure recovery: `assess` triages failed tool batches and the `recover` node asks the model for alternatives (`ORYA_RECOVERY_MAX_ROUNDS` / `ORYA_RECOVERY_VARIANTS`), recover-node tokens dropped from the streamed reply
+- ✅ **A-00** - Auth middleware: pure-ASGI Bearer-JWT enforcement (`AUTH_ENABLED` kill-switch, secret ≥ 32 chars fail-fast), public paths, CORS, `X-Request-ID` echo/mint, CLI `orya auth token`
+- ✅ **A-01** - Rate limit: per-user 60 rpm + `/learn` 10 rpm buckets, `429` + `Retry-After`/`x-ratelimit-*`, Redis/memory seam (`ORYA_RATE_LIMIT_BACKEND`), `ORYA_TRUSTED_CLIENTS` whitelist
+- ✅ **A-02** - LLM-seam trace-wrapping: `TracedChatModel` emits one `llm.call` span per `get_llm()` call (`ORYA_LLM_TRACE_ENABLED` kill-switch, in-process span buffer, `stdout` debug exporter)
+- ✅ **A-03** - Permission audit spans: `agent.permission` spans with security attributes on permission decisions (`ORYA_PERMISSION_AUDIT_ENABLED`)
+- ✅ **A-04** - Health endpoints: `/health`, `/health/observability`, `/health/sampler-proxy` (all public, sampler-proxy fail-closed 503)
+- ✅ **A-05** - Session-log encryption at rest: pgcrypto `pgp_sym_encrypt` for `messages.content`/`messages.tool_calls` (kill-switch, key ≥ 16, legacy plaintext tolerated)
+- ✅ **A-06** - JSONL projection v2: top-level `trace_id`/`span_id` stamped from the turn-trace contextvar — offline cross-link to Langfuse traces
+- ✅ **A-07** - CacheWrapper v2: `MemoryCache` LRU with `ORYA_CACHE_MAX_ENTRIES`, Redis client pool tuning, server-side `maxmemory 256mb --maxmemory-policy allkeys-lru`
+- ✅ **A-08** - Smoke tests v2: +5 deterministic scenarios covering auth enforcement, operator-loop, rate-limit buckets, observability chain and the tracing kill-switch (`tests/smoke/test_smoke_v2.py`)
+- ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for the 28 MVP tickets and [PROMPT_ALPHA.md](analytics/PROMPT_ALPHA.md) for A-00…A-20)
 
 ## LLM Providers (M-01)
 
@@ -412,10 +701,9 @@ llm = get_llm("ollama", "ollama-coder")  # Local server
 
 ## Notes
 
-- This is a **bootstrap phase** - minimal working structure only
-- Next phase will implement LLM provider integration and basic agent functionality
-- Windows: `make` command may require Git Bash/WSL or use `uv run ...` directly
-- Docker Compose is optional for M-00 but required for full MVP (M-03+)
+- Current phase: **ALPHA** — production-safe baseline (auth, rate-limit, tracing, health); BETA adds DFC, L1 memory and MCP (see `analytics/PROMPT_BETA.md`)
+- Windows: the `make` targets need Git Bash/WSL — or use the `uv run ...` equivalents / `scripts\start.ps1` directly
+- Docker Compose is optional for a minimal dev loop but required for full functionality (PostgreSQL for M-03+, Redis optional for the M-21 cache — `auto` mode falls back to in-process memory)
 
 ---
 
