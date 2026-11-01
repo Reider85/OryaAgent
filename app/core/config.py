@@ -449,6 +449,50 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("ORYA_SAMPLER_PROXY_URL"),
         description="URL of the sampler-proxy service (e.g., http://sampler-proxy:4321)",
     )
+    # Langfuse OTLP export (A-15)
+    langfuse_host: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("LANGFUSE_HOST", "ORYA_LANGFUSE_HOST"),
+        description=(
+            "A-15: OTLP ingest base — direct Langfuse (http://host:3000) or the "
+            "sampler-proxy; spans POST to {host}/api/public/otel/v1/traces "
+            "(the A-10 sampler-proxy accepts any path)"
+        ),
+    )
+    langfuse_public_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "LANGFUSE_PUBLIC_KEY", "ORYA_LANGFUSE_PUBLIC_KEY"
+        ),
+        description="A-15: Langfuse public key (Basic auth username)",
+    )
+    langfuse_secret_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "LANGFUSE_SECRET_KEY", "ORYA_LANGFUSE_SECRET_KEY"
+        ),
+        description="A-15: Langfuse secret key (Basic auth password)",
+    )
+    langfuse_direct_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "LANGFUSE_DIRECT_URL", "ORYA_LANGFUSE_DIRECT_URL"
+        ),
+        description=(
+            "A-15 fail-open fallback: retried once per batch when the primary "
+            "export endpoint stays unreachable"
+        ),
+    )
+    langfuse_export_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "ORYA_LANGFUSE_EXPORT_ENABLED", "LANGFUSE_EXPORT_ENABLED"
+        ),
+        description=(
+            "A-15 kill-switch: export is effective only when this is true AND "
+            "langfuse_host + both keys are set (auto-on when configured)"
+        ),
+    )
     # PROD: OriaHS
     oriahs_url: str | None = Field(
         default=None,

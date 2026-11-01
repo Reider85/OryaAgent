@@ -37,6 +37,11 @@ _MANAGED_ENV_VARS = frozenset(
         "CORS_ORIGINS",
         "LANGSMITH_API_KEY",
         "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "LANGFUSE_HOST",
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_DIRECT_URL",
+        "LANGFUSE_EXPORT_ENABLED",
         "ORIAHS_URL",
         "ORIAHS_TIMEOUT_S",
         "CHAINLIT_PORT",
@@ -412,3 +417,34 @@ def test_sampler_proxy_url_env_alias(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ORYA_SAMPLER_PROXY_URL", "http://custom-proxy:9999")
     clear_settings_cache()
     assert get_settings().sampler_proxy_url == "http://custom-proxy:9999"
+
+
+def test_langfuse_export_env_aliases(monkeypatch: pytest.MonkeyPatch):
+    """A-15: LANGFUSE_* env vars map to the export settings (auto-on)."""
+    monkeypatch.setenv("LANGFUSE_HOST", "http://langfuse.local:3000")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
+    monkeypatch.setenv("LANGFUSE_DIRECT_URL", "http://langfuse-direct:3000")
+    clear_settings_cache()
+    s = get_settings()
+    assert s.langfuse_host == "http://langfuse.local:3000"
+    assert s.langfuse_public_key is not None
+    assert s.langfuse_public_key.get_secret_value() == "pk-test"
+    assert s.langfuse_secret_key is not None
+    assert s.langfuse_secret_key.get_secret_value() == "sk-test"
+    assert s.langfuse_direct_url == "http://langfuse-direct:3000"
+    assert s.langfuse_export_enabled is True
+
+
+def test_langfuse_export_defaults(monkeypatch: pytest.MonkeyPatch):
+    """A-15: no LANGFUSE_* configured; kill-switch defaults to true."""
+    s = get_settings()
+    assert s.langfuse_host is None
+    assert s.langfuse_public_key is None
+    assert s.langfuse_secret_key is None
+    assert s.langfuse_direct_url is None
+    assert s.langfuse_export_enabled is True
+
+    monkeypatch.setenv("ORYA_LANGFUSE_EXPORT_ENABLED", "false")
+    clear_settings_cache()
+    assert get_settings().langfuse_export_enabled is False

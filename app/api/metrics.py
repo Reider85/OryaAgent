@@ -18,6 +18,9 @@ once per turn the budget actually forces a different model.
 A-14 adds ``orya_llm_cost_usd_total{model}`` — the per-model USD spend
 accumulated by the LLM seam's ``cost.*`` span attributes (PROMPT_ALPHA
 A-14), counting every priced call regardless of the budget identity.
+A-15 adds ``orya_langfuse_export_spans_total`` /
+``orya_langfuse_export_errors_total`` — delivered/dropped counters of
+the Langfuse OTLP exporter (``app.core.observability.langfuse``).
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ from fastapi import APIRouter, Response
 from app.core.cache import get_cache_stats
 from app.core.cost_tracker import get_cost_totals
 from app.core.llm.cost_router import get_switch_stats
+from app.core.observability.langfuse import get_export_stats
 from app.core.security import get_injection_stats
 
 router = APIRouter(tags=["metrics"])
@@ -111,14 +115,30 @@ def _render_cost_totals() -> list[str]:
     return lines
 
 
+def _render_langfuse_export_counters() -> list[str]:
+    """Render the A-15 Langfuse OTLP export counters (one HELP/TYPE each)."""
+    stats = get_export_stats()
+    spans_metric = "orya_langfuse_export_spans_total"
+    errors_metric = "orya_langfuse_export_errors_total"
+    return [
+        f"# HELP {spans_metric} Spans delivered to the Langfuse OTLP endpoint (A-15).",
+        f"# TYPE {spans_metric} counter",
+        f"{spans_metric} {stats['exported_total']}",
+        f"# HELP {errors_metric} Spans dropped or failed by the Langfuse exporter (A-15).",
+        f"# TYPE {errors_metric} counter",
+        f"{errors_metric} {stats['failed_total']}",
+    ]
+
+
 @router.get("/metrics")
 async def metrics() -> Response:
-    """Prometheus exposition: cache (M-21), injection (M-22), switch (A-13), cost (A-14)."""
+    """Prometheus exposition: cache (M-21), injection (M-22), switch (A-13), cost (A-14), Langfuse export (A-15)."""
     lines = (
         _render_prometheus(get_cache_stats())
         + _render_injection_counters()
         + _render_switch_counters()
         + _render_cost_totals()
+        + _render_langfuse_export_counters()
     )
     return Response(content="\n".join(lines) + "\n", media_type=PROMETHEUS_MEDIA_TYPE)
 

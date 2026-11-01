@@ -90,3 +90,14 @@ def test_new_trace_id_is_hex():
     value = new_trace_id()
     assert len(value) == 32
     int(value, 16)
+
+
+def test_span_ids_are_w3c_width():
+    """A-15: span ids are 16-hex (8 bytes) so OTLP/Langfuse accepts them."""
+    _cleanup()
+    emit_span(span_type="llm.call", name="a", attributes={})
+    span = list(get_span_buffer())[0]
+    assert len(span.span_id) == 16
+    int(span.span_id, 16)
+    assert len(span.trace_id) == 32
+    int(span.trace_id, 16)

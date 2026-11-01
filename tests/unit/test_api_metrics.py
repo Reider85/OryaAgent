@@ -71,6 +71,8 @@ def test_metrics_is_prometheus_text(client: TestClient):
     assert "# TYPE orya_tool_cache_misses_total counter" in body
     assert "# TYPE orya_cost_aware_switch_total counter" in body
     assert "# TYPE orya_llm_cost_usd_total counter" in body
+    assert "# TYPE orya_langfuse_export_spans_total counter" in body
+    assert "# TYPE orya_langfuse_export_errors_total counter" in body
 
 
 def test_metrics_reports_cost_aware_switches(client: TestClient):

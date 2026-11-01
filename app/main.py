@@ -60,13 +60,17 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     ``init_rate_limiter`` (A-01) probes Redis only while
     ``ORYA_RATE_LIMIT_ENABLED`` is on — the default off kill-switch keeps
     startup zero-cost. ``init_cost_store`` (A-13) follows the same
-    contract behind ``ORYA_COST_ROUTER_ENABLED``.
+    contract behind ``ORYA_COST_ROUTER_ENABLED``. ``init_exporter``
+    (A-15) starts the Langfuse OTLP worker only when ``LANGFUSE_HOST``
+    and both keys are configured (auto-on; ``ORYA_LANGFUSE_EXPORT_ENABLED=false``
+    forces it off); shutdown flushes the queue best-effort.
     """
     from app.core.auth.rate_limit import close_rate_limiter, init_rate_limiter
     from app.core.cache import close_cache, init_cache
     from app.core.config import get_settings
     from app.core.cost_tracker import close_cost_store, init_cost_store
     from app.core.memory.compactor import compaction_worker
+    from app.core.observability.langfuse import init_exporter, shutdown_exporter
     from app.db.session_log import projection_worker
 
     install_file_logger("api.log", level=_configured_level())
@@ -75,6 +79,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await init_cache()
     await init_rate_limiter()
     await init_cost_store()
+    init_exporter()
     task = asyncio.create_task(projection_worker())
     interval = get_settings().memory_compact_interval_s
     compact_task: asyncio.Task | None = None
@@ -92,6 +97,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
                 await compact_task
         await close_rate_limiter()
         await close_cost_store()
+        await asyncio.to_thread(shutdown_exporter)
         await close_cache()
 
 

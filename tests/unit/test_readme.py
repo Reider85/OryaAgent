@@ -20,7 +20,7 @@ REQUIRED_HEADINGS = (
     "## Deploy guide",
     "### Docker services (today)",
     "### Production checklist",
-    "### Langfuse setup (planned",
+    "### Langfuse setup (A-15 export",
     "## Environment variables",
     "## Authentication (A-00)",
     "## Rate limiting (A-01)",
@@ -63,17 +63,19 @@ def test_readme_documents_operator_loop_and_deploy_markers():
     )
 
 
-def test_readme_langfuse_section_is_forward_looking():
+def test_readme_langfuse_section_documents_wiring():
     text = _readme()
     assert "LANGFUSE_HOST" in text
-    assert "A-15" in text, "Langfuse section must mark the planned tickets"
     section = text.split("### Langfuse setup", 1)[1]
-    assert "not wired yet" in section or "Planned env contract" in section
+    assert "A-15" in section, "Langfuse section must reference the export ticket"
+    assert "not wired" not in section, "A-15 wired the exporter — drop the old caveat"
+    assert "api/public/otel/v1/traces" in section, "OTLP path must be documented"
+    assert "ORYA_LANGFUSE_EXPORT_ENABLED" in section, "kill-switch must be documented"
 
 
 def test_readme_phase_progress_covers_alpha_tickets():
     text = _readme()
-    for i in range(15):  # A-00..A-14 (A-14: cost-tracking spans)
+    for i in range(16):  # A-00..A-15 (A-15: Langfuse OTLP export)
         marker = f"**A-{i:02d}**"
         assert marker in text, f"Phase Progress is missing {marker}"
 

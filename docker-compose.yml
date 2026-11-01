@@ -17,9 +17,15 @@ x-orya-app-env: &orya-app-env
   REDIS_URL: redis://redis:6379
   ORYA_MEMORY_DIR: /data/memory
   ORYA_SAMPLER_PROXY_URL: http://sampler-proxy:4321
-  # Planned A-15/A-17 routing: in the compose stack traces go through the
-  # sampler-proxy; no code exports yet (see README "Langfuse setup").
+  # A-15 Langfuse OTLP export: traces route through the sampler-proxy
+  # (any path is accepted; the proxy forwards to langfuse:3000). Keys must
+  # match LANGFUSE_INIT_PROJECT_* below so kept traces authenticate.
   LANGFUSE_HOST: http://sampler-proxy:4321
+  LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-orya-agent}
+  LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-orya-agent}
+  # A-15 fail-open: bypass the proxy and talk to Langfuse directly when
+  # the sampler-proxy is unreachable.
+  LANGFUSE_DIRECT_URL: ${LANGFUSE_DIRECT_URL:-http://langfuse:3000}
 
 # Shared env for langfuse-web and langfuse-worker (Langfuse v3, mirrored from
 # ../OryaObservability/infra/docker-compose.yml and adapted to the shared

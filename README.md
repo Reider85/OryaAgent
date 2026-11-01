@@ -4,7 +4,7 @@ Senior Python coding agent with UI and long-term memory.
 
 ## Phase: ALPHA
 
-Tickets M-00…M-28 (bootstrap → failure recovery) and MVP-POLISH are implemented. ALPHA adds the production-safe baseline: A-00 (auth middleware), A-01 (rate-limit), A-02 (LLM-seam trace-wrapping), A-03 (permission audit spans), A-04 (health endpoints), A-05 (session-log encryption), A-06 (JSONL span cross-link), A-07 (cache LRU + Redis tuning), A-08 (smoke tests v2), A-09 (this deploy guide), A-10 (Docker compose v2), A-11 (Alembic migrations), A-12 (Settings v2: `ORYA_ENV` prod-guard + `orya config` CLI), A-13 (CostAwareRouter: budget-based model degrade) and A-14 (cost-tracking span attributes + `orya_llm_cost_usd_total` metric). See [PROMPT_ALPHA.md](analytics/PROMPT_ALPHA.md) for the phase spec.
+Tickets M-00…M-28 (bootstrap → failure recovery) and MVP-POLISH are implemented. ALPHA adds the production-safe baseline: A-00 (auth middleware), A-01 (rate-limit), A-02 (LLM-seam trace-wrapping), A-03 (permission audit spans), A-04 (health endpoints), A-05 (session-log encryption), A-06 (JSONL span cross-link), A-07 (cache LRU + Redis tuning), A-08 (smoke tests v2), A-09 (this deploy guide), A-10 (Docker compose v2), A-11 (Alembic migrations), A-12 (Settings v2: `ORYA_ENV` prod-guard + `orya config` CLI), A-13 (CostAwareRouter: budget-based model degrade), A-14 (cost-tracking span attributes + `orya_llm_cost_usd_total` metric) and A-15 (Langfuse OTLP/HTTP JSON span export). See [PROMPT_ALPHA.md](analytics/PROMPT_ALPHA.md) for the phase spec.
 
 ## Quick Start
 
@@ -157,11 +157,11 @@ curl http://localhost:8000/health   # API
 - `/health`, `/docs`, `/redoc`, `/openapi.json`, `/metrics` are JWT-exempt (`AUTH_PUBLIC_PATHS`); everything else requires `Authorization: Bearer <token>`.
 - Compose stack (A-10): override the dev Langfuse secrets (`LANGFUSE_SALT`, `LANGFUSE_ENCRYPTION_KEY`, `NEXTAUTH_SECRET`, `LANGFUSE_INIT_USER_PASSWORD`) for anything non-local; the `api` container runs as root — drop to a non-root user for hardened deployments; the shared Redis backs both the tool cache and the Langfuse queue (allkeys-lru) — give Langfuse its own Redis once trace volume grows.
 
-### Langfuse setup (planned — A-15/A-16/A-17)
+### Langfuse setup (A-15 export; A-16/A-17 planned)
 
 **Infra fact (A-10):** the Langfuse v3 stack itself runs in compose — `docker compose --profile observability up -d` brings up `langfuse` (web), `langfuse-worker`, `clickhouse`, `minio` and the `sampler-proxy` (plus the one-shot `db-init` that creates the `langfuse` database). UI on `http://localhost:3000` (dev login from `LANGFUSE_INIT_*`, see [Docker services (today)](#docker-services-today)).
 
-**Export is still not wired.** Nothing in `app/` sends spans to Langfuse yet — that is A-15/A-16/A-17. The in-process observability seam already works (A-02/A-03/A-04/A-06); the env contract below is what the ALPHA observability stack will consume, so infra and secrets can be prepared now.
+**Export is wired (A-15).** Every finished span (`llm.call`, `agent.permission`, …) is offered to a hand-rolled OTLP/HTTP JSON exporter (`app/core/observability/langfuse.py` — no OpenTelemetry SDK dependency): a bounded queue drained by a background worker POSTs batches to `{LANGFUSE_HOST}/api/public/otel/v1/traces` with Basic auth. That path works both against Langfuse directly and via the A-10 sampler-proxy (which accepts any path and rewrites the downstream target). The `trace_id`/`span_id` are the same A-06 cross-link ids (W3C widths), so the JSONL projection joins the Langfuse trace one-per-turn. `llm.call` spans carry `gen_ai.*` semantic attributes (`gen_ai.operation.name`, `gen_ai.request.model`, `gen_ai.usage.*`, `gen_ai.usage.cost`) so Langfuse v3 renders them as native GENERATION observations with tokens/cost/model. Export is **auto-on when configured** — active only when `LANGFUSE_HOST` + `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` are set (`ORYA_LANGFUSE_EXPORT_ENABLED=false` forces it off). Delivery is fail-soft: drop-on-full bounded queue, short retries, a cooldown after repeated failures, a one-shot `LANGFUSE_DIRECT_URL` fail-open fallback, and a best-effort flush on shutdown — it never blocks or breaks the agent-loop. State surfaces on `GET /health/observability` (`langfuse_export_*` keys) and `/metrics` (`orya_langfuse_export_spans_total` / `orya_langfuse_export_errors_total`).
 
 **Works today:**
 
@@ -170,21 +170,20 @@ curl http://localhost:8000/health   # API
 | `ORYA_LLM_TRACE_ENABLED` (default `true`) | Wrap every `get_llm()` model in `TracedChatModel` — one `llm.call` span per invocation |
 | `ORYA_LLM_TRACE_EXPORTER=stdout` | Debug-export each finished span as a JSON line (default `off` = buffer only) |
 | `ORYA_PERMISSION_AUDIT_ENABLED` (default `true`) | `agent.permission` spans on permission decisions |
-| `GET /health/observability` | `{sdk_enabled, exporter_connected, guardrail_ready, span_buffer_size}` |
-| JSONL projection (A-06) | every event carries `trace_id` / `span_id` — the cross-link to a future Langfuse trace |
+| `LANGFUSE_HOST` + `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` | Enable OTLP span export to Langfuse (A-15); kill-switch `ORYA_LANGFUSE_EXPORT_ENABLED` (default `true`) |
+| `LANGFUSE_DIRECT_URL` | Fail-open fallback endpoint tried once per batch when the primary is unreachable (A-15) |
+| `GET /health/observability` | `{sdk_enabled, exporter_connected, guardrail_ready, span_buffer_size, langfuse_export_enabled, langfuse_export_queued, langfuse_export_exported_total, langfuse_export_failed_total}` |
+| JSONL projection (A-06) | every event carries `trace_id` / `span_id` — the cross-link to the Langfuse trace |
 
-**Planned env contract** (A-15 Langfuse integration, A-16 OryaObservability SDK, A-17 sampler-proxy) — placeholders, no code reads them yet:
+**Remaining env contract** (A-16 OryaObservability SDK, A-17 sampler-proxy) — placeholders, no code reads them yet:
 
 | Env var | Planned role |
 |---|---|
-| `LANGFUSE_HOST` | Tracing endpoint; in the A-10 compose stack it points at the sampler-proxy: `http://sampler-proxy:4321` |
-| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | Langfuse project credentials |
-| `LANGFUSE_DIRECT_URL` | Fail-open fallback straight to Langfuse when the sampler-proxy is down |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` (or `ORYA_OTEL_EXPORTER_OTLP_ENDPOINT`) | OTLP collector endpoint — the setting already exists in `Settings` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` (or `ORYA_OTEL_EXPORTER_OTLP_ENDPOINT`) | Generic OTLP collector endpoint — since A-15 it wins over `LANGFUSE_HOST` and is POSTed at `{endpoint}/v1/traces` |
 | `ORYA_SAMPLER_PROXY_URL` (default `http://sampler-proxy:4321`) | Sampler-proxy base URL probed by `GET /health/sampler-proxy` (A-04) |
-| `AGENT_OBS_ENABLED` / `AGENT_OBS_SAMPLER_AUDIT_ENABLED` | OryaObservability SDK kill-switch / sampler audit trail |
+| `AGENT_OBS_ENABLED` / `AGENT_OBS_SAMPLER_AUDIT_ENABLED` | OryaObservability SDK kill-switch / sampler audit trail (A-16/A-17) |
 
-Until A-15 lands, use `ORYA_LLM_TRACE_EXPORTER=stdout` plus the JSONL `trace_id` cross-link for offline debugging.
+Offline debugging without Langfuse still works via `ORYA_LLM_TRACE_EXPORTER=stdout` plus the JSONL `trace_id` cross-link.
 
 ## Environment variables
 
@@ -204,15 +203,20 @@ Every knob recognized by `app/core/config.py`, by group. Most settings accept tw
 | `ORYA_LLM_RETRY_ATTEMPTS` | `3` | Total attempts of one provider call (incl. the first) |
 | `ORYA_LLM_RETRY_BACKOFF_SECONDS` | `1.0` | Base delay of the exponential retry backoff |
 
-### Observability (A-02/A-03/A-04, planned A-15…A-17)
+### Observability (A-02/A-03/A-04/A-15, planned A-16…A-17)
 
 | Env var | Default | Description |
 |---|---|---|
 | `ORYA_LLM_TRACE_ENABLED` | `true` | `TracedChatModel` wrapper: one `llm.call` span per `get_llm()` call; `false` = raw adapter |
 | `ORYA_LLM_TRACE_EXPORTER` | `off` | `off` \| `stdout` — debug JSON export of finished spans |
 | `ORYA_PERMISSION_AUDIT_ENABLED` | `true` | Emit `agent.permission` audit spans |
+| `LANGFUSE_HOST` | — | OTLP ingest base for span export (A-15) — direct Langfuse (`http://host:3000`) or the sampler-proxy; effective only with both keys set |
+| `LANGFUSE_PUBLIC_KEY` | — | Langfuse project public key (Basic-auth user) |
+| `LANGFUSE_SECRET_KEY` | — | Langfuse project secret key (Basic-auth password) |
+| `LANGFUSE_DIRECT_URL` | — | Fail-open fallback endpoint tried once per batch when the primary export endpoint is unreachable (A-15) |
+| `ORYA_LANGFUSE_EXPORT_ENABLED` | `true` | A-15 export kill-switch — `false` keeps spans in-process even when host+keys are set |
 | `LANGSMITH_API_KEY` | — | Placeholder (LangSmith) |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` / `ORYA_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP collector endpoint (planned Langfuse export) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` / `ORYA_OTEL_EXPORTER_OTLP_ENDPOINT` | — | Generic OTLP collector endpoint — wins over `LANGFUSE_HOST`, POSTed at `{endpoint}/v1/traces` (A-15) |
 | `ORYA_SAMPLER_PROXY_URL` | `http://sampler-proxy:4321` | Sampler-proxy base URL for `/health/sampler-proxy` |
 
 ### Database (M-03)
@@ -440,7 +444,7 @@ With `SESSION_LOG_ENCRYPTION_ENABLED=true` and `SESSION_LOG_ENCRYPTION_KEY` (≥
 
 ### Span cross-link (A-06)
 
-The JSONL projection is additive: every event carries the observability ids of the turn it belongs to — `trace_id` on user/ai/tool events and `span_id` where the emitter knows it (AI/tool-call messages stamped from `additional_kwargs["orya_span"]`). One LangGraph turn shares one `trace_id` (the turn-trace contextvar set by the runtime), so a future Langfuse trace (A-15) and the local JSONL projection can be joined on it. v1 readers are unaffected — the fields are top-level additions consumed with `.get()`.
+The JSONL projection is additive: every event carries the observability ids of the turn it belongs to — `trace_id` on user/ai/tool events and `span_id` where the emitter knows it (AI/tool-call messages stamped from `additional_kwargs["orya_span"]`). One LangGraph turn shares one `trace_id` (the turn-trace contextvar set by the runtime), so a Langfuse trace (A-15) and the local JSONL projection can be joined on it. v1 readers are unaffected — the fields are top-level additions consumed with `.get()`.
 
 ## Sessions API (M-20)
 
@@ -572,7 +576,7 @@ Switching happens only between turns (the graph is rebuilt per request), the bud
 | Endpoint | Purpose |
 |---|---|
 | `GET /health` | Liveness — `{"status": "ok", "message": "OryaAgent API is running"}`; always public, no auth |
-| `GET /health/observability` | Observability seam — `{"sdk_enabled", "exporter_connected", "guardrail_ready", "span_buffer_size"}` |
+| `GET /health/observability` | Observability seam — `{sdk_enabled, exporter_connected, guardrail_ready, span_buffer_size, langfuse_export_enabled, langfuse_export_queued, langfuse_export_exported_total, langfuse_export_failed_total}` |
 | `GET /health/sampler-proxy` | Probes `ORYA_SAMPLER_PROXY_URL/sampler/status` — `200` when reachable, `503` when unconfigured/unreachable (the proxy itself ships with A-17) |
 
 All three are JWT-exempt public paths, so load balancers and uptime checks work without credentials.
@@ -588,9 +592,11 @@ Every model returned by `get_llm()` is wrapped in `TracedChatModel`: one `llm.ca
 | `ORYA_PERMISSION_AUDIT_ENABLED` (default `true`) | permission-decision audit spans |
 | `GET /health/observability` | live view of the buffer and kill-switch state |
 
-Spans carry `trace_id`/`span_id`; the same ids land in the JSONL projection (A-06), which is the offline cross-link until the Langfuse exporter ships (see [Langfuse setup](#langfuse-setup-planned--a-15a-16a-17)). Smoke coverage: `tests/smoke/test_smoke_v2.py` scenario 5 drives a scripted turn and asserts the span → health chain.
+Spans carry `trace_id`/`span_id`; the same ids land in the JSONL projection (A-06) and, since A-15, in the Langfuse OTLP export — the ids are the join key across all three (see [Langfuse setup](#langfuse-setup-a-15-export-a-16a-17-planned)). Smoke coverage: `tests/smoke/test_smoke_v2.py` scenario 5 drives a scripted turn and asserts the span → health chain.
 
 Since A-14 every `llm.call` span with token usage also carries `cost.input_tokens`, `cost.output_tokens` and `cost.usd` — `tokens × pricing.yaml` (`app/core/llm/pricing.yaml`, `0.0` when the model has no price entry). The cost attributes are stamped independently of the budget identity and the `ORYA_COST_ROUTER_ENABLED` kill-switch (observability, not budgeting), and every priced call accumulates `orya_llm_cost_usd_total{model}` on `/metrics`.
+
+Since A-15 every finished span is additionally offered to the Langfuse OTLP exporter (see [Langfuse setup](#langfuse-setup-a-15-export-a-16a-17-planned)) — queued in the background, never blocking the agent-loop. `/metrics` exposes `orya_langfuse_export_spans_total` (delivered) and `orya_langfuse_export_errors_total` (dropped/failed).
 
 ## Tool-result cache (M-21)
 
@@ -739,6 +745,7 @@ Strategies (ARCHITECT6 §4.2.2): `PREFERENCES.md` archives only `agent_inferred`
 - ✅ **A-12** - Settings v2: `ORYA_ENV=dev|prod` prod-guard (fail-fast on auth/rate-limit/CORS, non-fatal `prod_warnings()` for encryption/localhost), `orya config show|check` CLI (redacted effective settings with per-field source), LOG_LEVEL allow-list
 - ✅ **A-13** - CostAwareRouter: per-identity daily budget counters (`orya:cost:*`, Redis/memory seam), model degrade at 70% / warning at 90% / `429` at 100% (kill-switch `ORYA_COST_ROUTER_ENABLED`), `budget` SSE frame + payload field, `orya_cost_aware_switch_total` metric, cost recording from the A-02 seam spans (`tokens × pricing.yaml`)
 - ✅ **A-14** - Cost-tracking spans: `cost.input_tokens` / `cost.output_tokens` / `cost.usd` attributes on every `llm.call` span (`tokens × pricing.yaml`, `0.0` unpriced, identity-independent), shared `price_usd()` pricing seam, `orya_llm_cost_usd_total{model}` counter on `/metrics`
+- ✅ **A-15** - Langfuse OTLP export: hand-rolled OTLP/HTTP JSON exporter (`app/core/observability/langfuse.py`, no OTEL SDK dep) POSTing span batches to `{LANGFUSE_HOST}/api/public/otel/v1/traces` with Basic auth — auto-on when configured, `gen_ai.*` enrichment so Langfuse renders `llm.call` as GENERATION, queued worker thread (drop-on-full, retries + cooldown, `LANGFUSE_DIRECT_URL` fail-open), W3C trace/span ids matching the A-06 cross-link, `langfuse_export_*` health keys + `orya_langfuse_export_*` counters
 - ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for the 28 MVP tickets and [PROMPT_ALPHA.md](analytics/PROMPT_ALPHA.md) for A-00…A-20)
 
 ## LLM Providers (M-01)

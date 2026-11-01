@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from httpx import AsyncClient, ConnectError, HTTPStatusError, TimeoutException
 
 from app.core.config import get_settings
+from app.core.observability.langfuse import get_export_stats
 from app.core.observability.spans import get_span_buffer
 
 router = APIRouter(tags=["health"])
@@ -22,12 +23,18 @@ async def health_observability() -> dict[str, Any]:
     """Check observability subsystem health."""
     settings = get_settings()
     span_buffer = get_span_buffer()
+    langfuse = get_export_stats()
 
     return {
         "sdk_enabled": settings.llm_trace_enabled,
         "exporter_connected": settings.llm_trace_exporter != "off",
         "guardrail_ready": settings.permission_audit_enabled,
         "span_buffer_size": len(span_buffer),
+        # A-15: Langfuse OTLP exporter state (auto-on when configured)
+        "langfuse_export_enabled": langfuse["enabled"],
+        "langfuse_export_queued": langfuse["queued"],
+        "langfuse_export_exported_total": langfuse["exported_total"],
+        "langfuse_export_failed_total": langfuse["failed_total"],
     }
 
 

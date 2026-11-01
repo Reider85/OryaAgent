@@ -120,6 +120,11 @@ def test_health_observability_defaults(client: TestClient):
     assert data["exporter_connected"] is False
     assert data["guardrail_ready"] is True
     assert data["span_buffer_size"] == 0
+    # A-15: Langfuse exporter off without LANGFUSE_* configuration
+    assert data["langfuse_export_enabled"] is False
+    assert data["langfuse_export_queued"] == 0
+    assert data["langfuse_export_exported_total"] >= 0
+    assert data["langfuse_export_failed_total"] >= 0
 
 
 def test_health_observability_sdk_disabled(client: TestClient):
@@ -164,6 +169,27 @@ def test_health_observability_permission_disabled(
         # Drop the poisoned lru_cache entry: monkeypatch restores the env
         # only after teardown, and a stale False would leak into later
         # modules (test_permission_audit reads it per check).
+        clear_settings_cache()
+
+
+def test_health_observability_langfuse_enabled_when_configured(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    """A-15: exporter reports enabled once host + both keys are set."""
+    from app.core.observability.langfuse import reset_export_stats
+
+    monkeypatch.setenv("LANGFUSE_HOST", "http://langfuse.test:3000")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
+    clear_settings_cache()
+    reset_export_stats()
+    try:
+        response = client.get("/health/observability")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["langfuse_export_enabled"] is True
+        assert data["langfuse_export_queued"] == 0
+    finally:
         clear_settings_cache()
 
 

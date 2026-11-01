@@ -19,6 +19,13 @@ trace id for the whole agent turn; every span created inside the turn
 (``_new_ids``). The same id is stamped onto the turn's messages and
 therefore lands in the JSONL projection — the cross-link to Langfuse.
 
+A-15 (Langfuse export): ``_finalize`` additionally offers every record
+to ``app.core.observability.langfuse`` — the queued OTLP/HTTP JSON
+exporter that POSTs batches to Langfuse when configured (auto-on with
+``LANGFUSE_HOST`` + keys, kill-switch ``ORYA_LANGFUSE_EXPORT_ENABLED``).
+Span ids are W3C-width (16 hex; trace ids 32 hex) so the exported
+Langfuse trace/span ids equal the A-06 cross-link ids.
+
 Usage::
 
     from app.core.observability.spans import emit_span, get_span_buffer
@@ -54,6 +61,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.core.config import get_settings
+from app.core.observability.langfuse import export_span
 
 logger = logging.getLogger(__name__)
 
@@ -143,13 +151,14 @@ def new_trace_id() -> str:
 def _new_ids() -> tuple[str, str]:
     """Generate span ids; reuse the turn trace when one is active (A-06).
 
-    ``span_id`` is always fresh. ``trace_id`` comes from
-    :func:`set_turn_trace` when a turn is in progress (every span of the
-    turn then joins one Langfuse trace), otherwise a fresh random id —
-    behaviour outside a turn is unchanged.
+    ``span_id`` is always fresh and W3C-width (16 hex = 8 bytes) so the
+    A-15 OTLP exporter can send it to Langfuse unchanged. ``trace_id``
+    comes from :func:`set_turn_trace` when a turn is in progress (every
+    span of the turn then joins one Langfuse trace), otherwise a fresh
+    random id — behaviour outside a turn is unchanged.
     """
     trace_id = _turn_trace_id.get() or new_trace_id()
-    return trace_id, secrets.token_hex(16)
+    return trace_id, secrets.token_hex(8)
 
 
 def _finalize(record: SpanRecord) -> None:
@@ -168,6 +177,12 @@ def _finalize(record: SpanRecord) -> None:
         Exception
     ):  # pragma: no cover - defensive: observability never breaks the agent
         logger.warning("span finalization failed", exc_info=True)
+    # A-15 Langfuse export: outside the buffer try/except so an exporter
+    # fault can never corrupt buffering; export_span itself never raises.
+    try:
+        export_span(record)
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("langfuse export offer failed", exc_info=True)
 
 
 def emit_span(

@@ -91,6 +91,16 @@ def test_api_env_uses_compose_network_hostnames():
     assert env["ORYA_MEMORY_DIR"] == "/data/memory"
 
 
+def test_api_env_wires_langfuse_export():
+    """A-15: the api container exports spans through the sampler-proxy."""
+    env = _services()["api"]["environment"]
+    assert env["LANGFUSE_HOST"] == "http://sampler-proxy:4321"
+    # Interpolated at deploy time; must match LANGFUSE_INIT_PROJECT_* keys.
+    assert env["LANGFUSE_PUBLIC_KEY"] == "${LANGFUSE_PUBLIC_KEY:-pk-lf-orya-agent}"
+    assert env["LANGFUSE_SECRET_KEY"] == "${LANGFUSE_SECRET_KEY:-sk-lf-orya-agent}"
+    assert env["LANGFUSE_DIRECT_URL"] == "${LANGFUSE_DIRECT_URL:-http://langfuse:3000}"
+
+
 def test_chainlit_targets_api_service():
     env = _services()["chainlit"]["environment"]
     assert env["ORYA_API_URL"] == "http://api:8000"
