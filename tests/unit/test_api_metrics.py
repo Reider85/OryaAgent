@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from app.core.cache import MemoryCache, set_cache
 from app.core.config import clear_settings_cache
+from app.core.cost_tracker import add_cost_total, reset_cost_totals
 
 _MANAGED_ENV_VARS = frozenset(
     {
@@ -33,8 +34,10 @@ def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.chdir(tmp_path)
     clear_settings_cache()
     set_cache(MemoryCache())
+    reset_cost_totals()
     yield
     set_cache(None)
+    reset_cost_totals()
     clear_settings_cache()
 
 
@@ -67,6 +70,7 @@ def test_metrics_is_prometheus_text(client: TestClient):
     assert "# TYPE orya_tool_cache_hits_total counter" in body
     assert "# TYPE orya_tool_cache_misses_total counter" in body
     assert "# TYPE orya_cost_aware_switch_total counter" in body
+    assert "# TYPE orya_llm_cost_usd_total counter" in body
 
 
 def test_metrics_reports_cost_aware_switches(client: TestClient):
@@ -107,6 +111,30 @@ def test_metrics_reports_per_tool_counters(client: TestClient):
 
     assert 'orya_tool_cache_hits_total{tool="read"} 2' in body
     assert 'orya_tool_cache_misses_total{tool="read"} 1' in body
+
+
+def test_metrics_reports_cost_totals(client: TestClient):
+    """A-14: per-model spend accumulated by the seam's cost.* attributes."""
+    reset_cost_totals()
+    add_cost_total("deepseek-chat", 0.25)
+    add_cost_total("deepseek-chat", 0.5)
+    add_cost_total("local-model", 0.0)
+
+    body = client.get("/metrics").text
+
+    assert "# HELP orya_llm_cost_usd_total" in body
+    assert 'orya_llm_cost_usd_total{model="deepseek-chat"} 0.75' in body
+    # unpriced/free models keep a visible zero-valued series
+    assert 'orya_llm_cost_usd_total{model="local-model"} 0.0' in body
+
+
+def test_metrics_cost_totals_empty_state(client: TestClient):
+    reset_cost_totals()
+
+    body = client.get("/metrics").text
+
+    assert "# TYPE orya_llm_cost_usd_total counter" in body
+    assert "orya_llm_cost_usd_total{" not in body
 
 
 def test_metrics_accumulates_across_requests(client: TestClient):

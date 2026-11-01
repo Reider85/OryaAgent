@@ -15,6 +15,9 @@ the injection-detection counter of ``app.core.security``
 A-13 adds ``orya_cost_aware_switch_total{from_model,to_model}`` — the
 CostAwareRouter's model-degrade counter (BACKLOG5 A-13 AC), incremented
 once per turn the budget actually forces a different model.
+A-14 adds ``orya_llm_cost_usd_total{model}`` — the per-model USD spend
+accumulated by the LLM seam's ``cost.*`` span attributes (PROMPT_ALPHA
+A-14), counting every priced call regardless of the budget identity.
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ from typing import Any
 from fastapi import APIRouter, Response
 
 from app.core.cache import get_cache_stats
+from app.core.cost_tracker import get_cost_totals
 from app.core.llm.cost_router import get_switch_stats
 from app.core.security import get_injection_stats
 
@@ -95,13 +99,26 @@ def _render_switch_counters() -> list[str]:
     return lines
 
 
+def _render_cost_totals() -> list[str]:
+    """Render the A-14 per-model spend counter (one HELP/TYPE)."""
+    metric = "orya_llm_cost_usd_total"
+    lines = [
+        f"# HELP {metric} Total USD spend per model from llm.call spans (A-14).",
+        f"# TYPE {metric} counter",
+    ]
+    for model, total in sorted(get_cost_totals().items()):
+        lines.append(f'{metric}{{model="{_escape_label(model)}"}} {total}')
+    return lines
+
+
 @router.get("/metrics")
 async def metrics() -> Response:
-    """Prometheus exposition: cache (M-21), injection (M-22), switch (A-13)."""
+    """Prometheus exposition: cache (M-21), injection (M-22), switch (A-13), cost (A-14)."""
     lines = (
         _render_prometheus(get_cache_stats())
         + _render_injection_counters()
         + _render_switch_counters()
+        + _render_cost_totals()
     )
     return Response(content="\n".join(lines) + "\n", media_type=PROMETHEUS_MEDIA_TYPE)
 

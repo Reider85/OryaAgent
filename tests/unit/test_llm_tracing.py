@@ -13,6 +13,11 @@ from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 from app.core.config import clear_settings_cache
+from app.core.cost_tracker import (
+    get_cost_identity,
+    get_cost_totals,
+    reset_cost_totals,
+)
 from app.core.llm import get_llm
 from app.core.llm.registry import clear_registry_cache
 from app.core.llm.tracing import (
@@ -30,6 +35,7 @@ class FakeChatModel(BaseChatModel):
     fail: bool = False
     input_tokens: int = 11
     output_tokens: int = 22
+    with_usage: bool = True
 
     @property
     def _llm_type(self) -> str:
@@ -40,14 +46,16 @@ class FakeChatModel(BaseChatModel):
     ) -> ChatResult:
         if self.fail:
             raise RuntimeError("boom")
-        message = AIMessage(
-            content="pong",
-            usage_metadata={
+        usage = (
+            {
                 "input_tokens": self.input_tokens,
                 "output_tokens": self.output_tokens,
                 "total_tokens": self.input_tokens + self.output_tokens,
-            },
+            }
+            if self.with_usage
+            else None
         )
+        message = AIMessage(content="pong", usage_metadata=usage)
         return ChatResult(generations=[ChatGeneration(message=message)])
 
     async def _agenerate(
@@ -70,10 +78,12 @@ def isolated_llm_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     clear_settings_cache()
     clear_registry_cache()
     clear_span_buffer()
+    reset_cost_totals()
     set_turn_trace(None)
     yield
     set_turn_trace(None)
     clear_span_buffer()
+    reset_cost_totals()
     clear_settings_cache()
     clear_registry_cache()
 
@@ -307,3 +317,66 @@ def test_stamp_span_ignores_non_message():
     assert _stamp_span("not-a-message", record) is None
     assert _stamp_span(None, record) is None
     assert _stamp_span(object(), record) is None
+
+
+# --- A-14: cost-tracking span attributes ---------------------------------------
+
+# deepseek-chat (pricing.yaml): input 0.00027 / output 0.0011 USD per 1k
+_DEEPSEEK_USD = pytest.approx(11 * 0.00027 / 1000 + 22 * 0.0011 / 1000)
+
+
+async def test_ainvoke_stamps_cost_attributes():
+    wrapped = wrap_with_tracing(
+        FakeChatModel(), provider="fakeprov", model_name="deepseek-chat"
+    )
+    await wrapped.ainvoke([AIMessage(content="ping")])
+
+    span = list(get_span_buffer())[0]
+    assert span.attributes["cost.input_tokens"] == 11
+    assert span.attributes["cost.output_tokens"] == 22
+    assert span.attributes["cost.usd"] == _DEEPSEEK_USD
+    # observability, not budget: no identity stamped for this call
+    assert get_cost_identity() is None
+    assert get_cost_totals()["deepseek-chat"] == _DEEPSEEK_USD
+
+
+def test_invoke_sync_stamps_cost_attributes():
+    wrapped = wrap_with_tracing(
+        FakeChatModel(), provider="fakeprov", model_name="deepseek-chat"
+    )
+    wrapped.invoke([AIMessage(content="ping")])
+
+    span = list(get_span_buffer())[0]
+    assert span.attributes["cost.input_tokens"] == 11
+    assert span.attributes["cost.output_tokens"] == 22
+    assert span.attributes["cost.usd"] == _DEEPSEEK_USD
+    assert get_cost_totals()["deepseek-chat"] == _DEEPSEEK_USD
+
+
+async def test_unpriced_model_costs_zero_but_is_tracked():
+    """pricing.yaml miss: cost.usd = 0.0, the metric series still appears."""
+    wrapped = wrap_with_tracing(
+        FakeChatModel(), provider="fakeprov", model_name="fakemodel"
+    )
+    await wrapped.ainvoke([AIMessage(content="ping")])
+
+    span = list(get_span_buffer())[0]
+    assert span.attributes["cost.input_tokens"] == 11
+    assert span.attributes["cost.output_tokens"] == 22
+    assert span.attributes["cost.usd"] == 0.0
+    assert get_cost_totals()["fakemodel"] == 0.0
+
+
+async def test_no_usage_metadata_means_no_cost_attributes():
+    wrapped = wrap_with_tracing(
+        FakeChatModel(with_usage=False),
+        provider="fakeprov",
+        model_name="deepseek-chat",
+    )
+    await wrapped.ainvoke([AIMessage(content="ping")])
+
+    span = list(get_span_buffer())[0]
+    assert "tokens.input" not in span.attributes
+    assert "cost.input_tokens" not in span.attributes
+    assert "cost.usd" not in span.attributes
+    assert get_cost_totals() == {}

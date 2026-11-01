@@ -73,7 +73,7 @@ def test_readme_langfuse_section_is_forward_looking():
 
 def test_readme_phase_progress_covers_alpha_tickets():
     text = _readme()
-    for i in range(14):  # A-00..A-13 (A-13: CostAwareRouter)
+    for i in range(15):  # A-00..A-14 (A-14: cost-tracking spans)
         marker = f"**A-{i:02d}**"
         assert marker in text, f"Phase Progress is missing {marker}"
 

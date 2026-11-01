@@ -18,6 +18,13 @@ A-13 (cost tracking): after ``usage_metadata`` is copied into the span,
 — ``tokens x pricing.yaml`` into the current identity's daily counter
 (no-op without a stamped cost identity; never raises).
 
+A-14 (cost-tracking in spans): when both token counts are known the
+span additionally carries ``cost.input_tokens`` / ``cost.output_tokens``
+/ ``cost.usd`` (``tokens x pricing.yaml``, ``0.0`` for unpriced models)
+and accumulates the ``orya_llm_cost_usd_total{model}`` metric counter.
+Unlike the budget recording, the cost attributes are stamped on every
+span — independent of the cost identity and the router kill-switch.
+
 Design notes (A-02 scope):
 - No message content is recorded — PII stays out of spans by omission
   (guardrail/content capture arrives with A-16/A-14).
@@ -47,7 +54,7 @@ from langchain_core.messages import BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 from app.core.config import get_settings
-from app.core.cost_tracker import record_usage
+from app.core.cost_tracker import add_cost_total, price_usd, record_usage
 from app.core.observability.spans import (
     ORYA_SPAN_KEY,
     SpanRecord,
@@ -97,6 +104,26 @@ def _schedule_record_usage(
     except RuntimeError:
         return
     loop.create_task(record_usage(provider, model, input_tokens, output_tokens))
+
+
+def _attach_cost(record: SpanRecord, model: str, tokens: tuple[int, int]) -> None:
+    """Stamp ``cost.*`` attributes and feed the metric counter (A-14).
+
+    Pricing failures degrade to "no cost on this span" — observability
+    must never break the turn. The metric counter is updated even when
+    the price is ``0.0`` (free/local or unpriced models), so the model
+    stays visible in the exposition.
+    """
+    input_tokens, output_tokens = tokens
+    try:
+        usd = price_usd(model, input_tokens, output_tokens)
+    except Exception:  # noqa: BLE001 - never raise into the agent-loop
+        logger.warning("cost pricing failed (model=%s)", model, exc_info=True)
+        return
+    record.attributes["cost.input_tokens"] = input_tokens
+    record.attributes["cost.output_tokens"] = output_tokens
+    record.attributes["cost.usd"] = usd
+    add_cost_total(model, usd)
 
 
 def _stamp_span(message: Any, record: SpanRecord) -> None:
@@ -218,6 +245,7 @@ class TracedChatModel(BaseChatModel):
             _attach_usage(record, result)
             tokens = _usage_tokens(record)
             if tokens is not None:
+                _attach_cost(record, self.llm_model, tokens)
                 _schedule_record_usage(self.llm_provider, self.llm_model, *tokens)
             _stamp_span(result, record)
             return result
@@ -235,6 +263,7 @@ class TracedChatModel(BaseChatModel):
             _attach_usage(record, result)
             tokens = _usage_tokens(record)
             if tokens is not None:
+                _attach_cost(record, self.llm_model, tokens)
                 await record_usage(
                     self.llm_provider, self.llm_model, tokens[0], tokens[1]
                 )

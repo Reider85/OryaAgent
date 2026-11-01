@@ -4,7 +4,7 @@ Senior Python coding agent with UI and long-term memory.
 
 ## Phase: ALPHA
 
-Tickets M-00…M-28 (bootstrap → failure recovery) and MVP-POLISH are implemented. ALPHA adds the production-safe baseline: A-00 (auth middleware), A-01 (rate-limit), A-02 (LLM-seam trace-wrapping), A-03 (permission audit spans), A-04 (health endpoints), A-05 (session-log encryption), A-06 (JSONL span cross-link), A-07 (cache LRU + Redis tuning), A-08 (smoke tests v2), A-09 (this deploy guide), A-10 (Docker compose v2), A-11 (Alembic migrations), A-12 (Settings v2: `ORYA_ENV` prod-guard + `orya config` CLI) and A-13 (CostAwareRouter: budget-based model degrade). See [PROMPT_ALPHA.md](analytics/PROMPT_ALPHA.md) for the phase spec.
+Tickets M-00…M-28 (bootstrap → failure recovery) and MVP-POLISH are implemented. ALPHA adds the production-safe baseline: A-00 (auth middleware), A-01 (rate-limit), A-02 (LLM-seam trace-wrapping), A-03 (permission audit spans), A-04 (health endpoints), A-05 (session-log encryption), A-06 (JSONL span cross-link), A-07 (cache LRU + Redis tuning), A-08 (smoke tests v2), A-09 (this deploy guide), A-10 (Docker compose v2), A-11 (Alembic migrations), A-12 (Settings v2: `ORYA_ENV` prod-guard + `orya config` CLI), A-13 (CostAwareRouter: budget-based model degrade) and A-14 (cost-tracking span attributes + `orya_llm_cost_usd_total` metric). See [PROMPT_ALPHA.md](analytics/PROMPT_ALPHA.md) for the phase spec.
 
 ## Quick Start
 
@@ -590,6 +590,8 @@ Every model returned by `get_llm()` is wrapped in `TracedChatModel`: one `llm.ca
 
 Spans carry `trace_id`/`span_id`; the same ids land in the JSONL projection (A-06), which is the offline cross-link until the Langfuse exporter ships (see [Langfuse setup](#langfuse-setup-planned--a-15a-16a-17)). Smoke coverage: `tests/smoke/test_smoke_v2.py` scenario 5 drives a scripted turn and asserts the span → health chain.
 
+Since A-14 every `llm.call` span with token usage also carries `cost.input_tokens`, `cost.output_tokens` and `cost.usd` — `tokens × pricing.yaml` (`app/core/llm/pricing.yaml`, `0.0` when the model has no price entry). The cost attributes are stamped independently of the budget identity and the `ORYA_COST_ROUTER_ENABLED` kill-switch (observability, not budgeting), and every priced call accumulates `orya_llm_cost_usd_total{model}` on `/metrics`.
+
 ## Tool-result cache (M-21)
 
 Repeated tool calls for unchanged files are served from a cache instead of re-running the tool (TRIZ #28). The seam lives in `app/core/cache.py`:
@@ -736,6 +738,7 @@ Strategies (ARCHITECT6 §4.2.2): `PREFERENCES.md` archives only `agent_inferred`
 - ✅ **A-11** - Alembic migrations: revision wrappers over the `.sql` files (`upgrade` reads the file, inline `downgrade` DDL), `alembic_version` bookkeeping with `schema_migrations` retirement, `orya db migrate|downgrade|current` CLI, isolated-schema rollback roundtrip test
 - ✅ **A-12** - Settings v2: `ORYA_ENV=dev|prod` prod-guard (fail-fast on auth/rate-limit/CORS, non-fatal `prod_warnings()` for encryption/localhost), `orya config show|check` CLI (redacted effective settings with per-field source), LOG_LEVEL allow-list
 - ✅ **A-13** - CostAwareRouter: per-identity daily budget counters (`orya:cost:*`, Redis/memory seam), model degrade at 70% / warning at 90% / `429` at 100% (kill-switch `ORYA_COST_ROUTER_ENABLED`), `budget` SSE frame + payload field, `orya_cost_aware_switch_total` metric, cost recording from the A-02 seam spans (`tokens × pricing.yaml`)
+- ✅ **A-14** - Cost-tracking spans: `cost.input_tokens` / `cost.output_tokens` / `cost.usd` attributes on every `llm.call` span (`tokens × pricing.yaml`, `0.0` unpriced, identity-independent), shared `price_usd()` pricing seam, `orya_llm_cost_usd_total{model}` counter on `/metrics`
 - ... (see [PROMPT_MVP.md](analytics/PROMPT_MVP.md) for the 28 MVP tickets and [PROMPT_ALPHA.md](analytics/PROMPT_ALPHA.md) for A-00…A-20)
 
 ## LLM Providers (M-01)

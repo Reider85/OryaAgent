@@ -16,11 +16,15 @@ from app.core.config import clear_settings_cache, get_settings
 from app.core.cost_tracker import (
     MemoryCostStore,
     RedisCostStore,
+    add_cost_total,
     close_cost_store,
     get_cost_identity,
     get_cost_store,
+    get_cost_totals,
     init_cost_store,
+    price_usd,
     record_usage,
+    reset_cost_totals,
     set_cost_identity,
     set_cost_store,
     with_cost_identity,
@@ -50,9 +54,11 @@ def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     clear_settings_cache()
     set_cost_store(None)
     set_cost_identity(None)
+    reset_cost_totals()
     yield
     set_cost_store(None)
     set_cost_identity(None)
+    reset_cost_totals()
     clear_settings_cache()
 
 
@@ -145,6 +151,36 @@ def test_with_cost_identity_restores_previous() -> None:
     with with_cost_identity("session:inner"):
         assert get_cost_identity() == "session:inner"
     assert get_cost_identity() == "session:outer"
+
+
+# --- price_usd + metric totals (A-14) ------------------------------------------
+
+
+def test_price_usd_matches_pricing_yaml() -> None:
+    # haiku: 0.0008 / 0.004 per 1k → 1000 in + 500 out = 0.0028
+    assert price_usd("claude-3-5-haiku-latest", 1000, 500) == pytest.approx(0.0028)
+    assert price_usd("acme-unknown-model", 1000, 500) == 0.0
+
+
+async def test_price_usd_equals_recorded_spend() -> None:
+    """The span/metric pricing seam and the budget counter agree."""
+    store = MemoryCostStore()
+    set_cost_store(store)
+    set_cost_identity("session:s1")
+    await record_usage("anthropic", "claude-3-5-haiku-latest", 1000, 500)
+    assert await store.get_spend("session:s1") == pytest.approx(
+        price_usd("claude-3-5-haiku-latest", 1000, 500)
+    )
+
+
+def test_add_cost_total_accumulates_and_resets() -> None:
+    reset_cost_totals()
+    add_cost_total("model-a", 0.25)
+    add_cost_total("model-a", 0.5)
+    add_cost_total("model-b", 1.0)
+    assert get_cost_totals() == pytest.approx({"model-a": 0.75, "model-b": 1.0})
+    reset_cost_totals()
+    assert get_cost_totals() == {}
 
 
 # --- redis store ---------------------------------------------------------------

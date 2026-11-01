@@ -25,6 +25,13 @@ limiter takes. ``record_usage`` never raises into the agent loop.
 Settings are read through ``get_settings()`` inside each call — never
 bind an instance at import time (tests sandbox the env and call
 ``clear_settings_cache()``).
+
+A-14 (cost-tracking in spans): :func:`price_usd` is the public pricing
+seam shared by the budget counter, the ``cost.*`` span attributes the
+LLM tracer stamps on every ``llm.call``, and the process-local
+``orya_llm_cost_usd_total{model}`` metric counter
+(:func:`add_cost_total` / :func:`get_cost_totals`) — one pricing source,
+no duplicated math.
 """
 
 from __future__ import annotations
@@ -43,11 +50,15 @@ from app.core.config import get_settings
 __all__ = [
     "MemoryCostStore",
     "RedisCostStore",
+    "add_cost_total",
     "close_cost_store",
     "get_cost_identity",
     "get_cost_store",
+    "get_cost_totals",
     "init_cost_store",
+    "price_usd",
     "record_usage",
+    "reset_cost_totals",
     "set_cost_identity",
     "set_cost_store",
     "with_cost_identity",
@@ -268,8 +279,13 @@ async def close_cost_store() -> None:
     _initialized = False
 
 
-def _price_usd(model: str, input_tokens: int, output_tokens: int) -> float:
-    """USD cost of one call from ``pricing.yaml`` (0.0 for unknown/free)."""
+def price_usd(model: str, input_tokens: int, output_tokens: int) -> float:
+    """USD cost of one call from ``pricing.yaml`` (0.0 for unknown/free).
+
+    Public seam since A-14: the span-cost attributes and the
+    ``orya_llm_cost_usd_total`` metric compute from the same table as
+    the budget counter.
+    """
     from app.core.llm.registry import load_pricing
 
     spec = load_pricing().get(model)
@@ -280,6 +296,40 @@ def _price_usd(model: str, input_tokens: int, output_tokens: int) -> float:
         input_tokens * spec.input_per_1k / 1000.0
         + output_tokens * spec.output_per_1k / 1000.0
     )
+
+
+#: Process-local per-model USD totals fed by the A-14 seam hook
+#: (``/metrics`` exposition; the budget counters stay identity-keyed).
+_cost_totals: dict[str, float] = {}
+_cost_totals_lock = threading.Lock()
+
+
+def add_cost_total(model: str, usd: float) -> None:
+    """Accumulate one call's USD into the process-local metric counter.
+
+    Fed by ``TracedChatModel`` alongside the ``cost.*`` span attributes:
+    it counts every priced call, independent of the budget identity or
+    the ``ORYA_COST_ROUTER_ENABLED`` kill-switch. Never raises.
+    """
+    try:
+        with _cost_totals_lock:
+            _cost_totals[model] = _cost_totals.get(model, 0.0) + usd
+    except Exception:  # noqa: BLE001 - observability never breaks a turn
+        logger.warning(
+            "cost total accumulation failed (model=%s)", model, exc_info=True
+        )
+
+
+def get_cost_totals() -> dict[str, float]:
+    """Snapshot of the per-model USD totals (``{model: usd}``)."""
+    with _cost_totals_lock:
+        return dict(_cost_totals)
+
+
+def reset_cost_totals() -> None:
+    """Drop all accumulated totals (tests)."""
+    with _cost_totals_lock:
+        _cost_totals.clear()
 
 
 async def record_usage(
@@ -296,7 +346,7 @@ async def record_usage(
     if not identity:
         return
     try:
-        usd = _price_usd(model, input_tokens, output_tokens)
+        usd = price_usd(model, input_tokens, output_tokens)
         if usd <= 0.0:
             return
         await get_cost_store().add_spend(identity, usd)
