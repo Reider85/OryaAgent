@@ -432,6 +432,39 @@ class Settings(BaseSettings):
             "redis: require Redis at startup; memory: never use Redis"
         ),
     )
+    # ALPHA: tiered model router (A-18)
+    tiered_router_small_model: str = Field(
+        default="claude-haiku-3.5",
+        validation_alias=AliasChoices(
+            "TIERED_ROUTER_SMALL_MODEL", "ORYA_TIERED_ROUTER_SMALL_MODEL"
+        ),
+        description=(
+            "models.yaml alias for tier=small (A-18); an explicitly set env/"
+            ".env value wins over the tiered_router.models.small list in the "
+            "user config, which wins over this default"
+        ),
+    )
+    tiered_router_large_model: str = Field(
+        default="claude-sonnet-3.5",
+        validation_alias=AliasChoices(
+            "TIERED_ROUTER_LARGE_MODEL", "ORYA_TIERED_ROUTER_LARGE_MODEL"
+        ),
+        description=(
+            "models.yaml alias for tier=large (A-18, the default tier); "
+            "same precedence as tiered_router_small_model"
+        ),
+    )
+    tiered_router_tournament_model: str = Field(
+        default="claude-sonnet-3.5",
+        validation_alias=AliasChoices(
+            "TIERED_ROUTER_TOURNAMENT_MODEL", "ORYA_TIERED_ROUTER_TOURNAMENT_MODEL"
+        ),
+        description=(
+            "models.yaml alias standing in for tier=tournament (A-18, the "
+            "TournamentExecutor is PROD — ALPHA degrades tournament to large "
+            "and ignores this value)"
+        ),
+    )
     # ALPHA: session-log encryption at rest (A-05)
     session_log_encryption_enabled: bool = Field(
         default=False,
@@ -752,6 +785,14 @@ def provider_block(provider: str, config: dict | None = None) -> dict:
         return {}
     entry = providers.get(provider)
     return entry if isinstance(entry, dict) else {}
+
+
+def tiered_router_block(config: dict | None = None) -> dict:
+    """Return the ``tiered_router:`` section of the user config (expanded)."""
+    if config is None:
+        config = load_expanded_user_config()
+    block = config.get("tiered_router")
+    return block if isinstance(block, dict) else {}
 
 
 def is_unresolved(value: str | None) -> bool:

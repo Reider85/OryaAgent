@@ -339,10 +339,10 @@ def check_injection(
         if source.startswith("tool"):
             note_incident("security.incident", "true")
         log_security_incident(
+            pattern,
             source=source,
-            pattern_id=pattern,
+            preview=content[:100],
             session_id=session_id,
-            content_preview=content[:100],
         )
     return pattern
 

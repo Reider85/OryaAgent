@@ -173,24 +173,24 @@ def test_clickhouse_obs_init_service():
     """A-17: clickhouse-obs-init service exists and has correct properties."""
     services = _services()
     assert "clickhouse-obs-init" in services
-    
+
     service = services["clickhouse-obs-init"]
     assert "profiles" in service
     assert "observability" in service["profiles"]
-    
+
     # Should depend on clickhouse being healthy
     assert "depends_on" in service
     assert "clickhouse" in service["depends_on"]
     assert service["depends_on"]["clickhouse"]["condition"] == "service_healthy"
-    
+
     # Should be one-time init (no restart)
     assert service.get("restart") == "no"
-    
+
     # Should have the correct entrypoint
     assert "entrypoint" in service
     # clickhouse-client is in the third element (index 2)
     assert "clickhouse-client" in service["entrypoint"][2]
-    
+
     # Should mount the SQL init script
     assert "volumes" in service
     sql_mounts = [vol for vol in service["volumes"] if "01_audit_events_hot.sql" in vol]
@@ -201,27 +201,27 @@ def test_prometheus_service():
     """A-17: prometheus service exists and has correct properties."""
     services = _services()
     assert "prometheus" in services
-    
+
     service = services["prometheus"]
     assert "profiles" in service
     assert "observability" in service["profiles"]
-    
+
     # Should use the official prometheus image
     assert service["image"] == "prom/prometheus:v3.4.2"
-    
+
     # Should restart unless stopped
     assert service.get("restart") == "unless-stopped"
-    
+
     # Should mount the config file
     assert "volumes" in service
     config_mounts = [vol for vol in service["volumes"] if "prometheus.yml" in vol]
     assert len(config_mounts) == 1
-    
+
     # Should expose the metrics port
     assert "ports" in service
     port_mappings = [port for port in service["ports"] if ":9090" in port]
     assert len(port_mappings) == 1
-    
+
     # Should have health check
     assert "healthcheck" in service
 
@@ -230,18 +230,18 @@ def test_sampler_proxy_new_environment_variables():
     """A-17: sampler-proxy has new A-17 environment variables."""
     services = _services()
     sampler = services["sampler-proxy"]
-    
+
     # Should have the new audit-related environment variables
     expected_env_vars = [
         "PROMETHEUS_URL",
-        "AGENT_OBS_SAMPLER_AUDIT_ENABLED", 
+        "AGENT_OBS_SAMPLER_AUDIT_ENABLED",
         "CLICKHOUSE_HOST",
         "CLICKHOUSE_PORT",
         "CLICKHOUSE_DB",
         "CLICKHOUSE_USER",
         "CLICKHOUSE_PASSWORD",
     ]
-    
+
     # Check that these are referenced in the environment
     env_section = sampler.get("environment", {})
     for var in expected_env_vars:
@@ -253,13 +253,16 @@ def test_sampler_proxy_dependency_on_clickhouse_obs_init():
     """A-17: sampler-proxy depends on clickhouse-obs-init."""
     services = _services()
     sampler = services["sampler-proxy"]
-    
+
     assert "depends_on" in sampler
-    
+
     # Should depend on clickhouse-obs-init
     assert "clickhouse-obs-init" in sampler["depends_on"]
-    assert sampler["depends_on"]["clickhouse-obs-init"]["condition"] == "service_completed_successfully"
-    
+    assert (
+        sampler["depends_on"]["clickhouse-obs-init"]["condition"]
+        == "service_completed_successfully"
+    )
+
     # Should still depend on langfuse
     assert "langfuse" in sampler["depends_on"]
     assert sampler["depends_on"]["langfuse"]["condition"] == "service_healthy"
@@ -280,16 +283,16 @@ def test_env_example_updated_for_a17():
     env_example_path = REPO_ROOT / ".env.example"
     if not env_example_path.exists():
         pytest.skip(".env.example not found")
-    
+
     content = env_example_path.read_text(encoding="utf-8")
-    
+
     # Should contain the new A-17 variables
     new_vars = [
         "PROMETHEUS_URL",
-        "PROMETHEUS_PORT", 
+        "PROMETHEUS_PORT",
         "CLICKHOUSE_OBS_DB",
         "AGENT_OBS_SAMPLER_AUDIT_ENABLED",
     ]
-    
+
     for var in new_vars:
         assert var in content

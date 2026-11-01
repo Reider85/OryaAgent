@@ -23,6 +23,7 @@ from app.core.llm.registry import (
     resolve_model,
 )
 from app.core.llm.remote import fetch_remote_models
+from app.core.llm.tiered_router import TieredModelRouter, tier_models
 from app.core.llm.tracing import (
     SpanRecord,
     TracedChatModel,
@@ -47,4 +48,6 @@ __all__ = [
     "clear_span_buffer",
     "get_span_buffer",
     "wrap_with_tracing",
+    "TieredModelRouter",
+    "tier_models",
 ]

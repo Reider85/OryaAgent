@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -233,7 +233,10 @@ def test_health_sampler_proxy_defaults(client: TestClient):
         mock_instance = AsyncMock()
         mock_response = AsyncMock()
         mock_response.status_code = 200
-        mock_instance.head.return_value = mock_response
+        mock_response.json = MagicMock(
+            return_value={"current_rate": 0.5, "policy_reason": "test-policy"}
+        )
+        mock_instance.get.return_value = mock_response
         mock_client_class.return_value.__aenter__.return_value = mock_instance
 
         response = client.get("/health/sampler-proxy")
@@ -252,13 +255,13 @@ def test_health_sampler_proxy_timeout(client: TestClient):
     # Create a settings object with a non-default URL to avoid "not configured" case
     settings = Settings(sampler_proxy_url="http://test-sampler:4321")
 
-    # Mock the httpx.AsyncClient.head to raise TimeoutException
+    # Mock the httpx.AsyncClient.get to raise TimeoutException
     with (
         patch("app.api.health.get_settings", return_value=settings),
         patch("app.api.health.AsyncClient") as mock_client_class,
     ):
         mock_instance = AsyncMock()
-        mock_instance.head.side_effect = Exception("Connection timeout")
+        mock_instance.get.side_effect = Exception("Connection timeout")
         mock_client_class.return_value.__aenter__.return_value = mock_instance
 
         response = client.get("/health/sampler-proxy")
@@ -296,7 +299,10 @@ def test_health_sampler_proxy_custom_url(client: TestClient):
         mock_instance = AsyncMock()
         mock_response = AsyncMock()
         mock_response.status_code = 200
-        mock_instance.head.return_value = mock_response
+        mock_response.json = MagicMock(
+            return_value={"current_rate": 0.25, "policy_reason": "custom-policy"}
+        )
+        mock_instance.get.return_value = mock_response
         mock_client_class.return_value.__aenter__.return_value = mock_instance
 
         response = client.get("/health/sampler-proxy")
@@ -307,6 +313,7 @@ def test_health_sampler_proxy_custom_url(client: TestClient):
 def test_sampler_proxy_health_uses_get_not_head(client: TestClient) -> None:
     """A-17: /health/sampler-proxy uses GET (not HEAD) to sampler-proxy."""
     from unittest.mock import AsyncMock, patch
+
     from app.core.config import Settings
 
     sampler_settings = Settings(sampler_proxy_url="http://sampler-proxy:4321")
@@ -319,21 +326,23 @@ def test_sampler_proxy_health_uses_get_not_head(client: TestClient) -> None:
         mock_response = AsyncMock()
         mock_response.status_code = 200
         # Mock the json method to return the expected structure
-        mock_response.json = AsyncMock(return_value={
-            "status": "ok",
-            "current_rate": 0.5,
-            "policy_reason": "test-policy"
-        })
+        mock_response.json = AsyncMock(
+            return_value={
+                "status": "ok",
+                "current_rate": 0.5,
+                "policy_reason": "test-policy",
+            }
+        )
         mock_instance.get.return_value = mock_response
         mock_client_class.return_value.__aenter__.return_value = mock_instance
 
         response = client.get("/health/sampler-proxy")
         assert response.status_code == 200
-        
+
         # Verify GET was called, not HEAD
         mock_instance.get.assert_called_once()
         mock_instance.head.assert_not_called()
-        
+
         # Verify response includes sampler-proxy data
         result = response.json()
         assert result["status"] == "ok"
@@ -345,25 +354,28 @@ def test_sampler_proxy_health_uses_get_not_head(client: TestClient) -> None:
 def test_sampler_proxy_health_fallback_without_body(client: TestClient) -> None:
     """A-17: /health/sampler-proxy falls back gracefully if sampler-proxy returns non-JSON."""
     from unittest.mock import AsyncMock, patch
+
     from app.core.config import Settings
 
     fallback_settings = Settings(sampler_proxy_url="http://sampler-proxy:4321")
 
     with (
-        patch("app.api.health.get_settings", return_value=settings),
+        patch("app.api.health.get_settings", return_value=fallback_settings),
         patch("app.api.health.AsyncClient") as mock_client_class,
     ):
         mock_instance = AsyncMock()
         mock_response = AsyncMock()
         mock_response.status_code = 200
         # Simulate sampler-proxy returning plain text instead of JSON
-        mock_response.json.side_effect = ValueError("No JSON object could be decoded")
+        mock_response.json = MagicMock(
+            side_effect=ValueError("No JSON object could be decoded")
+        )
         mock_instance.get.return_value = mock_response
         mock_client_class.return_value.__aenter__.return_value = mock_instance
 
         response = client.get("/health/sampler-proxy")
         assert response.status_code == 200
-        
+
         # Should fall back to minimal response
         result = response.json()
         assert result["status"] == "ok"
@@ -372,8 +384,7 @@ def test_sampler_proxy_health_fallback_without_body(client: TestClient) -> None:
 
         data = response.json()
         assert data["status"] == "ok"
-        # The URL should be the custom one
-        assert data["url"] == "http://custom-proxy:9999"
+        assert data["url"] == "http://sampler-proxy:4321"
         assert data["status_code"] == 200
 
 
@@ -389,5 +400,3 @@ def test_health_endpoints_auth_exempt(client: TestClient):
     # Test all health endpoints without token - should all return 200
     response = client.get("/health")
     assert response.status_code == 200
-
-    

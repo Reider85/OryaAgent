@@ -64,11 +64,11 @@ import logging
 import secrets
 import time
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, ContextManager, Iterator, Mapping
+from typing import Any
 
 from app.core.config import get_settings
 from app.core.observability.langfuse import export_span
@@ -288,7 +288,7 @@ def timed_span(
 # A-17: Pending span attributes and incident tracking functions
 def set_pending_span_attributes(attrs: Mapping[str, Any]) -> None:
     """Stage attributes for the next timed_span (A-17).
-    
+
     Merges with existing pending attrs (if any). Consumed by _agent_loop_span.
     """
     merged = dict(_pending_span_attrs.get() or {})
@@ -298,7 +298,7 @@ def set_pending_span_attributes(attrs: Mapping[str, Any]) -> None:
 
 def take_pending_span_attributes() -> dict[str, Any]:
     """Take and clear pending span attributes (A-17).
-    
+
     Returns empty dict if none set. Safe to call multiple times.
     """
     pending = _pending_span_attrs.get() or {}
@@ -309,7 +309,7 @@ def take_pending_span_attributes() -> dict[str, Any]:
 
 def note_incident(key: str = "security.incident", value: str = "true") -> None:
     """Record an incident for the current tool batch (A-17).
-    
+
     Only effective inside incident_scope(). Called from check_injection when
     injection patterns are detected during tool execution.
     """
@@ -321,7 +321,7 @@ def note_incident(key: str = "security.incident", value: str = "true") -> None:
 @contextlib.contextmanager
 def incident_scope() -> Iterator[dict[str, str]]:
     """Context manager for incident tracking during tool batch execution (A-17).
-    
+
     Yields a mutable bag; note_incident() calls populate it. _emit_tool_call_spans
     reads the bag and stamps attributes on all tool.call spans in the batch.
     """

@@ -207,71 +207,74 @@ def test_router_disabled_keeps_old_behaviour(client, scripted_api) -> None:
 
 
 # A-17: Test cost.over_budget attribute on agent.loop span
-async def test_agent_loop_span_has_cost_over_budget_on_warning(client, scripted_api, monkeypatch) -> None:
+async def test_agent_loop_span_has_cost_over_budget_on_warning(
+    client, scripted_api, monkeypatch
+) -> None:
     """A-17: When budget ratio >= 0.90, agent.loop span has cost.over_budget=true."""
     _enable_router(monkeypatch)
-    import asyncio
-    
+
     # Test the cost router directly instead of HTTP endpoint
-    from app.core.llm.cost_router import CostAwareRouter
     from app.core.cost_tracker import MemoryCostStore, set_cost_store
-    
+    from app.core.llm.cost_router import CostAwareRouter
+
     # Set up cost store with budget $100, spend $90 (ratio = 0.90) → warning
     store = MemoryCostStore()
     await store.set_limit("budget-warning", 100.0)
     await store.add_spend("budget-warning", 90.0)
     set_cost_store(store)
-    
+
     # Test cost router directly
     router = CostAwareRouter("claude-sonnet-3.5", "claude-haiku-3.5", store)
-    
+
     # Enable observability
     monkeypatch.setenv("AGENT_OBS_ENABLED", "1")
-    
+
     # Clear any pending attrs before test
     from app.core.observability.spans import take_pending_span_attributes
+
     take_pending_span_attributes()
-    
+
     selection = await router.get_model_for_user("budget-warning")
-    
+
     # Should be warning but not blocked
     assert selection.warning is True
     assert selection.blocked is False
     assert selection.ratio == 0.90
-    
+
     # A-17: cost.over_budget should be staged for agent.loop span
     pending = take_pending_span_attributes()
     assert pending == {"cost.over_budget": "true"}
 
 
-def test_agent_loop_span_no_cost_over_budget_below_warning(client, scripted_api, monkeypatch) -> None:
+def test_agent_loop_span_no_cost_over_budget_below_warning(
+    client, scripted_api, monkeypatch
+) -> None:
     """A-17: Below 0.90 ratio, agent loop span has no cost.over_budget."""
     _enable_router(monkeypatch)
     import asyncio
-    
-    # Set budget to $50, spend $34 (ratio = 0.68) → degraded only
-    asyncio.run(_seed("budget-normal", 50.0))
-    asyncio.run(get_cost_store().add_spend("budget-normal", 34.0))
-    
+
+    # Set budget to $50, spend $36 (ratio = 0.72) → degraded only
+    asyncio.run(_seed("budget-normal", 36.0))
+
     # Enable observability
     monkeypatch.setenv("AGENT_OBS_ENABLED", "1")
-    
+
     response = client.post(
         "/sessions/budget-normal/messages",
         params={"stream": "true"},
         json={"content": "go"},
     )
-    
+
     assert response.status_code == 200
     frames = _sse_frames(response.text)
-    
+
     # Should have budget frame showing degrade only
     budget_frames = [f for f in frames if f[0] == "budget"]
     assert len(budget_frames) == 1
-    budget_data = json.loads(budget_frames[0][1])
+    budget_data = budget_frames[0][1]
     assert budget_data["degraded"] is True
     assert budget_data["warning"] is False
-    assert budget_data["ratio"] == 0.68
-    
+    assert budget_data["ratio"] == 0.72
+
     # A-17: agent.loop span should NOT have cost.over_budget
     assert "over_budget" not in budget_data

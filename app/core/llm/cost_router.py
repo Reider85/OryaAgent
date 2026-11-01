@@ -26,20 +26,23 @@ budget always wins over an explicit per-turn model request — the
 Every actual switch increments the process-local
 ``orya_cost_aware_switch_total{from_model,to_model}`` counter rendered
 by ``/metrics``.
+
+A-18: the optional ``tier`` keyword of :func:`resolve_turn_model`
+routes through ``TieredModelRouter`` instead (complexity-based
+selection with this module's budget checks as a fallback layer);
+``tier=None`` — the only mode in ALPHA — is byte-for-byte the v6 path.
 """
 
 from __future__ import annotations
 
 import logging
 from collections import Counter
-
-from app.core.config import get_settings
-from app.core.observability.spans import set_pending_span_attributes
 from dataclasses import dataclass
 from typing import Any
 
 from app.core.config import get_settings
 from app.core.cost_tracker import get_cost_store
+from app.core.observability.spans import set_pending_span_attributes
 
 __all__ = [
     "BLOCK_RATIO",
@@ -97,10 +100,11 @@ class ModelSelection:
     ratio: float = 0.0
     primary: str = ""
     fallback: str = ""
+    tier: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         """Serializable payload for SSE frames / result dicts."""
-        return {
+        payload = {
             "degraded": self.degraded,
             "warning": self.warning,
             "blocked": self.blocked,
@@ -109,6 +113,11 @@ class ModelSelection:
             "primary": self.primary,
             "fallback": self.fallback,
         }
+        # A-18: only tiered selections carry a tier — the v6 payload shape
+        # (and its exact-equality test) stays untouched.
+        if self.tier:
+            payload["tier"] = self.tier
+        return payload
 
 
 class CostAwareRouter:
@@ -199,6 +208,8 @@ async def resolve_turn_model(
     identity: str,
     requested_model: str | None = None,
     requested_provider: str | None = None,
+    *,
+    tier: str | None = None,
 ) -> ModelSelection:
     """Resolve the model alias for one turn (the route's entry point).
 
@@ -208,9 +219,34 @@ async def resolve_turn_model(
     with 429 before the graph is built. ``requested_provider`` is
     accepted for call-site symmetry and intentionally ignored: the
     degrade targets the fallback alias' own provider.
+
+    A-18: ``tier`` switches to the tiered path
+    (:class:`~app.core.llm.tiered_router.TieredModelRouter`) — the BETA
+    planner will pass it; ``None`` keeps the exact v6 behavior, so in
+    ALPHA (no planner) this branch is only reachable from direct calls.
+    The tiered path ignores ``requested_model`` (the tier decides) but
+    keeps the 429-at-100% contract.
     """
     settings = get_settings()
     primary = requested_model or settings.llm_model
+    if tier is not None:
+        from app.core.llm.tiered_router import TieredModelRouter
+
+        router = TieredModelRouter(
+            cost_aware=CostAwareRouter(
+                primary_model=primary,
+                fallback_model=settings.cost_router_fallback_model,
+            )
+        )
+        selection = await router.select(tier, identity)
+        if selection.blocked:
+            logger.warning(
+                "tiered budget blocked (identity=%s ratio=%.2f%% model=%s)",
+                identity,
+                selection.ratio * 100,
+                selection.model,
+            )
+        return selection
     if not settings.cost_router_enabled:
         return ModelSelection(
             model=requested_model,

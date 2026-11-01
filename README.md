@@ -21,7 +21,7 @@ FastAPI · LangGraph · Chainlit · PostgreSQL · Redis
 > LLM seam covering 30+ providers and 45+ model aliases, bearer-JWT auth, per-identity
 > cost-aware routing, OTLP-grade observability (Langfuse + OryaObservability SDK +
 > sampler-proxy + Prometheus + ClickHouse), Alembic migrations, and a one-command
-> Docker Compose stack. MVP (`M-00…M-28` + `MVP-POLISH`) and ALPHA (`A-00…A-17`)
+> Docker Compose stack. MVP (`M-00…M-28` + `MVP-POLISH`) and ALPHA (`A-00…A-18`)
 > are implemented.
 
 ---
@@ -105,7 +105,7 @@ FastAPI · LangGraph · Chainlit · PostgreSQL · Redis
 - **Importers** — `orya import --from opencode | continue | aider | cline` ingests an existing agent's provider config and writes the local YAML.
 - **Single seam rule**: `langchain_anthropic` / `langchain_openai` are never imported outside `app/core/llm/`. Adding an OpenAI-compatible provider is YAML-only.
 
-### Production-safe baseline (ALPHA `A-00…A-17`)
+### Production-safe baseline (ALPHA `A-00…A-18`)
 
 - **Bearer-JWT auth (A-00)** — `orya auth token --user <sub>` mints a token; `/health` stays public, every other endpoint requires `Authorization: Bearer <jwt>` when `AUTH_ENABLED=true`.
 - **Rate limiting (A-01)** — Redis-backed, per-identity RPM, kill-switch `ORYA_RATE_LIMIT_ENABLED` (default off, zero-cost startup).
@@ -125,6 +125,7 @@ FastAPI · LangGraph · Chainlit · PostgreSQL · Redis
 - **Langfuse OTLP/HTTP JSON export (A-15)** — hand-rolled exporter, auto-on when `LANGFUSE_HOST` + both keys are set, `gen_ai.*` enrichment, fail-open to `LANGFUSE_DIRECT_URL` when the sampler-proxy is unreachable.
 - **OryaObservability SDK bridge (A-16)** — `agent.loop` / `tool.call` / `memory.write` custom spans, `timed_span` duration context manager, PII masking via the opt-in `agent_obs` PIIDetector (fail-closed `[REDACTED:guardrail_unavailable]` without the SDK).
 - **Sampler-proxy mode (A-17)** — `cost.over_budget=true` at 90 % budget, `security.incident=true` on injection; Prometheus + ClickHouse audit sink for always-keep traces.
+- **TieredModelRouter (A-18)** — tier-based model selection (`small` / `large` / `tournament`) layered over the CostAwareRouter: the tier picks the model, the budget only *lowers* it to `small` at 90 %; stages `agent.execute.tier` / `agent.execute.degraded` span attributes; `tier=` keyword on `resolve_turn_model` (the planner that emits tiers arrives in BETA).
 
 ### Tooling & UX
 
@@ -523,7 +524,7 @@ Opt-in via the sibling `OryaObservability` SDK (`uv pip install -e ../OryaObserv
 
 ### Langfuse OTLP/HTTP JSON export (A-15)
 
-`app/core/observability/langfuse.py` — a hand-rolled exporter (no `langfuse` SDK dep). Auto-on when `LANGFUSE_HOST` + `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` are set. `_finalize` → `export_span`. Fail-open to `LANGFUSE_DIRECT_URL` when the sampler-proxy is unreachable. `ORYA_LANGFUSE_EXPORT_ENABLED=false` forces off.
+`app/core/observability/langfuse.py` — a hand-rolled exporter (no `langfuse` SDK dep). Auto-on when `LANGFUSE_HOST` + `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` are set. `_finalize` → `export_span`: span batches are POSTed to `{LANGFUSE_HOST}/api/public/otel/v1/traces` with Basic auth. Fail-open to `LANGFUSE_DIRECT_URL` when the sampler-proxy is unreachable. `ORYA_LANGFUSE_EXPORT_ENABLED=false` forces off.
 
 ### Sampler-proxy mode (A-17)
 
@@ -581,7 +582,11 @@ Per-identity daily USD budget with three thresholds and a kill-switch. Lives ent
 | `ORYA_COST_ROUTER_FALLBACK_MODEL` | — | Degrade target (e.g. `glm-4.5-flash`) |
 | `ORYA_COST_BACKEND` | `auto` | `auto` / `memory` / `redis` |
 
-`budget` SSE frame shape: `ModelSelection.as_dict()` → `{"type":"budget","spend_usd":...,"budget_usd":...,"model":...,"degraded":bool}`.
+`budget` SSE frame shape: `ModelSelection.as_dict()` → `{"type":"budget","spend_usd":...,"budget_usd":...,"model":...,"degraded":bool}` (tiered selections add `"tier"`).
+
+### Tiered model router (A-18)
+
+`app/core/llm/tiered_router.py` adds **complexity routing** on top of the budget router (composition, not replacement): the caller's `tier` decides the model — `small` → `claude-haiku-3.5`, `large` → `claude-sonnet-3.5` (default) — independently of the budget; at `budget_ratio ≥ 90 %` the tier is *lowered* to `small` (never raised) and at ≥ 100 % the turn still answers `429`. `tier=tournament` degrades to `large` in ALPHA (TournamentExecutor is PROD). Every selection stages `agent.execute.tier` / `agent.execute.degraded` (plus `cost.over_budget` at ≥ 90 %) on the `agent.loop` span **before** the model is returned. Entry point: `resolve_turn_model(..., tier=...)` — `tier=None`, the only mode until the BETA planner, is the untouched v6 path. Config precedence: `ORYA_TIERED_ROUTER_*_MODEL` env > `tiered_router.models.*` in `~/.orya/config.yaml` > defaults (aliases must exist in `models.yaml`).
 
 ---
 
@@ -804,6 +809,24 @@ Multi-stage build on `ghcr.io/astral-sh/uv:python3.12-bookworm-slim`. Installs *
 | `ORYA_COST_ROUTER_FALLBACK_MODEL` | Degrade target |
 | `ORYA_COST_BACKEND` | `auto` / `memory` / `redis` |
 
+### Tiered router (A-18)
+
+| Var | Effect |
+| --- | --- |
+| `ORYA_TIERED_ROUTER_SMALL_MODEL` | `tier=small` alias (default `claude-haiku-3.5`) |
+| `ORYA_TIERED_ROUTER_LARGE_MODEL` | `tier=large` alias (default `claude-sonnet-3.5`) |
+| `ORYA_TIERED_ROUTER_TOURNAMENT_MODEL` | `tier=tournament` alias (ALPHA degrades tournament → `large`) |
+
+Env wins over YAML, YAML over defaults — `~/.orya/config.yaml`:
+
+```yaml
+tiered_router:
+  models:
+    small: ["claude-haiku-3.5"]
+    large: ["claude-sonnet-3.5"]
+    tournament: ["claude-sonnet-3.5", "deepseek-chat"]
+```
+
 ### Auth / CORS (A-00)
 
 | Var | Effect |
@@ -997,8 +1020,8 @@ uv run pytest tests/unit/test_llm_providers_yaml.py
 | Phase | Status | Tickets |
 | --- | --- | --- |
 | **MVP** | ✅ done | `M-00` (bootstrap) → `M-28` (failure recovery) + `MVP-POLISH` |
-| **ALPHA** | ✅ done through `A-17` | `A-00` auth · `A-01` rate-limit · `A-02` LLM trace · `A-03` perm audit · `A-04` health · `A-05` session-log encryption · `A-06` JSONL span cross-link · `A-07` cache LRU+Redis · `A-08` smoke v2 · `A-09` README v2 · `A-10` compose v2 · `A-11` Alembic · `A-12` Settings v2 + `orya config` · `A-13` CostAwareRouter · `A-14` cost spans · `A-15` Langfuse OTLP · `A-16` OryaObs SDK + PII · `A-17` sampler-proxy |
-| **ALPHA (remaining)** | 🚧 planned | `A-18 … A-20` (tiered model router, v7 additions) |
+| **ALPHA** | ✅ done through `A-18` | `A-00` auth · `A-01` rate-limit · `A-02` LLM trace · `A-03` perm audit · `A-04` health · `A-05` session-log encryption · `A-06` JSONL span cross-link · `A-07` cache LRU+Redis · `A-08` smoke v2 · `A-09` README v2 · `A-10` compose v2 · `A-11` Alembic · `A-12` Settings v2 + `orya config` · `A-13` CostAwareRouter · `A-14` cost spans · `A-15` Langfuse OTLP · `A-16` OryaObs SDK + PII · `A-17` sampler-proxy · `A-18` TieredModelRouter |
+| **ALPHA (remaining)** | 🚧 planned | `A-19 … A-20` (prompt cache, connection pool — v7 additions) |
 | **BETA (v7)** | 📋 designed | see `analytics/ARCHITECT7.md`, `analytics/ROADMAP7.md`, `analytics/BACKLOG7.md` |
 
 Design docs live in `analytics/` (`ARCHITECT.md` → `ARCHITECT7.md`, `ROADMAP4` → `ROADMAP7`, `BACKLOG4` → `BACKLOG7`, `MVP-POLISH.md`, `PROMPT_MVP.md` / `PROMPT_ALPHA.md` / `PROMPT_BETA.md`) plus 15 v0.1 ADRs in `analytics/adr/` and 10 v0.2 ADRs in `analytics/orya-architect2/adr/`.

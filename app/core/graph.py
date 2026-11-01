@@ -77,7 +77,7 @@ import hashlib
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, Optional, Protocol
 
 from langchain_core.messages import (
@@ -607,11 +607,11 @@ def _emit_tool_call_spans(
     span_ids: dict[str, str] = {}
     if not tool_calls:
         return span_ids
-        try:
-            if not get_settings().agent_obs_enabled:
-                return span_ids
-        except Exception:  # pragma: no cover - settings fault -> no spans
+    try:
+        if not get_settings().agent_obs_enabled:
             return span_ids
+    except Exception:  # pragma: no cover - settings fault -> no spans
+        return span_ids
     # A-17: merge extra attributes (e.g. security.incident from incident scope)
     extra_attrs: dict[str, Any] = dict(extra or {})
     by_id: dict[str, ToolMessage] = {}
@@ -752,10 +752,9 @@ def build_graph(
         result = await raw_tool_node.ainvoke(state, config)
         # A-17: pass incident attributes from scope to span emission
         from app.core.observability.spans import _incident_bag
+
         incidents = _incident_bag.get()
-        span_ids = _emit_tool_call_spans(
-            tool_calls, result, started, extra=incidents
-        )
+        span_ids = _emit_tool_call_spans(tool_calls, result, started, extra=incidents)
         return _stamp_tool_messages(result, span_ids=span_ids)
 
     bound_model = _bind_tools(model, tool_list)

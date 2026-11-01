@@ -1,4 +1,9 @@
-"""Unit tests for A-09 — README v2 section anchors and env-var coverage."""
+"""Unit tests for A-09 — README v2 section anchors and env-var coverage.
+
+Anchors follow the README rewrite (commit 86bc3c3): emoji top-level
+sections, per-topic env tables under Configuration, and the Roadmap
+table as the phase-progress ledger.
+"""
 
 from __future__ import annotations
 
@@ -16,19 +21,19 @@ def _readme() -> str:
 
 
 REQUIRED_HEADINGS = (
-    "## Phase: ALPHA",
-    "## Deploy guide",
-    "### Docker services (today)",
-    "### Production checklist",
-    "### Langfuse setup (A-15 export",
-    "## Environment variables",
-    "## Authentication (A-00)",
-    "## Rate limiting (A-01)",
-    "## Health endpoints (A-04)",
-    "## LLM tracing & audit spans (A-02, A-03)",
-    "### Encryption at rest (A-05)",
-    "### Span cross-link (A-06)",
-    "### One-command start",
+    "Roadmap & Phases",
+    "Deployment",
+    "Docker Compose v2 (A-10)",
+    "Production checklist (A-09 / A-12)",
+    "Langfuse OTLP/HTTP JSON export (A-15)",
+    "Configuration",
+    "Auth (A-00)",
+    "Rate limiting (A-01)",
+    "Health endpoints (A-04)",
+    "Tracing wrapper (A-02)",
+    "Session-log encryption at rest (A-05)",
+    "JSONL span cross-link (A-06)",
+    "One-command start",
 )
 
 CRITICAL_ENV_VARS = (
@@ -66,7 +71,7 @@ def test_readme_documents_operator_loop_and_deploy_markers():
 def test_readme_langfuse_section_documents_wiring():
     text = _readme()
     assert "LANGFUSE_HOST" in text
-    section = text.split("### Langfuse setup", 1)[1]
+    section = text.split("### Langfuse OTLP/HTTP JSON export", 1)[1]
     assert "A-15" in section, "Langfuse section must reference the export ticket"
     assert "not wired" not in section, "A-15 wired the exporter — drop the old caveat"
     assert "api/public/otel/v1/traces" in section, "OTLP path must be documented"
@@ -75,9 +80,10 @@ def test_readme_langfuse_section_documents_wiring():
 
 def test_readme_phase_progress_covers_alpha_tickets():
     text = _readme()
-    for i in range(17):  # A-00..A-16 (A-16: OryaObservability SDK)
-        marker = f"**A-{i:02d}**"
-        assert marker in text, f"Phase Progress is missing {marker}"
+    section = text.split("Roadmap & Phases", 1)[1]
+    for i in range(19):  # A-00..A-18 (A-18: TieredModelRouter)
+        marker = f"`A-{i:02d}`"
+        assert marker in section, f"Roadmap is missing {marker}"
 
 
 def test_readme_documents_critical_env_vars():

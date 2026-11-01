@@ -1,4 +1,4 @@
-"""Unit tests for A-13 — CostAwareRouter (app.core.llm.cost_router).
+"""Unit tests for A-13 вЂ” CostAwareRouter (app.core.llm.cost_router).
 
 Thresholds on ``budget_ratio``: <0.7 primary; 0.7-0.9 fallback +
 ``degraded``; 0.9-1.0 fallback + ``warning``; >=1.0 ``blocked``. The
@@ -256,24 +256,24 @@ async def test_get_model_for_user_emits_cost_over_budget_on_warning(
     """A-17: When ratio >= 0.90, set cost.over_budget=true for agent.loop span."""
     await _enable_router(monkeypatch)
     store = MemoryCostStore()
-    # Set budget to $50, spend $45 (ratio = 0.90) → warning + cost.over_budget
+    # Set budget to $50, spend $45 (ratio = 0.90) в†’ warning + cost.over_budget
     await store.set_limit("session:s1", 50.0)
     await store.add_spend("session:s1", 45.0)
     set_cost_store(store)
-    
+
     router = CostAwareRouter(_PRIMARY, _FALLBACK, store)
-    settings = get_settings()
     monkeypatch.setenv("AGENT_OBS_ENABLED", "1")
-    
+
     # Clear any pending attrs before test
     from app.core.observability.spans import take_pending_span_attributes
+
     take_pending_span_attributes()
-    
+
     selection = await router.get_model_for_user("session:s1")
     assert selection.warning is True
     assert selection.blocked is False
     assert selection.ratio == 0.90
-    
+
     # A-17: cost.over_budget should be staged for agent.loop span
     pending = take_pending_span_attributes()
     assert pending == {"cost.over_budget": "true"}
@@ -285,23 +285,23 @@ async def test_get_model_for_user_emits_cost_over_budget_on_blocked(
     """A-17: When ratio >= 1.0, set cost.over_budget=true for agent.loop span."""
     await _enable_router(monkeypatch)
     store = MemoryCostStore()
-    # Set budget to $50, spend $50 (ratio = 1.0) → blocked + cost.over_budget
+    # Set budget to $50, spend $50 (ratio = 1.0) в†’ blocked + cost.over_budget
     await store.set_limit("session:s1", 50.0)
     await store.add_spend("session:s1", 50.0)
     set_cost_store(store)
-    
+
     router = CostAwareRouter(_PRIMARY, _FALLBACK, store)
-    settings = get_settings()
     monkeypatch.setenv("AGENT_OBS_ENABLED", "1")
-    
+
     # Clear any pending attrs before test
     from app.core.observability.spans import take_pending_span_attributes
+
     take_pending_span_attributes()
-    
+
     selection = await router.get_model_for_user("session:s1")
     assert selection.blocked is True
     assert selection.ratio == 1.0
-    
+
     # A-17: cost.over_budget should be staged for agent.loop span
     pending = take_pending_span_attributes()
     assert pending == {"cost.over_budget": "true"}
@@ -313,24 +313,24 @@ async def test_get_model_for_no_cost_over_budget_below_warning_threshold(
     """A-17: Below 0.90 ratio, no cost.over_budget attribute is set."""
     await _enable_router(monkeypatch)
     store = MemoryCostStore()
-    # Set budget to $50, spend $36 (ratio = 0.72) → degraded only  
+    # Set budget to $50, spend $36 (ratio = 0.72) в†’ degraded only
     await store.set_limit("session:s1", 50.0)
     await store.add_spend("session:s1", 36.0)
     set_cost_store(store)
-    
+
     router = CostAwareRouter(_PRIMARY, _FALLBACK, store)
-    settings = get_settings()
     monkeypatch.setenv("AGENT_OBS_ENABLED", "1")
-    
+
     # Clear any pending attrs before test
     from app.core.observability.spans import take_pending_span_attributes
+
     take_pending_span_attributes()
-    
+
     selection = await router.get_model_for_user("session:s1")
     assert selection.degraded is True
     assert selection.warning is False
     assert selection.ratio == 0.72
-    
+
     # A-17: No cost.over_budget below warning threshold
     pending = take_pending_span_attributes()
     assert pending == {}
@@ -342,28 +342,30 @@ async def test_get_model_for_user_no_pending_attrs_when_obs_disabled(
     """A-17: When AGENT_OBS_ENABLED=0, no pending attrs are set even at warning."""
     await _enable_router(monkeypatch)
     store = MemoryCostStore()
-    # Set budget to $50, spend $45 (ratio = 0.90) → warning
+    # Set budget to $50, spend $45 (ratio = 0.90) в†’ warning
     await store.set_limit("session:s1", 50.0)
     await store.add_spend("session:s1", 45.0)
     set_cost_store(store)
-    
+
     router = CostAwareRouter(_PRIMARY, _FALLBACK, store)
     # Clear settings cache to ensure the env var takes effect
     from app.core.config import clear_settings_cache
+
     clear_settings_cache()
     monkeypatch.setenv("AGENT_OBS_ENABLED", "0")
     # Force settings reload to pick up the env var
-    settings = get_settings()
-    
+    get_settings()
+
     # Clear any pending attrs before test
     from app.core.observability.spans import take_pending_span_attributes
+
     take_pending_span_attributes()
-    
+
     selection = await router.get_model_for_user("session:s1")
     assert selection.warning is True
     assert selection.blocked is False
     assert selection.ratio == 0.90
-    
+
     # A-17: No cost.over_budget when obs disabled
     pending = take_pending_span_attributes()
     assert pending == {}

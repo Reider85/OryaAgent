@@ -1,8 +1,8 @@
-"""A-16: OryaObservability SDK — agent.loop/tool.call/memory.write spans + PII.
+"""A-16: OryaObservability SDK вЂ” agent.loop/tool.call/memory.write spans + PII.
 
 Bridge architecture: OryaAgent's own ``emit_span`` seam carries the A-16
 custom spans; the agent_obs package (opt-in install from ../OryaObservability)
-provides PIIDetector masking. Without agent_obs everything still works —
+provides PIIDetector masking. Without agent_obs everything still works вЂ”
 content attributes fail-closed to ``[REDACTED:guardrail_unavailable]``.
 """
 
@@ -491,33 +491,37 @@ async def test_tool_input_summary_masks_pii_in_args() -> None:
 # A-17: Tests for incident scope and attributes
 async def test_incident_scope_accumulates_security_incident() -> None:
     """A-17: incident_scope accumulates security.incident=True for tool spans."""
-    from app.core.observability.spans import incident_scope, _incident_bag
+    from app.core.observability.spans import _incident_bag, incident_scope
 
     set_turn_trace(new_trace_id())
     clear_span_buffer()
-    
+
     # Clear incident bag before test
     _incident_bag.set({})
-    
+
     try:
         with incident_scope():
             # Record an incident within the scope
             from app.core.observability.spans import note_incident
+
             note_incident("security.incident", "true")
-            
+
             # Simulate a tool call (normally in graph.py tools_node)
             from app.core.graph import _emit_tool_call_spans
             from app.core.observability.spans import _incident_bag
+
             tool_calls = [{"id": "call1", "name": "echo", "args": {"text": "test"}}]
             result = {"messages": [ToolMessage(content="echoed", tool_call_id="call1")]}
-            
+
             # Directly set the incident bag (as done in graph.py tools_node)
             _incident_bag.set({"security.incident": "true"})
             try:
-                span_ids = _emit_tool_call_spans(tool_calls, result, 0.0, extra={"security.incident": "true"})
+                _emit_tool_call_spans(
+                    tool_calls, result, 0.0, extra={"security.incident": "true"}
+                )
             finally:
                 _incident_bag.set({})
-            
+
             spans = [s for s in get_span_buffer() if s.span_type == "tool.call"]
             assert len(spans) == 1
             span = spans[0]
@@ -529,19 +533,23 @@ async def test_incident_scope_accumulates_security_incident() -> None:
 
 def test_note_incident_adds_to_incident_bag() -> None:
     """A-17: note_incident adds attributes to the incident bag."""
-    from app.core.observability.spans import note_incident, _incident_bag, take_pending_span_attributes
+    from app.core.observability.spans import (
+        _incident_bag,
+        note_incident,
+        take_pending_span_attributes,
+    )
 
     # Clear incident bag before test
     _incident_bag.set({})
-    
+
     # Record an incident
     note_incident("security.incident", "true")
     note_incident("custom.attr", "value")
-    
+
     # Check that incidents are accumulated
     incidents = _incident_bag.get()
     assert incidents == {"security.incident": "true", "custom.attr": "value"}
-    
+
     # take_pending_span_attributes should not affect incident bag
     take_pending_span_attributes()
     incidents = _incident_bag.get()
@@ -554,14 +562,14 @@ def test_incident_bag_isolation() -> None:
 
     # Clear and set initial state
     _incident_bag.set({})
-    
+
     # Set some incidents
     _incident_bag.set({"incident1": "true"})
-    
+
     # Should be isolated (no global state bleed)
     bag1 = _incident_bag.get()
     assert bag1 == {"incident1": "true"}
-    
+
     # Modify should not affect other references
     bag2 = _incident_bag.get()
     bag2["incident2"] = "true"
@@ -575,18 +583,18 @@ async def test_emit_tool_call_spans_with_extra_attributes() -> None:
 
     set_turn_trace(new_trace_id())
     clear_span_buffer()
-    
+
     tool_calls = [{"id": "call1", "name": "echo", "args": {"text": "test"}}]
     result = {"messages": [ToolMessage(content="echoed", tool_call_id="call1")]}
-    
+
     # Call with extra attributes (simulating incident scope)
     extra = {"security.incident": "true", "custom.attr": "value"}
-    span_ids = _emit_tool_call_spans(tool_calls, result, 0.0, extra=extra)
-    
+    _emit_tool_call_spans(tool_calls, result, 0.0, extra=extra)
+
     spans = [s for s in get_span_buffer() if s.span_type == "tool.call"]
     assert len(spans) == 1
     span = spans[0]
-    
+
     # Extra attributes should be merged in
     assert span.attributes["security.incident"] == "true"
     assert span.attributes["custom.attr"] == "value"

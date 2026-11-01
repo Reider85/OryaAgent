@@ -232,6 +232,7 @@ def _agent_loop_span(task_input: str, extra: dict[str, Any] | None = None) -> An
         attributes.update(extra)
     # A-17: consume pending attributes (e.g. cost.over_budget from cost_router)
     from app.core.observability.spans import take_pending_span_attributes
+
     pending = take_pending_span_attributes()
     if pending:
         attributes.update(pending)
