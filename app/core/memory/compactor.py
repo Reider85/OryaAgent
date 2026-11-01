@@ -53,6 +53,7 @@ from pathlib import Path
 from app.core.memory.audit import record_memory_op
 from app.core.memory.md_store import MDStore, get_md_store
 from app.core.memory.models import MemoryItem, kind_for, parse_entries
+from app.core.observability.sdk import get_observability
 
 logger = logging.getLogger(__name__)
 
@@ -327,6 +328,12 @@ class Compactor:
         if result.changed:
             ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
             _stamp_compacted(self.store.memory_dir, file, ts)
+            # A-16: memory.write span for the compaction rewrite (never raises).
+            get_observability().emit_memory_write(
+                file=file,
+                source="compactor",
+                compacted=True,
+            )
         return result
 
     # -- strategies ----------------------------------------------------------

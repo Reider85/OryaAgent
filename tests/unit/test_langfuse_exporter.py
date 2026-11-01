@@ -134,6 +134,28 @@ def test_span_to_otlp_permission_span_stays_internal():
     assert "permission.tool" in attrs
 
 
+def test_span_to_otlp_a16_custom_spans_stay_internal():
+    """A-16: agent.loop/tool.call/memory.write export as INTERNAL spans."""
+    for span_type, extra in (
+        ("agent.loop", {"agent.id": "orya-agent", "task.input": "hi"}),
+        ("tool.call", {"tool.name": "echo", "tool.input_summary": "x"}),
+        ("memory.write", {"memory.file": "FACTS.md", "memory.source": "learn"}),
+    ):
+        record = _record(
+            span_type=span_type,
+            provider="",
+            model="",
+            attributes=extra,
+        )
+        otlp = lf.span_to_otlp(record)
+        attrs = {a["key"]: a["value"] for a in otlp["attributes"]}
+
+        assert otlp["kind"] == 1, span_type  # INTERNAL
+        assert attrs["orya.span_type"] == {"stringValue": span_type}
+        for key in extra:
+            assert key in attrs, f"{key} missing on {span_type}"
+
+
 def test_otlp_id_sanitization_fallbacks():
     # Foreign (non-hex) trace ids fall back to a deterministic sha256 slice.
     hashed = lf._otlp_trace_id("turn-trace-xyz")

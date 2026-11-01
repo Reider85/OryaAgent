@@ -7,6 +7,7 @@ from httpx import AsyncClient, ConnectError, HTTPStatusError, TimeoutException
 
 from app.core.config import get_settings
 from app.core.observability.langfuse import get_export_stats
+from app.core.observability.sdk import get_observability
 from app.core.observability.spans import get_span_buffer
 
 router = APIRouter(tags=["health"])
@@ -24,6 +25,7 @@ async def health_observability() -> dict[str, Any]:
     settings = get_settings()
     span_buffer = get_span_buffer()
     langfuse = get_export_stats()
+    observability = get_observability()
 
     return {
         "sdk_enabled": settings.llm_trace_enabled,
@@ -35,6 +37,10 @@ async def health_observability() -> dict[str, Any]:
         "langfuse_export_queued": langfuse["queued"],
         "langfuse_export_exported_total": langfuse["exported_total"],
         "langfuse_export_failed_total": langfuse["failed_total"],
+        # A-16: OryaObservability SDK integration state
+        "agent_obs_enabled": observability.enabled,
+        "agent_obs_sdk_available": observability.sdk_available,
+        "agent_obs_guardrail_enabled": settings.agent_obs_guardrail_enabled,
     }
 
 

@@ -75,7 +75,7 @@ def test_readme_langfuse_section_documents_wiring():
 
 def test_readme_phase_progress_covers_alpha_tickets():
     text = _readme()
-    for i in range(16):  # A-00..A-15 (A-15: Langfuse OTLP export)
+    for i in range(17):  # A-00..A-16 (A-16: OryaObservability SDK)
         marker = f"**A-{i:02d}**"
         assert marker in text, f"Phase Progress is missing {marker}"
 

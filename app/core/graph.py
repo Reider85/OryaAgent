@@ -73,8 +73,10 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, Optional, Protocol
 
@@ -93,6 +95,7 @@ from langgraph.prebuilt import ToolNode
 from langgraph.types import Command, interrupt
 
 from app.core.config import get_settings
+from app.core.observability.pii import mask_text
 from app.core.observability.spans import (
     ORYA_SPAN_KEY,
     current_turn_trace_id,
@@ -537,7 +540,9 @@ def build_human_node(
         if len(refusals) > 1:
             tool_names = [str(call.get("name", "")) for call, _ in refusals]
             _emit_user_decision_span(
-                "batch", "deny", attributes={"permission.tools": ",".join(tool_names)}
+                "batch",
+                "deny",
+                reason=f"permission.tools={','.join(tool_names)}",
             )
 
         # Batch semantics: one refusal refuses the whole batch — every
@@ -560,27 +565,115 @@ def build_human_node(
     return human_node
 
 
-def _stamp_tool_messages(result: Any) -> Any:
+def _result_messages(result: Any) -> list[Any]:
+    """Extract the message list from a ToolNode result (list or dict)."""
+    if isinstance(result, list):
+        return list(result)
+    if isinstance(result, dict):
+        return list(result.get("messages") or [])
+    return []
+
+
+def _pending_tool_calls(state: Any) -> list[dict[str, Any]]:
+    """The tool calls of the latest AI message in *state* (A-16 input)."""
+    messages = (state.get("messages") if isinstance(state, dict) else None) or []
+    for message in reversed(messages):
+        calls = getattr(message, "tool_calls", None)
+        if isinstance(message, AIMessage) and calls:
+            return [dict(call) for call in calls]
+    return []
+
+
+_TOOL_INPUT_SUMMARY_CHARS = 200
+_TOOL_OUTPUT_CAP = 2000
+
+
+def _emit_tool_call_spans(
+    tool_calls: Sequence[dict[str, Any]],
+    result: Any,
+    started: float,
+) -> dict[str, str]:
+    """Emit one ``tool.call`` span per executed call (A-16); map id → span id.
+
+    Attribute names follow the agent_obs SDK (``observability.py`` /
+    ``content_sampling.attach_tool_content``): ``tool.name``,
+    ``tool.input_summary`` (≤200 chars, PII-masked), ``tool.input_sha256``,
+    ``tool.input_chars``, ``tool.output_text`` (PII-masked, capped).
+    Gated by ``settings.agent_obs_enabled``; never raises.
+    """
+    span_ids: dict[str, str] = {}
+    if not tool_calls:
+        return span_ids
+    try:
+        if not get_settings().agent_obs_enabled:
+            return span_ids
+    except Exception:  # pragma: no cover - settings fault -> no spans
+        return span_ids
+    by_id: dict[str, ToolMessage] = {}
+    for message in _result_messages(result):
+        if isinstance(message, ToolMessage):
+            call_id = getattr(message, "tool_call_id", None)
+            if call_id:
+                by_id[str(call_id)] = message
+    for call in tool_calls:
+        try:
+            name = str(call.get("name") or "")
+            call_id = str(call.get("id") or "")
+            args_text = json.dumps(
+                call.get("args") or {}, default=str, ensure_ascii=False
+            )
+            message = by_id.get(call_id)
+            attributes: dict[str, Any] = {
+                "tool.name": name,
+                "tool.input_summary": mask_text(args_text)[:_TOOL_INPUT_SUMMARY_CHARS],
+                "tool.input_sha256": hashlib.sha256(
+                    args_text.encode("utf-8")
+                ).hexdigest(),
+                "tool.input_chars": len(args_text),
+            }
+            status = "ok"
+            if message is not None:
+                if getattr(message, "status", None) == "error":
+                    status = "error"
+                output = message.content
+                if not isinstance(output, str):
+                    output = str(output)
+                attributes["tool.output_text"] = mask_text(output)[:_TOOL_OUTPUT_CAP]
+            span_id = emit_span(
+                span_type="tool.call",
+                name=f"tool.call:{name}",
+                attributes=attributes,
+                status=status,
+                start_time=started,
+            )
+            if span_id and call_id:
+                span_ids[call_id] = span_id
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("tool.call span emission failed", exc_info=True)
+    return span_ids
+
+
+def _stamp_tool_messages(result: Any, *, span_ids: dict[str, str] | None = None) -> Any:
     """Stamp ToolMessages with the turn trace id (A-06), best-effort.
 
-    Tool results carry only the turn root (``trace_id``); the tool span
-    itself (``span_id``) arrives with A-16 ``agent.tool`` spans. The
-    stamp rides on ``additional_kwargs`` into the checkpoint and the
+    Tool results carry the turn root (``trace_id``); since A-16 they also
+    carry the ``span_id`` of their ``tool.call`` span when one was emitted.
+    The stamp rides on ``additional_kwargs`` into the checkpoint and the
     JSONL projection — the cross-link to the Langfuse turn trace.
     """
     trace_id = current_turn_trace_id()
     if trace_id is None:
         return result
-    if isinstance(result, list):
-        messages = result
-    elif isinstance(result, dict):
-        messages = result.get("messages") or []
-    else:
-        return result
-    for message in messages:
+    for message in _result_messages(result):
         kwargs = getattr(message, "additional_kwargs", None)
-        if isinstance(kwargs, dict):
-            kwargs[ORYA_SPAN_KEY] = {"trace_id": trace_id}
+        if not isinstance(kwargs, dict):
+            continue
+        stamp: dict[str, str] = {"trace_id": trace_id}
+        if span_ids:
+            call_id = getattr(message, "tool_call_id", None)
+            if call_id and str(call_id) in span_ids:
+                stamp["span_id"] = span_ids[str(call_id)]
+        kwargs[ORYA_SPAN_KEY] = stamp
     return result
 
 
@@ -639,9 +732,18 @@ def build_graph(
         # scanning node signatures under `from __future__ import annotations`.
         config: Optional[RunnableConfig] = None,  # noqa: UP045
     ) -> Any:
-        """Run the tool batch and stamp results with the turn trace (A-06)."""
+        """Run the tool batch, emit tool.call spans (A-16), stamp (A-06).
+
+        The batch is timed as a whole (LangGraph runs the parallel calls
+        concurrently — per-tool wall time is not observable here) and one
+        span is emitted per call with the shared window. Each ToolMessage
+        is stamped with its span id for the JSONL cross-link.
+        """
+        tool_calls = _pending_tool_calls(state)
+        started = time.time()
         result = await raw_tool_node.ainvoke(state, config)
-        return _stamp_tool_messages(result)
+        span_ids = _emit_tool_call_spans(tool_calls, result, started)
+        return _stamp_tool_messages(result, span_ids=span_ids)
 
     bound_model = _bind_tools(model, tool_list)
 

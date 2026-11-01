@@ -1,8 +1,8 @@
 """Shared span infrastructure for OryaObservability (A-16) and permission audit (A-03).
 
-Replaces llm/tracing.py's SpanRecord and buffer; supports llm.call (A-02)
-and agent.permission (A-03) spans. Future: agent.plan, agent.execute,
-agent.tool spans (A-16).
+Replaces llm/tracing.py's SpanRecord and buffer; supports llm.call (A-02),
+agent.permission (A-03), and since A-16 the duration spans agent.loop,
+tool.call and memory.write (via :func:`timed_span` / ``emit_span(start_time=)``).
 
 Design:
 - SpanRecord: generic record with trace_id, span_id, name, span_type,
@@ -56,6 +56,7 @@ import secrets
 import time
 from collections import deque
 from collections.abc import Mapping
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
@@ -193,8 +194,9 @@ def emit_span(
     status: str = "ok",
     provider: str = "",
     model: str = "",
-) -> None:
-    """Emit a span record into the buffer.
+    start_time: float | None = None,
+) -> str | None:
+    """Emit a span record into the buffer (never raises).
 
     Args:
         span_type: Type of span ("llm.call", "agent.permission", etc.).
@@ -203,8 +205,12 @@ def emit_span(
         status: "ok", "error", or custom (e.g. "deny").
         provider: Provider name (e.g. "openai", "anthropic") — for llm.call spans.
         model: Model name (e.g. "gpt-4", "claude-3") — for llm.call spans.
+        start_time: Optional earlier start (POSIX seconds) for duration spans;
+            defaults to now. End time is always set at emission.
 
-    Never raises; emits to buffer and optionally stdout debug.
+    Returns:
+        The emitted span's id (for cross-linking, e.g. A-16 tool.call →
+        ToolMessage stamp) — or ``None`` if emission failed (never raises).
     """
     trace_id, span_id = _new_ids()
     record = SpanRecord(
@@ -212,10 +218,47 @@ def emit_span(
         model=model,
         trace_id=trace_id,
         span_id=span_id,
-        start_time=time.time(),
+        start_time=start_time if start_time is not None else time.time(),
         name=name,
         span_type=span_type,
         status=status,
         attributes=dict(attributes),
     )
     _finalize(record)
+    return span_id
+
+
+@contextmanager
+def timed_span(
+    *,
+    span_type: str,
+    name: str,
+    attributes: Mapping[str, Any] | None = None,
+    status: str = "ok",
+    provider: str = "",
+    model: str = "",
+):
+    """Duration span (A-16): yields a mutable attributes dict.
+
+    Start is captured on entry; the span is emitted on exit (also on
+    exception — status flips to ``error``, caller-set attributes survive).
+    Joins the active turn trace like every other span (A-06). Never raises.
+    """
+    start = time.time()
+    attrs: dict[str, Any] = dict(attributes or {})
+    final_status = status
+    try:
+        yield attrs
+    except BaseException:
+        final_status = "error"
+        raise
+    finally:
+        emit_span(
+            span_type=span_type,
+            name=name,
+            attributes=attrs,
+            status=final_status,
+            provider=provider,
+            model=model,
+            start_time=start,
+        )

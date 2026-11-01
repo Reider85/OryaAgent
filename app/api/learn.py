@@ -55,6 +55,7 @@ from pydantic import BaseModel, Field
 from app.core.memory.audit import record_memory_op
 from app.core.memory.md_store import get_md_store
 from app.core.memory.models import MemoryItem, kind_for, next_id
+from app.core.observability.sdk import get_observability
 from app.db.session_log import project_thread, session_jsonl_path
 
 logger = logging.getLogger(__name__)
@@ -296,6 +297,13 @@ def _store_entry(
         memory_id=item.id,
         source=source,
         trace_id=uuid.uuid4().hex[:16],
+    )
+    # A-16: memory.write span for the SDK-visible trail (never raises).
+    get_observability().emit_memory_write(
+        file=file,
+        source=source,
+        compacted=False,
+        memory_id=str(item.id),
     )
     return LearnResponse(
         learned_id=str(item.id),

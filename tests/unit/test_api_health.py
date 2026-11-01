@@ -125,6 +125,11 @@ def test_health_observability_defaults(client: TestClient):
     assert data["langfuse_export_queued"] == 0
     assert data["langfuse_export_exported_total"] >= 0
     assert data["langfuse_export_failed_total"] >= 0
+    # A-16: OryaObservability integration state (availability depends on the
+    # opt-in agent-obs install, so only the type is asserted here)
+    assert data["agent_obs_enabled"] is True
+    assert isinstance(data["agent_obs_sdk_available"], bool)
+    assert data["agent_obs_guardrail_enabled"] is True
 
 
 def test_health_observability_sdk_disabled(client: TestClient):
@@ -169,6 +174,22 @@ def test_health_observability_permission_disabled(
         # Drop the poisoned lru_cache entry: monkeypatch restores the env
         # only after teardown, and a stale False would leak into later
         # modules (test_permission_audit reads it per check).
+        clear_settings_cache()
+
+
+def test_health_observability_agent_obs_disabled(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    """A-16: /health/observability reflects the AGENT_OBS_ENABLED kill-switch."""
+    monkeypatch.setenv("AGENT_OBS_ENABLED", "false")
+    clear_settings_cache()
+
+    try:
+        response = client.get("/health/observability")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["agent_obs_enabled"] is False
+    finally:
         clear_settings_cache()
 
 

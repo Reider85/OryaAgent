@@ -38,6 +38,7 @@ import json
 import logging
 import sys
 from collections.abc import AsyncIterator
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -45,14 +46,18 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
+from app.core.config import get_settings
 from app.core.context import trim_messages
 from app.core.graph import RECOVER_NODE_NAME, build_graph, resume_command
 from app.core.llm import get_llm
+from app.core.observability.pii import mask_text
+from app.core.observability.sdk import AGENT_ID, AGENT_VERSION
 from app.core.observability.spans import (
     ORYA_SPAN_KEY,
     current_turn_trace_id,
     new_trace_id,
     set_turn_trace,
+    timed_span,
 )
 from app.core.permissions import get_policy
 from app.core.prompt import build_system_prompt
@@ -205,6 +210,32 @@ def _stamp_turn(message: Any) -> Any:
     return message
 
 
+def _agent_loop_span(task_input: str, extra: dict[str, Any] | None = None) -> Any:
+    """A-16 ``agent.loop`` root span for one turn, or a no-op context.
+
+    Gated by ``settings.agent_obs_enabled`` (kill-switch: the context
+    yields a plain dict and emits nothing). ``task.input`` is PII-masked
+    through the agent_obs detector (fail-closed, A-16).
+    """
+    try:
+        if not get_settings().agent_obs_enabled:
+            return nullcontext({})
+    except Exception:  # pragma: no cover - settings fault -> no span
+        return nullcontext({})
+    attributes: dict[str, Any] = {
+        "agent.id": AGENT_ID,
+        "agent.version": AGENT_VERSION,
+        "task.input": mask_text(task_input),
+    }
+    if extra:
+        attributes.update(extra)
+    return timed_span(
+        span_type="agent.loop",
+        name=f"agent.loop:{AGENT_ID}",
+        attributes=attributes,
+    )
+
+
 async def stream_graph_events(
     graph: Any, user_input: str, config: dict[str, Any]
 ) -> AsyncIterator[StreamEvent]:
@@ -219,7 +250,9 @@ async def stream_graph_events(
     the JSONL events it projects share a single Langfuse trace. The
     contextvar is bound inside the stream (not around it) — the reset
     writes ``None`` because a stream may be driven from more than one
-    task context.
+    task context. A-16 wraps the turn in an ``agent.loop`` span that
+    joins the same trace (emitted before the reset, so the turn id is
+    still bound).
     """
     check_injection(
         user_input,
@@ -228,9 +261,10 @@ async def stream_graph_events(
     )
     set_turn_trace(new_trace_id())
     try:
-        payload = {"messages": [_stamp_turn(HumanMessage(user_input))]}
-        async for event in _stream_normalized(graph, payload, config):
-            yield event
+        with _agent_loop_span(user_input):
+            payload = {"messages": [_stamp_turn(HumanMessage(user_input))]}
+            async for event in _stream_normalized(graph, payload, config):
+                yield event
     finally:
         set_turn_trace(None)
 
@@ -243,12 +277,16 @@ async def resume_graph_events(
     The payload is ``resume_command(answer)`` — the same contract the
     ``human`` node (M-13) interprets (``approve`` / ``deny`` /
     ``always``). A resume is a turn of its own (A-06): it binds a fresh
-    trace id for the spans it emits.
+    trace id for the spans it emits. A-16 records it as an
+    ``agent.loop`` span with ``task.resume=true``.
     """
     set_turn_trace(new_trace_id())
     try:
-        async for event in _stream_normalized(graph, resume_command(answer), config):
-            yield event
+        with _agent_loop_span(answer, {"task.resume": "true"}):
+            async for event in _stream_normalized(
+                graph, resume_command(answer), config
+            ):
+                yield event
     finally:
         set_turn_trace(None)
 

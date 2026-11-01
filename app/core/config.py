@@ -141,6 +141,27 @@ class Settings(BaseSettings):
             "false disables span construction (buffer still empty, no overhead)"
         ),
     )
+    agent_obs_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("AGENT_OBS_ENABLED", "ORYA_AGENT_OBS_ENABLED"),
+        description=(
+            "A-16: OryaObservability integration kill-switch — gates "
+            "agent.loop/tool.call/memory.write span emission and the SDK "
+            "component probe; false = those spans are never constructed "
+            "(llm.call/agent.permission keep their own switches)"
+        ),
+    )
+    agent_obs_guardrail_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "AGENT_OBS_GUARDRAIL_ENABLED", "ORYA_AGENT_OBS_GUARDRAIL_ENABLED"
+        ),
+        description=(
+            "A-16: PII masking of span content (task.input, tool io) via "
+            "agent_obs PIIDetector; false = content passes unmasked "
+            "(debugging only); detector unavailable = fail-closed redaction"
+        ),
+    )
 
     # --- Database (M-03) -------------------------------------------------
     database_url: str = Field(

@@ -164,7 +164,11 @@ async def test_tool_messages_carry_turn_trace_stamp():
     tool_messages = [m for m in result["messages"] if isinstance(m, ToolMessage)]
     assert tool_messages
     for message in tool_messages:
-        assert message.additional_kwargs["orya_span"] == {"trace_id": "turn-stamp-1"}
+        stamp = message.additional_kwargs["orya_span"]
+        # A-16: the stamp now carries the tool.call span id alongside the
+        # turn root (the deferred piece of the A-06 cross-link).
+        assert stamp["trace_id"] == "turn-stamp-1"
+        assert stamp["span_id"]
 
 
 async def test_tool_messages_unstamped_without_turn_trace():
