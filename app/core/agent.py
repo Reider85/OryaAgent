@@ -213,9 +213,10 @@ def _stamp_turn(message: Any) -> Any:
 def _agent_loop_span(task_input: str, extra: dict[str, Any] | None = None) -> Any:
     """A-16 ``agent.loop`` root span for one turn, or a no-op context.
 
-    Gated by ``settings.agent_obs_enabled`` (kill-switch: the context
-    yields a plain dict and emits nothing). ``task.input`` is PII-masked
-    through the agent_obs detector (fail-closed, A-16).
+    A-17: merges pending span attributes (cost.over_budget etc.) from
+    cost_router. Gated by ``settings.agent_obs_enabled`` (kill-switch:
+    the context yields a plain dict and emits nothing). ``task.input``
+    is PII-masked through the agent_obs detector (fail-closed, A-16).
     """
     try:
         if not get_settings().agent_obs_enabled:
@@ -229,6 +230,11 @@ def _agent_loop_span(task_input: str, extra: dict[str, Any] | None = None) -> An
     }
     if extra:
         attributes.update(extra)
+    # A-17: consume pending attributes (e.g. cost.over_budget from cost_router)
+    from app.core.observability.spans import take_pending_span_attributes
+    pending = take_pending_span_attributes()
+    if pending:
+        attributes.update(pending)
     return timed_span(
         span_type="agent.loop",
         name=f"agent.loop:{AGENT_ID}",

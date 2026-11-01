@@ -59,16 +59,29 @@ async def health_sampler_proxy() -> dict[str, Any]:
 
     try:
         async with AsyncClient(timeout=2.0) as client:
-            response = await client.head(status_url)
+            response = await client.get(status_url)
 
             # Check if the response is successful (200 OK)
             if response.status_code == 200:
-                return {
-                    "status": "ok",
-                    "url": settings.sampler_proxy_url,
-                    "latency_ms": None,  # HEAD doesn't have timing info
-                    "status_code": response.status_code,
-                }
+                try:
+                    # A-17: best-effort parse sampler status body
+                    body = response.json()
+                    return {
+                        "status": "ok",
+                        "url": settings.sampler_proxy_url,
+                        "latency_ms": None,  # GET doesn't have timing info
+                        "status_code": response.status_code,
+                        "current_rate": body.get("current_rate"),
+                        "policy_reason": body.get("policy_reason"),
+                    }
+                except Exception:  # pragma: no cover - body not JSON
+                    # Fallback: no body content
+                    return {
+                        "status": "ok",
+                        "url": settings.sampler_proxy_url,
+                        "latency_ms": None,
+                        "status_code": response.status_code,
+                    }
             else:
                 raise HTTPException(
                     status_code=503,

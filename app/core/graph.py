@@ -592,8 +592,11 @@ def _emit_tool_call_spans(
     tool_calls: Sequence[dict[str, Any]],
     result: Any,
     started: float,
+    extra: Mapping[str, Any] | None = None,
 ) -> dict[str, str]:
     """Emit one ``tool.call`` span per executed call (A-16); map id → span id.
+
+    A-17: ``extra`` attributes (e.g. security.incident) are merged into every span.
 
     Attribute names follow the agent_obs SDK (``observability.py`` /
     ``content_sampling.attach_tool_content``): ``tool.name``,
@@ -604,11 +607,13 @@ def _emit_tool_call_spans(
     span_ids: dict[str, str] = {}
     if not tool_calls:
         return span_ids
-    try:
-        if not get_settings().agent_obs_enabled:
+        try:
+            if not get_settings().agent_obs_enabled:
+                return span_ids
+        except Exception:  # pragma: no cover - settings fault -> no spans
             return span_ids
-    except Exception:  # pragma: no cover - settings fault -> no spans
-        return span_ids
+    # A-17: merge extra attributes (e.g. security.incident from incident scope)
+    extra_attrs: dict[str, Any] = dict(extra or {})
     by_id: dict[str, ToolMessage] = {}
     for message in _result_messages(result):
         if isinstance(message, ToolMessage):
@@ -631,6 +636,9 @@ def _emit_tool_call_spans(
                 ).hexdigest(),
                 "tool.input_chars": len(args_text),
             }
+            # A-17: merge extra attributes (e.g. security.incident)
+            if extra_attrs:
+                attributes.update(extra_attrs)
             status = "ok"
             if message is not None:
                 if getattr(message, "status", None) == "error":
@@ -742,7 +750,12 @@ def build_graph(
         tool_calls = _pending_tool_calls(state)
         started = time.time()
         result = await raw_tool_node.ainvoke(state, config)
-        span_ids = _emit_tool_call_spans(tool_calls, result, started)
+        # A-17: pass incident attributes from scope to span emission
+        from app.core.observability.spans import _incident_bag
+        incidents = _incident_bag.get()
+        span_ids = _emit_tool_call_spans(
+            tool_calls, result, started, extra=incidents
+        )
         return _stamp_tool_messages(result, span_ids=span_ids)
 
     bound_model = _bind_tools(model, tool_list)

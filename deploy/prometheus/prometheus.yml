@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: sampler-proxy
+    static_configs: ["targets: [\"sampler-proxy:9095\"]"]
+  # Optional: scrape OryaAgent metrics (PC29 gauges could be added here)
+  # - job_name: orya-api
+  #   static_configs: ["targets: [\"api:8000\"]"]

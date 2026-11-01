@@ -4,6 +4,8 @@ Replaces llm/tracing.py's SpanRecord and buffer; supports llm.call (A-02),
 agent.permission (A-03), and since A-16 the duration spans agent.loop,
 tool.call and memory.write (via :func:`timed_span` / ``emit_span(start_time=)``).
 
+A-17 adds pending span attributes (cost/security) and incident tracking for sampler-proxy.
+
 Design:
 - SpanRecord: generic record with trace_id, span_id, name, span_type,
   provider, model, attributes, status, start/end_time.
@@ -25,6 +27,12 @@ exporter that POSTs batches to Langfuse when configured (auto-on with
 ``LANGFUSE_HOST`` + keys, kill-switch ``ORYA_LANGFUSE_EXPORT_ENABLED``).
 Span ids are W3C-width (16 hex; trace ids 32 hex) so the exported
 Langfuse trace/span ids equal the A-06 cross-link ids.
+
+A-17: Pending span attributes and incident tracking for sampler-proxy always-keep spans.
+- _pending_span_attrs: ContextVar for cost/security attributes set in cost_router,
+  consumed in agent._agent_loop_span to stamp on agent.loop spans.
+- _incident_bag: ContextVar for security incidents set in tools_node incident_scope,
+  consumed by _emit_tool_call_spans to stamp on tool.call spans.
 
 Usage::
 
@@ -50,6 +58,7 @@ Usage::
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import secrets
@@ -59,7 +68,7 @@ from collections.abc import Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ContextManager, Iterator, Mapping
 
 from app.core.config import get_settings
 from app.core.observability.langfuse import export_span
@@ -82,6 +91,18 @@ _span_buffer: deque[SpanRecord] = deque(maxlen=SPAN_BUFFER_MAX)
 #: Turn-level trace id (A-06): bound once per agent turn so every span
 #: of the turn shares one Langfuse trace. ``None`` outside a turn.
 _turn_trace_id: ContextVar[str | None] = ContextVar("orya_turn_trace_id", default=None)
+
+# A-17: Pending span attributes for cost/security attributes
+# Set in cost_router (before agent.loop span), consumed in agent._agent_loop_span
+_pending_span_attrs: ContextVar[dict[str, Any] | None] = ContextVar(
+    "orya_pending_span_attrs", default=None
+)
+
+# A-17: Incident bag for security incident tracking in tool.call spans
+# Set in tools_node scope (before ainvoke), consumed by _emit_tool_call_spans
+_incident_bag: ContextVar[dict[str, str] | None] = ContextVar(
+    "orya_incident_bag", default=None
+)
 
 
 @dataclass
@@ -262,3 +283,51 @@ def timed_span(
             model=model,
             start_time=start,
         )
+
+
+# A-17: Pending span attributes and incident tracking functions
+def set_pending_span_attributes(attrs: Mapping[str, Any]) -> None:
+    """Stage attributes for the next timed_span (A-17).
+    
+    Merges with existing pending attrs (if any). Consumed by _agent_loop_span.
+    """
+    merged = dict(_pending_span_attrs.get() or {})
+    merged.update(attrs)
+    _pending_span_attrs.set(merged)
+
+
+def take_pending_span_attributes() -> dict[str, Any]:
+    """Take and clear pending span attributes (A-17).
+    
+    Returns empty dict if none set. Safe to call multiple times.
+    """
+    pending = _pending_span_attrs.get() or {}
+    if pending:
+        _pending_span_attrs.set(None)
+    return dict(pending)
+
+
+def note_incident(key: str = "security.incident", value: str = "true") -> None:
+    """Record an incident for the current tool batch (A-17).
+    
+    Only effective inside incident_scope(). Called from check_injection when
+    injection patterns are detected during tool execution.
+    """
+    bag = _incident_bag.get()
+    if bag is not None:
+        bag[key] = value
+
+
+@contextlib.contextmanager
+def incident_scope() -> Iterator[dict[str, str]]:
+    """Context manager for incident tracking during tool batch execution (A-17).
+    
+    Yields a mutable bag; note_incident() calls populate it. _emit_tool_call_spans
+    reads the bag and stamps attributes on all tool.call spans in the batch.
+    """
+    bag: dict[str, str] = {}
+    token = _incident_bag.set(bag)
+    try:
+        yield bag
+    finally:
+        _incident_bag.reset(token)

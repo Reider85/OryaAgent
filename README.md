@@ -4,7 +4,7 @@ Senior Python coding agent with UI and long-term memory.
 
 ## Phase: ALPHA
 
-Tickets M-00…M-28 (bootstrap → failure recovery) and MVP-POLISH are implemented. ALPHA adds the production-safe baseline: A-00 (auth middleware), A-01 (rate-limit), A-02 (LLM-seam trace-wrapping), A-03 (permission audit spans), A-04 (health endpoints), A-05 (session-log encryption), A-06 (JSONL span cross-link), A-07 (cache LRU + Redis tuning), A-08 (smoke tests v2), A-09 (this deploy guide), A-10 (Docker compose v2), A-11 (Alembic migrations), A-12 (Settings v2: `ORYA_ENV` prod-guard + `orya config` CLI), A-13 (CostAwareRouter: budget-based model degrade), A-14 (cost-tracking span attributes + `orya_llm_cost_usd_total` metric), A-15 (Langfuse OTLP/HTTP JSON span export) and A-16 (OryaObservability SDK: `agent.loop`/`tool.call`/`memory.write` spans + PII masking). See [PROMPT_ALPHA.md](analytics/PROMPT_ALPHA.md) for the phase spec.
+Tickets M-00…M-28 (bootstrap → failure recovery) and MVP-POLISH are implemented. ALPHA adds the production-safe baseline: A-00 (auth middleware), A-01 (rate-limit), A-02 (LLM-seam trace-wrapping), A-03 (permission audit spans), A-04 (health endpoints), A-05 (session-log encryption), A-06 (JSONL span cross-link), A-07 (cache LRU + Redis tuning), A-08 (smoke tests v2), A-09 (this deploy guide), A-10 (Docker compose v2), A-11 (Alembic migrations), A-12 (Settings v2: `ORYA_ENV` prod-guard + `orya config` CLI), A-13 (CostAwareRouter: budget-based model degrade), A-14 (cost-tracking span attributes + `orya_llm_cost_usd_total` metric), A-15 (Langfuse OTLP/HTTP JSON span export), A-16 (OryaObservability SDK: `agent.loop`/`tool.call`/`memory.write` spans + PII masking), and A-17 (sampler-proxy mode + cost/security span attributes for always-keep). See [PROMPT_ALPHA.md](analytics/PROMPT_ALPHA.md) for the phase spec.
 
 ## Quick Start
 
@@ -128,10 +128,12 @@ Four supported ways to run OryaAgent, from a laptop to a single-host deployment:
 | `chainlit` | `app` | `orya-agent:local` (same image) | `${CHAINLIT_PORT:-8001}` | `chainlit run --host 0.0.0.0`; `ORYA_API_URL=http://api:8000` — the UI is a pure HTTP client of the `api` service (M-24) |
 | `db-init` | `observability` | `postgres:16` | — | one-shot, idempotent `CREATE DATABASE langfuse` (initdb hooks never re-run on an existing volume) |
 | `clickhouse` | `observability` | `clickhouse/clickhouse-server:26.9` | — | Langfuse v3 trace store; Langfuse runs its own migrations on boot |
+| `clickhouse-obs-init` | `observability` | `clickhouse/clickhouse-server:26.9` | — | A-17: one-time init of `observability.audit_events_hot` table for sampler-proxy audit |
+| `prometheus` | `observability` | `prom/prometheus:v3.4.2` | `9090` (host) → `9090` | A-17: OTLP metrics scraper; scrapes sampler-proxy:9095 (PC29 gauges not published by OryaAgent) |
 | `minio` | `observability` | `quay.io/minio/minio` | — | S3-compatible bucket `langfuse` for events/media payloads |
 | `langfuse` | `observability` | `langfuse/langfuse:3` | `${LANGFUSE_PORT:-3000}` | first-boot provisioning (`LANGFUSE_INIT_*`, dev defaults for `SALT`/`ENCRYPTION_KEY`/`NEXTAUTH_SECRET` — override for anything non-local) |
 | `langfuse-worker` | `observability` | `langfuse/langfuse-worker:3` | — | async event processing (web alone receives, the worker ingests) |
-| `sampler-proxy` | `observability` | build `../OryaObservability` → `agent-obs-sampler:latest` | `4321` (OTLP/HTTP), `9095` (`/metrics`) | adaptive tail-sampler proxy; `DOWNSTREAM_URL=http://langfuse:3000`; rate policy needs Prometheus (absent → default rate, errors are logged and ignored). **Requires the sibling checkout `../OryaObservability`.** Behaviour/audit wiring lands in A-17 |
+| `sampler-proxy` | `observability` | build `../OryaObservability` → `agent-obs-sampler:latest` | `4321` (OTLP/HTTP), `9095` (`/metrics`) | adaptive tail-sampler proxy; `DOWNSTREAM_URL=http://langfuse:3000`; A-17: `cost.over_budget`/`security.incident` always-keep attributes + audit sink (ClickHouse `audit_events_hot` table) + Prometheus rate policy. **Requires the sibling checkout `../OryaObservability`.** |
 
 Application containers (API/Chainlit), the `langfuse` stack and the `sampler-proxy` service are in place since **A-10** (Docker compose v2). Host-process deployment (`uv run uvicorn app.main:app`, `chainlit run app/ui/chainlit_app.py`) remains supported — `scripts/start.*` are the reference implementation. Port conflicts: `POSTGRES_PORT=5435 make db-up` (plus a matching `DATABASE_URL`) and `REDIS_PORT=6381 make redis-up` (plus a matching `REDIS_URL`); the start scripts detect an already-running container and reuse its ports.
 
@@ -183,7 +185,7 @@ curl http://localhost:8000/health   # API
 |---|---|
 | `OTEL_EXPORTER_OTLP_ENDPOINT` (or `ORYA_OTEL_EXPORTER_OTLP_ENDPOINT`) | Generic OTLP collector endpoint — since A-15 it wins over `LANGFUSE_HOST` and is POSTed at `{endpoint}/v1/traces` |
 | `ORYA_SAMPLER_PROXY_URL` (default `http://sampler-proxy:4321`) | Sampler-proxy base URL probed by `GET /health/sampler-proxy` (A-04) |
-| `AGENT_OBS_SAMPLER_AUDIT_ENABLED` | Sampler-proxy audit trail (A-17) |
+| `AGENT_OBS_SAMPLER_AUDIT_ENABLED` | `1` | Sampler-proxy audit trail (A-17) |
 
 Offline debugging without Langfuse still works via `ORYA_LLM_TRACE_EXPORTER=stdout` plus the JSONL `trace_id` cross-link.
 
@@ -246,6 +248,9 @@ Every knob recognized by `app/core/config.py`, by group. Most settings accept tw
 
 | Env var | Default | Description |
 |---|---|---|
+| `PROMETHEUS_URL` | `http://prometheus:9090` | Sampler-proxy Prometheus scrape endpoint (A-17) |
+| `PROMETHEUS_PORT` | `9090` | Host port for Prometheus service (A-17) |
+| `CLICKHOUSE_OBS_DB` | `observability` | ClickHouse database for sampler-proxy audit table (A-17) |
 | `ORYA_MEMORY_DIR` | `~/.orya/memory` | L0 MD files + `archive/` + audit fallback |
 | `ORYA_MEMORY_COMPACT_INTERVAL_SECONDS` | `86400` | Periodic L0 compaction worker; `0` disables it |
 

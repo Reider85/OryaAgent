@@ -5,6 +5,9 @@ content and user input (PROMPT_MVP 3.4 M-22). Detection never blocks and
 never calls an LLM — a suspected hit is *annotated* and *audited*
 (BACKLOG5 M-22: «запретить чтение malicious-файлов нельзя — только warn»).
 
+A-17: injection patterns also trigger ``note_incident("security.incident")``
+for sampler-proxy always-keep on ``tool.call`` spans.
+
 Pattern categories:
 
 1. **Instruction override** — attempts to override the system prompt:
@@ -49,6 +52,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import get_settings
+from app.core.observability.spans import note_incident
 
 logger = logging.getLogger(__name__)
 
@@ -323,13 +327,22 @@ def check_injection(
 ) -> str | None:
     """Detect an injection in ``content`` and report it when found.
 
+    A-17: injection patterns trigger ``note_incident("security.incident")``
+    for sampler-proxy always-keep on ``tool.call`` spans.
+
     Report = counter bump + process-log warning + ``memory_audit_log``
     audit row. Returns the matched pattern id, or ``None``.
     """
     pattern = detect_injection(content)
     if pattern is not None:
+        # A-17: record incident for tool.call span (if in incident scope)
+        if source.startswith("tool"):
+            note_incident("security.incident", "true")
         log_security_incident(
-            pattern, source=source, preview=content, session_id=session_id
+            source=source,
+            pattern_id=pattern,
+            session_id=session_id,
+            content_preview=content[:100],
         )
     return pattern
 

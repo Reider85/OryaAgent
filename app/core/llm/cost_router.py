@@ -1,4 +1,4 @@
-"""Cost-aware model router (A-13): budget-based degrade between turns.
+"""Cost-aware model router (A-13, A-17): budget-based degrade between turns.
 
 Wraps the ``get_llm`` seam with a per-identity daily budget check
 (PROMPT_ALPHA A-13, BACKLOG5 §A-13, ARCHITECT5 §6.1): spend is recorded
@@ -6,11 +6,15 @@ by ``app.core.cost_tracker`` after every LLM call; before each turn the
 route asks :func:`resolve_turn_model` which alias the graph should be
 built with.
 
+A-17: when ``ratio >= 0.90`` (warning or blocked), ``cost.over_budget="true"`` is
+staged for the ``agent.loop`` span (consumed by ``_agent_loop_span`` if
+``agent_obs_enabled``).
+
 Thresholds on ``budget_ratio = today's spend / daily limit``:
 
 * ``< 0.70`` — primary model, not degraded;
 * ``0.70 <= ratio < 0.90`` — fallback model, ``degraded``;
-* ``0.90 <= ratio < 1.00`` — fallback model, ``degraded`` + ``warning``;
+* ``0.90 <= ratio < 1.00` — fallback model, ``degraded`` + ``warning``;
 * ``>= 1.00`` — ``blocked`` (the route answers 429).
 
 Switching happens **only between turns**: the sessions routes rebuild
@@ -28,6 +32,9 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
+
+from app.core.config import get_settings
+from app.core.observability.spans import set_pending_span_attributes
 from dataclasses import dataclass
 from typing import Any
 
@@ -140,6 +147,9 @@ class CostAwareRouter:
     ) -> ModelSelection:
         """Pick this turn's model alias for ``identity`` (spec entry point).
 
+        A-17: when ratio >= 0.90 (warning or blocked), stage
+        ``cost.over_budget="true"`` for the ``agent.loop`` span.
+
         ``requested_model`` is the client's explicit per-turn choice (if
         any) — recorded as the switch's ``from_model`` when the budget
         forces a degrade; it never overrides the budget.
@@ -162,6 +172,9 @@ class CostAwareRouter:
                 primary=self.primary,
                 fallback=self.fallback,
             )
+        # A-17: cost.over_budget=true on warning or blocked (ratio >= 0.90)
+        if get_settings().agent_obs_enabled and ratio >= WARN_RATIO:
+            set_pending_span_attributes({"cost.over_budget": "true"})
         if ratio < BLOCK_RATIO:
             return ModelSelection(
                 model=self.fallback,
