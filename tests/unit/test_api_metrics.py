@@ -73,6 +73,10 @@ def test_metrics_is_prometheus_text(client: TestClient):
     assert "# TYPE orya_llm_cost_usd_total counter" in body
     assert "# TYPE orya_langfuse_export_spans_total counter" in body
     assert "# TYPE orya_langfuse_export_errors_total counter" in body
+    # A-20: connection-pool gauges (HELP/TYPE always present)
+    assert "# TYPE orya_llm_pool_size gauge" in body
+    assert "# TYPE orya_llm_pool_hit_rate gauge" in body
+    assert "# TYPE orya_llm_pool_unhealthy_total counter" in body
 
 
 def test_metrics_reports_cost_aware_switches(client: TestClient):

@@ -11,8 +11,18 @@ changes required for OpenAI-compatible endpoints.
 A-02 adds span-wrapping: the factory returns a ``TracedChatModel`` that
 emits an ``llm.call`` span per invocation (disable with
 ``ORYA_LLM_TRACE_ENABLED=false`` to get the raw provider adapter).
+Since A-20 the factory also draws per-provider keepalive clients from
+``ConnectionPool`` (``app.core.llm.connection_pool``; kill-switch
+``CONNECTION_POOL_ENABLED=false``).
 """
 
+from app.core.llm.connection_pool import (
+    ConnectionPool,
+    get_connection_pool,
+    get_pool_stats,
+    pool_health_worker,
+    reset_connection_pool,
+)
 from app.core.llm.factory import get_llm, list_models, list_providers
 from app.core.llm.registry import (
     clear_registry_cache,
@@ -50,4 +60,9 @@ __all__ = [
     "wrap_with_tracing",
     "TieredModelRouter",
     "tier_models",
+    "ConnectionPool",
+    "get_connection_pool",
+    "get_pool_stats",
+    "pool_health_worker",
+    "reset_connection_pool",
 ]

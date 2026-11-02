@@ -248,9 +248,11 @@ class PromptCacheLayout:
         # Track cache hit/miss
         span_buffer = get_span_buffer()
         if span_buffer:
-            # Find the current LLM span
+            # Find the most recent finished LLM span (the buffer is a plain
+            # deque of SpanRecord — A-19 originally read a ``.spans`` attr
+            # that does not exist and blew up whenever it was non-empty).
             current_span = None
-            for span in reversed(span_buffer.spans):
+            for span in reversed(span_buffer):
                 if span.span_type == "llm.call":
                     current_span = span
                     break

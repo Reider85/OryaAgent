@@ -21,7 +21,7 @@ FastAPI · LangGraph · Chainlit · PostgreSQL · Redis
 > LLM seam covering 30+ providers and 45+ model aliases, bearer-JWT auth, per-identity
 > cost-aware routing, OTLP-grade observability (Langfuse + OryaObservability SDK +
 > sampler-proxy + Prometheus + ClickHouse), Alembic migrations, and a one-command
-> Docker Compose stack. MVP (`M-00…M-28` + `MVP-POLISH`) and ALPHA (`A-00…A-18`)
+> Docker Compose stack. MVP (`M-00…M-28` + `MVP-POLISH`) and ALPHA (`A-00…A-20`)
 > are implemented.
 
 ---
@@ -105,7 +105,7 @@ FastAPI · LangGraph · Chainlit · PostgreSQL · Redis
 - **Importers** — `orya import --from opencode | continue | aider | cline` ingests an existing agent's provider config and writes the local YAML.
 - **Single seam rule**: `langchain_anthropic` / `langchain_openai` are never imported outside `app/core/llm/`. Adding an OpenAI-compatible provider is YAML-only.
 
-### Production-safe baseline (ALPHA `A-00…A-18`)
+### Production-safe baseline (ALPHA `A-00…A-20`)
 
 - **Bearer-JWT auth (A-00)** — `orya auth token --user <sub>` mints a token; `/health` stays public, every other endpoint requires `Authorization: Bearer <jwt>` when `AUTH_ENABLED=true`.
 - **Rate limiting (A-01)** — Redis-backed, per-identity RPM, kill-switch `ORYA_RATE_LIMIT_ENABLED` (default off, zero-cost startup).
@@ -126,6 +126,8 @@ FastAPI · LangGraph · Chainlit · PostgreSQL · Redis
 - **OryaObservability SDK bridge (A-16)** — `agent.loop` / `tool.call` / `memory.write` custom spans, `timed_span` duration context manager, PII masking via the opt-in `agent_obs` PIIDetector (fail-closed `[REDACTED:guardrail_unavailable]` without the SDK).
 - **Sampler-proxy mode (A-17)** — `cost.over_budget=true` at 90 % budget, `security.incident=true` on injection; Prometheus + ClickHouse audit sink for always-keep traces.
 - **TieredModelRouter (A-18)** — tier-based model selection (`small` / `large` / `tournament`) layered over the CostAwareRouter: the tier picks the model, the budget only *lowers* it to `small` at 90 %; stages `agent.execute.tier` / `agent.execute.degraded` span attributes; `tier=` keyword on `resolve_turn_model` (the planner that emits tiers arrives in BETA).
+- **PromptCacheLayout (A-19)** — provider-native prompt caching of the stable system-prompt prefix (Anthropic `cache_control: ephemeral`, OpenAI automatic, Gemini context-caching), `llm.call.cache_hit` span attribute, Redis-backed prefix-hash invalidation; kill-switch `LLM_PROMPT_CACHE_ENABLED`.
+- **ConnectionPool (A-20)** — per-provider keepalive clients for the LLM seam (up to `LLM_POOL_SIZE`=4, LRU-evicted, 30 s async health-check worker): warm TCP+TLS instead of a per-turn cold-start, `tcp.pool_hit` / `tcp.connect_duration_ms` span attributes, `orya_llm_pool_*` metrics; kill-switch `CONNECTION_POOL_ENABLED=false`.
 
 ### Tooling & UX
 
@@ -827,6 +829,28 @@ tiered_router:
     tournament: ["claude-sonnet-3.5", "deepseek-chat"]
 ```
 
+### Prompt cache (A-19)
+
+| Var | Effect |
+| --- | --- |
+| `LLM_PROMPT_CACHE_ENABLED` | Provider-native prompt caching on/off (default on) |
+| `LLM_PROMPT_CACHE_TTL` | Prefix-cache TTL in seconds (default `300`) |
+| `LLM_PROMPT_CACHE_MAX_SIZE` | Max cached prefixes (default `1000`) |
+
+### Connection pool (A-20)
+
+| Var | Effect |
+| --- | --- |
+| `CONNECTION_POOL_ENABLED` | Keepalive pool kill-switch (default on; `false` = stock per-model clients) |
+| `LLM_POOL_SIZE` | Hot connections per provider — default `4`, max `16` |
+| `LLM_POOL_HEALTH_INTERVAL` | Health-check period in seconds (default `30`, `0` disables the lifespan worker) |
+
+The pool hands `get_llm()` a warm async client per provider (httpx; the
+anthropic SDK gets its vendored `httpx2` fork), stamps `tcp.pool_hit` /
+`tcp.connect_duration_ms` on the turn's `llm.call` spans and exposes
+`orya_llm_pool_size` / `orya_llm_pool_hit_rate` /
+`orya_llm_pool_unhealthy_total` on `/metrics`.
+
 ### Auth / CORS (A-00)
 
 | Var | Effect |
@@ -1020,8 +1044,7 @@ uv run pytest tests/unit/test_llm_providers_yaml.py
 | Phase | Status | Tickets |
 | --- | --- | --- |
 | **MVP** | ✅ done | `M-00` (bootstrap) → `M-28` (failure recovery) + `MVP-POLISH` |
-| **ALPHA** | ✅ done through `A-18` | `A-00` auth · `A-01` rate-limit · `A-02` LLM trace · `A-03` perm audit · `A-04` health · `A-05` session-log encryption · `A-06` JSONL span cross-link · `A-07` cache LRU+Redis · `A-08` smoke v2 · `A-09` README v2 · `A-10` compose v2 · `A-11` Alembic · `A-12` Settings v2 + `orya config` · `A-13` CostAwareRouter · `A-14` cost spans · `A-15` Langfuse OTLP · `A-16` OryaObs SDK + PII · `A-17` sampler-proxy · `A-18` TieredModelRouter |
-| **ALPHA (remaining)** | 🚧 planned | `A-19 … A-20` (prompt cache, connection pool — v7 additions) |
+| **ALPHA** | ✅ done | `A-00` auth · `A-01` rate-limit · `A-02` LLM trace · `A-03` perm audit · `A-04` health · `A-05` session-log encryption · `A-06` JSONL span cross-link · `A-07` cache LRU+Redis · `A-08` smoke v2 · `A-09` README v2 · `A-10` compose v2 · `A-11` Alembic · `A-12` Settings v2 + `orya config` · `A-13` CostAwareRouter · `A-14` cost spans · `A-15` Langfuse OTLP · `A-16` OryaObs SDK + PII · `A-17` sampler-proxy · `A-18` TieredModelRouter · `A-19` prompt cache · `A-20` connection pool |
 | **BETA (v7)** | 📋 designed | see `analytics/ARCHITECT7.md`, `analytics/ROADMAP7.md`, `analytics/BACKLOG7.md` |
 
 Design docs live in `analytics/` (`ARCHITECT.md` → `ARCHITECT7.md`, `ROADMAP4` → `ROADMAP7`, `BACKLOG4` → `BACKLOG7`, `MVP-POLISH.md`, `PROMPT_MVP.md` / `PROMPT_ALPHA.md` / `PROMPT_BETA.md`) plus 15 v0.1 ADRs in `analytics/adr/` and 10 v0.2 ADRs in `analytics/orya-architect2/adr/`.

@@ -527,6 +527,38 @@ class Settings(BaseSettings):
         ),
         description="Maximum number of cached prompt prefixes",
     )
+    # ALPHA: connection pool (A-20)
+    llm_pool_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "CONNECTION_POOL_ENABLED",
+            "ORYA_CONNECTION_POOL_ENABLED",
+            "ORYA_LLM_POOL_ENABLED",
+        ),
+        description=(
+            "A-20: per-provider keepalive httpx pool for the LLM seam "
+            "(off = stock per-model clients, no tcp.* span attributes)"
+        ),
+    )
+    llm_pool_size: int = Field(
+        default=4,
+        ge=1,
+        le=16,
+        validation_alias=AliasChoices("LLM_POOL_SIZE", "ORYA_LLM_POOL_SIZE"),
+        description="A-20: hot keepalive connections per provider (default 4, max 16)",
+    )
+    llm_pool_health_interval: int = Field(
+        default=30,
+        ge=0,
+        validation_alias=AliasChoices(
+            "LLM_POOL_HEALTH_INTERVAL",
+            "ORYA_LLM_POOL_HEALTH_INTERVAL",
+        ),
+        description=(
+            "A-20: seconds between connection health-check passes "
+            "(0 disables the lifespan worker)"
+        ),
+    )
     sampler_proxy_url: str = Field(
         default="http://sampler-proxy:4321",
         validation_alias=AliasChoices("ORYA_SAMPLER_PROXY_URL"),

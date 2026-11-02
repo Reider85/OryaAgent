@@ -21,6 +21,13 @@ API key resolution:
 Trace-wrapping (A-02): the returned model is wrapped in
 ``TracedChatModel`` so every seam invocation emits an ``llm.call`` span;
 ``ORYA_LLM_TRACE_ENABLED=false`` returns the raw adapter instead.
+
+Connection pool (A-20): with ``CONNECTION_POOL_ENABLED`` on (default) the
+factory acquires a per-provider keepalive ``httpx.AsyncClient`` from
+``app.core.llm.connection_pool`` and hands it to the adapter — the model
+reuses warm TCP+TLS instead of paying a cold-start every turn, and the
+acquisition is staged as ``tcp.pool_hit`` / ``tcp.connect_duration_ms``
+for the turn's ``llm.call`` spans.
 """
 
 from __future__ import annotations
@@ -28,9 +35,12 @@ from __future__ import annotations
 import os
 from typing import Any
 
+import httpx
 from langchain_core.language_models import BaseChatModel
 
 from app.core import config as app_config
+from app.core.llm.connection_pool import get_connection_pool, stage_tcp_attrs
+from app.core.llm.prompt_cache import get_prompt_cache
 from app.core.llm.registry import (
     ProviderSpec,
     load_models,
@@ -38,7 +48,6 @@ from app.core.llm.registry import (
     load_providers,
     resolve_model,
 )
-from app.core.llm.prompt_cache import get_prompt_cache, PromptCacheConfig
 from app.core.llm.tracing import wrap_with_tracing
 
 DEFAULT_PROVIDER = "anthropic"
@@ -241,6 +250,31 @@ def get_llm(
     key = _resolve_api_key(spec, api_key, user_config)
     url = _resolve_base_url(spec, base_url, user_config)
 
+    # A-20: per-provider keepalive client. Kill-switch off (or any pool
+    # failure) leaves the stock per-model client in place.
+    pool_client: httpx.AsyncClient | None = None
+    pool = get_connection_pool()
+    if pool.enabled:
+        from app.core.llm.adapters import build_health_url
+
+        health_url = (
+            build_health_url(url or "", spec.health_path) if spec.health_path else None
+        )
+        acquired = pool.acquire(
+            provider_name,
+            base_url=url or "",
+            health_url=health_url,
+            # The anthropic SDK (1.15+) rejects httpx objects — it speaks
+            # the vendored httpx2 fork, so that flavor must be pooled too.
+            flavor="httpx2" if spec.adapter == "anthropic" else "httpx",
+        )
+        pool_client = acquired.client
+        stage_tcp_attrs(
+            provider_name,
+            pool_hit=acquired.pool_hit,
+            connect_duration_ms=acquired.connect_duration_ms,
+        )
+
     builder = _get_builder(spec.adapter)
     build_kwargs: dict[str, Any] = dict(kwargs)
 
@@ -254,17 +288,23 @@ def get_llm(
             api_key=key,
             base_url=url or "",
             extra_headers=extra or None,
+            pool_client=pool_client,
             **build_kwargs,
         )
     else:
         # anthropic and google_genai share the same call shape.
-        instance = builder(model_id=resolved.model_id, api_key=key, **build_kwargs)
+        instance = builder(
+            model_id=resolved.model_id,
+            api_key=key,
+            pool_client=pool_client,
+            **build_kwargs,
+        )
 
     # A-19: PromptCacheLayout integration - only when explicitly enabled
     if enable_prompt_cache is True:
         # Wrap with PromptCacheLayout
         from app.core.llm.prompt_cache import PromptCacheLayoutWrapper
-        
+
         # Create a wrapper that applies prompt caching
         instance = PromptCacheLayoutWrapper(
             inner=instance,
@@ -272,7 +312,7 @@ def get_llm(
             model_name=resolved.model_id,
             prompt_cache=get_prompt_cache(),
         )
-    
+
     # A-02: span-wrapping at the seam — disabled (ORYA_LLM_TRACE_ENABLED=false)
     # returns the raw provider adapter unchanged.
     return wrap_with_tracing(

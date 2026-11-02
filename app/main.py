@@ -66,11 +66,18 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     forces it off); shutdown flushes the queue best-effort.
     ``init_observability_sdk`` (A-16) probes the agent_obs seam and
     logs availability — no workers, nothing to shut down.
+    ``pool_health_worker`` (A-20) probes the pooled LLM connections every
+    ``LLM_POOL_HEALTH_INTERVAL`` seconds (0 disables it; tests pin 0) and
+    shutdown closes every pooled client.
     """
     from app.core.auth.rate_limit import close_rate_limiter, init_rate_limiter
     from app.core.cache import close_cache, init_cache
     from app.core.config import get_settings
     from app.core.cost_tracker import close_cost_store, init_cost_store
+    from app.core.llm.connection_pool import (
+        get_connection_pool,
+        pool_health_worker,
+    )
     from app.core.memory.compactor import compaction_worker
     from app.core.observability.langfuse import init_exporter, shutdown_exporter
     from app.core.observability.sdk import init_observability_sdk
@@ -89,6 +96,11 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     compact_task: asyncio.Task | None = None
     if interval > 0:
         compact_task = asyncio.create_task(compaction_worker(interval))
+    pool = get_connection_pool()
+    pool_interval = get_settings().llm_pool_health_interval
+    pool_task: asyncio.Task | None = None
+    if pool.enabled and pool_interval > 0:
+        pool_task = asyncio.create_task(pool_health_worker(pool_interval))
     try:
         yield
     finally:
@@ -99,6 +111,11 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
             compact_task.cancel()
             with suppress(asyncio.CancelledError):
                 await compact_task
+        if pool_task is not None:
+            pool_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await pool_task
+            await pool.aclose()
         await close_rate_limiter()
         await close_cost_store()
         await asyncio.to_thread(shutdown_exporter)

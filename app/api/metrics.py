@@ -21,6 +21,10 @@ A-14), counting every priced call regardless of the budget identity.
 A-15 adds ``orya_langfuse_export_spans_total`` /
 ``orya_langfuse_export_errors_total`` — delivered/dropped counters of
 the Langfuse OTLP exporter (``app.core.observability.langfuse``).
+A-20 adds ``orya_llm_pool_size`` / ``orya_llm_pool_hit_rate`` /
+``orya_llm_pool_unhealthy_total`` — the keepalive connection pool of the
+LLM seam (``app.core.llm.connection_pool``): current clients per
+provider, cumulative reuse ratio and killed-connection counter.
 """
 
 from __future__ import annotations
@@ -31,6 +35,7 @@ from fastapi import APIRouter, Response
 
 from app.core.cache import get_cache_stats
 from app.core.cost_tracker import get_cost_totals
+from app.core.llm.connection_pool import get_pool_stats
 from app.core.llm.cost_router import get_switch_stats
 from app.core.observability.langfuse import get_export_stats
 from app.core.security import get_injection_stats
@@ -130,15 +135,37 @@ def _render_langfuse_export_counters() -> list[str]:
     ]
 
 
+def _render_pool_metrics() -> list[str]:
+    """Render the A-20 connection-pool gauges/counters (HELP/TYPE always)."""
+    size_metric = "orya_llm_pool_size"
+    hit_metric = "orya_llm_pool_hit_rate"
+    unhealthy_metric = "orya_llm_pool_unhealthy_total"
+    lines = [
+        f"# HELP {size_metric} Hot keepalive connections currently pooled per provider (A-20).",
+        f"# TYPE {size_metric} gauge",
+        f"# HELP {hit_metric} Cumulative pool acquire hit ratio per provider (A-20).",
+        f"# TYPE {hit_metric} gauge",
+        f"# HELP {unhealthy_metric} Connections killed by the health-check per provider (A-20).",
+        f"# TYPE {unhealthy_metric} counter",
+    ]
+    for provider, stats in get_pool_stats().items():
+        label = f'provider="{_escape_label(provider)}"'
+        lines.append(f"{size_metric}{{{label}}} {stats['size']}")
+        lines.append(f"{hit_metric}{{{label}}} {stats['hit_rate']:.4f}")
+        lines.append(f"{unhealthy_metric}{{{label}}} {stats['unhealthy_total']}")
+    return lines
+
+
 @router.get("/metrics")
 async def metrics() -> Response:
-    """Prometheus exposition: cache (M-21), injection (M-22), switch (A-13), cost (A-14), Langfuse export (A-15)."""
+    """Prometheus exposition: cache (M-21), injection (M-22), switch (A-13), cost (A-14), Langfuse export (A-15), pool (A-20)."""
     lines = (
         _render_prometheus(get_cache_stats())
         + _render_injection_counters()
         + _render_switch_counters()
         + _render_cost_totals()
         + _render_langfuse_export_counters()
+        + _render_pool_metrics()
     )
     return Response(content="\n".join(lines) + "\n", media_type=PROMETHEUS_MEDIA_TYPE)
 

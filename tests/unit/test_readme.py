@@ -81,7 +81,7 @@ def test_readme_langfuse_section_documents_wiring():
 def test_readme_phase_progress_covers_alpha_tickets():
     text = _readme()
     section = text.split("Roadmap & Phases", 1)[1]
-    for i in range(19):  # A-00..A-18 (A-18: TieredModelRouter)
+    for i in range(21):  # A-00..A-20 (A-19 prompt cache, A-20 connection pool)
         marker = f"`A-{i:02d}`"
         assert marker in section, f"Roadmap is missing {marker}"
 

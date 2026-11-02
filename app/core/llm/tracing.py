@@ -25,6 +25,11 @@ and accumulates the ``orya_llm_cost_usd_total{model}`` metric counter.
 Unlike the budget recording, the cost attributes are stamped on every
 span — independent of the cost identity and the router kill-switch.
 
+A-20 (connection pool): every span additionally carries the pool
+acquisition staged by ``get_llm()`` — ``tcp.pool_hit`` (warm reuse vs
+cold spawn) and ``tcp.connect_duration_ms`` — when the pool kill-switch
+is on.
+
 Design notes (A-02 scope):
 - No message content is recorded — PII stays out of spans by omission
   (guardrail/content capture arrives with A-16/A-14).
@@ -55,6 +60,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 
 from app.core.config import get_settings
 from app.core.cost_tracker import add_cost_total, price_usd, record_usage
+from app.core.llm.connection_pool import peek_tcp_attrs
 from app.core.observability.spans import (
     ORYA_SPAN_KEY,
     SpanRecord,
@@ -124,6 +130,23 @@ def _attach_cost(record: SpanRecord, model: str, tokens: tuple[int, int]) -> Non
     record.attributes["cost.output_tokens"] = output_tokens
     record.attributes["cost.usd"] = usd
     add_cost_total(model, usd)
+
+
+def _attach_tcp(record: SpanRecord, provider: str) -> None:
+    """Stamp the A-20 pool attributes staged by ``get_llm()`` (best-effort).
+
+    ``tcp.pool_hit`` tells whether the construction reused a warm
+    keepalive connection; ``tcp.connect_duration_ms`` is the acquire cost
+    (sub-ms warm; a genuinely cold handshake shows up on the first
+    request). Absent when the pool kill-switch is off or nothing was
+    staged for this provider.
+    """
+    staged = peek_tcp_attrs(provider)
+    if staged is None:
+        return
+    pool_hit, connect_ms = staged
+    record.attributes["tcp.pool_hit"] = pool_hit
+    record.attributes["tcp.connect_duration_ms"] = connect_ms
 
 
 def _stamp_span(message: Any, record: SpanRecord) -> None:
@@ -247,6 +270,7 @@ class TracedChatModel(BaseChatModel):
             if tokens is not None:
                 _attach_cost(record, self.llm_model, tokens)
                 _schedule_record_usage(self.llm_provider, self.llm_model, *tokens)
+            _attach_tcp(record, self.llm_provider)
             _stamp_span(result, record)
             return result
 
@@ -267,6 +291,7 @@ class TracedChatModel(BaseChatModel):
                 await record_usage(
                     self.llm_provider, self.llm_model, tokens[0], tokens[1]
                 )
+            _attach_tcp(record, self.llm_provider)
             _stamp_span(result, record)
             return result
 

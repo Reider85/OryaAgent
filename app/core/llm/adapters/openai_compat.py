@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 
@@ -18,9 +19,14 @@ def build_openai_compat(
     api_key: str,
     base_url: str,
     extra_headers: dict[str, str] | None = None,
+    pool_client: httpx.AsyncClient | None = None,
     **kwargs: Any,
 ) -> BaseChatModel:
-    """Build a ChatOpenAI pointed at an OpenAI-compatible endpoint."""
+    """Build a ChatOpenAI pointed at an OpenAI-compatible endpoint.
+
+    ``pool_client`` (A-20): a keepalive client from ``ConnectionPool`` —
+    ``ChatOpenAI`` consumes it as its async httpx transport.
+    """
     if not base_url:
         raise ValueError(
             "openai_compat adapter requires base_url — set it in providers.yaml "
@@ -33,6 +39,8 @@ def build_openai_compat(
     }
     if extra_headers:
         params["default_headers"] = dict(extra_headers)
+    if pool_client is not None:
+        params["http_async_client"] = pool_client
     # Enable prompt caching for OpenAI (automatic for prefixes >1024 tokens)
     params.setdefault("enable_prompt_caching", True)
     params.update(kwargs)
