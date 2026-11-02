@@ -498,6 +498,35 @@ class Settings(BaseSettings):
             "ORYA_OTEL_EXPORTER_OTLP_ENDPOINT",
         ),
     )
+    # ALPHA: prompt cache (A-19)
+    llm_prompt_cache_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "LLM_PROMPT_CACHE_ENABLED",
+            "ORYA_LLM_PROMPT_CACHE_ENABLED",
+        ),
+        description=(
+            "Kill-switch: enable prompt caching with provider-native mechanisms "
+            "(Anthropic cache_control: ephemeral, OpenAI automatic prompt caching, "
+            "Gemini context caching); off by default for debugging"
+        ),
+    )
+    llm_prompt_cache_ttl: int = Field(
+        default=300,
+        validation_alias=AliasChoices(
+            "LLM_PROMPT_CACHE_TTL",
+            "ORYA_LLM_PROMPT_CACHE_TTL",
+        ),
+        description="TTL for prompt cache entries in seconds (default: 300 = 5 min)",
+    )
+    llm_prompt_cache_max_size: int = Field(
+        default=1000,
+        validation_alias=AliasChoices(
+            "LLM_PROMPT_CACHE_MAX_SIZE",
+            "ORYA_LLM_PROMPT_CACHE_MAX_SIZE",
+        ),
+        description="Maximum number of cached prompt prefixes",
+    )
     sampler_proxy_url: str = Field(
         default="http://sampler-proxy:4321",
         validation_alias=AliasChoices("ORYA_SAMPLER_PROXY_URL"),

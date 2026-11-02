@@ -10,6 +10,8 @@ from langchain_core.language_models import BaseChatModel
 
 def build_anthropic(model_id: str, api_key: str, **kwargs: Any) -> BaseChatModel:
     """Build a ChatAnthropic instance (no network call at construction)."""
+    # Enable cache_control for prompt caching
+    kwargs.setdefault("cache_control", "ephemeral")
     return init_chat_model(
         model_id,
         model_provider="anthropic",

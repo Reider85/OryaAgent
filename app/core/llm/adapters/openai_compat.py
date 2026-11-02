@@ -33,5 +33,7 @@ def build_openai_compat(
     }
     if extra_headers:
         params["default_headers"] = dict(extra_headers)
+    # Enable prompt caching for OpenAI (automatic for prefixes >1024 tokens)
+    params.setdefault("enable_prompt_caching", True)
     params.update(kwargs)
     return ChatOpenAI(**params)

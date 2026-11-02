@@ -38,6 +38,7 @@ from app.core.llm.registry import (
     load_providers,
     resolve_model,
 )
+from app.core.llm.prompt_cache import get_prompt_cache, PromptCacheConfig
 from app.core.llm.tracing import wrap_with_tracing
 
 DEFAULT_PROVIDER = "anthropic"
@@ -179,6 +180,7 @@ def get_llm(
     api_key: str | None = None,
     base_url: str | None = None,
     require_tools: bool = True,
+    enable_prompt_cache: bool | None = None,
     **kwargs: Any,
 ) -> BaseChatModel:
     """Construct a chat model for the given provider/model (the LLM seam).
@@ -192,6 +194,7 @@ def get_llm(
         require_tools: When True (default), fail fast if the model does not
             support tool-calling. Pass False for plain-chat fallback with
             reasoning models (DeepSeek-R1, o1, GLM-Zero, ...).
+        enable_prompt_cache: Enable prompt caching (None = use global setting).
         **kwargs: Passed through to the underlying chat model constructor
             (temperature, max_tokens, timeout, ...).
 
@@ -257,6 +260,19 @@ def get_llm(
         # anthropic and google_genai share the same call shape.
         instance = builder(model_id=resolved.model_id, api_key=key, **build_kwargs)
 
+    # A-19: PromptCacheLayout integration - only when explicitly enabled
+    if enable_prompt_cache is True:
+        # Wrap with PromptCacheLayout
+        from app.core.llm.prompt_cache import PromptCacheLayoutWrapper
+        
+        # Create a wrapper that applies prompt caching
+        instance = PromptCacheLayoutWrapper(
+            inner=instance,
+            provider=provider_name,
+            model_name=resolved.model_id,
+            prompt_cache=get_prompt_cache(),
+        )
+    
     # A-02: span-wrapping at the seam — disabled (ORYA_LLM_TRACE_ENABLED=false)
     # returns the raw provider adapter unchanged.
     return wrap_with_tracing(
