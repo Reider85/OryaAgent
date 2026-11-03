@@ -3,10 +3,10 @@
 > **Версия промпта:** 7.0
 > **Дата:** 20 октября 2026
 > **Источники:** `ARCHITECT7.md` v7.0 (§3 #18, #19, #20, #22, #27, #28; §6.1-6.4, §6.7-6.8, §6.11-6.12; §7; §8; §14.2; §16.1), `ROADMAP7.md` v7.0 (§5, §11.3, §13), `BACKLOG7.md` v7.0 (§4 — B-24..B-29), `BACKLOG6.md` v6.0 (§4 — B-00..B-23), `ROADMAP6.md` v6.0 (§5), ADR-0001 (DFC), ADR-0002 (LSP-native), ADR-0003 (Tri-Model), ADR-0010 (Background compaction), ADR-v02-004 (Retrieval orchestrator), ADR-v02-007 (Tool discovery), ADR-v03-100 (UKB)
-> **Стек:** Python 3.11+, LangChain 0.3+, LangGraph 0.2+, FastAPI, PostgreSQL 16, Redis 7, Chainlit, Next.js, OriaHS, OryaObservability SDK, **LSP-серверы** (pyright, typescript-language-server, rust-analyzer, gopls, jdtls, lua-language-server), `watchdog` (file watcher), MCP SDK
+> **Стек:** Python 3.11+, LangChain 0.3+, LangGraph 0.2+, FastAPI, PostgreSQL 16, Redis 7, Chainlit, Next.js, OriaHS, OryaObservability SDK, **LSP-серверы** (pyright, typescript-language-server, rust-analyzer, gopls, jdtls, lua-language-server, `vscode-css-languageserver`/`vscode-html-languageserver` — FUTURE+ в PROD), `watchdog` (file watcher), MCP SDK, per-language toolchains (`mvn`/`cargo`/`go`/`npm`/`pnpm`), `google-java-format`/`rustfmt`/`gofmt`/`prettier`, `checkstyle`/`clippy`/`govet`/`eslint`/`axe-core`
 > **Длительность:** 7 недель (поверх готового ALPHA)
 > **Объём кода:** ~13000 LOC (v6 BETA ~8000 + 5000 новых v7)
-> **Статус в v7:** BETA = v6 BETA + 6 новых архитектурных примитивов (DFC, Tri-Model, LSP-native, UKB, RetrievalOrchestrator, CapabilityRegistry)
+> **Статус в v7:** BETA = v6 BETA + 6 новых архитектурных примитивов (DFC, Tri-Model, LSP-native, UKB, RetrievalOrchestrator, CapabilityRegistry) + per-language-capability layer (B-30: `agent_program(language, task)` + 5 skill-bundles Java/Rust/Go/JS/Frontend + per-language hooks)
 
 ---
 
@@ -72,9 +72,9 @@
 
 ---
 
-## 3. Полный список тикетов фазы (B-00 … B-29)
+## 3. Полный список тикетов фазы (B-00 … B-30)
 
-v6 BETA содержит 24 тикета (B-00..B-23). v7 добавляет 6 новых (B-24..B-29). Полный перечень — 30 тикетов.
+v6 BETA содержит 24 тикета (B-00..B-23). v7 добавляет 6 новых (B-24..B-29) + B-30 (multi-language programming capabilities, per-language LSP bindings). Полный перечень — 31 тикет.
 
 ### 3.1. v6 BETA baseline (B-00 … B-23) — реализуй без изменений
 
@@ -105,7 +105,7 @@ v6 BETA содержит 24 тикета (B-00..B-23). v7 добавляет 6 �
 | B-22 | **Memory-extractor LLM-worker (batch, haiku)** | 1 день | extract facts after N messages |
 | B-23 | **`/remember`, `/forget`, `/memory list/export/import` endpoints + UI** | 1 день | memory CRUD |
 
-### 3.2. Новые v7 BETA тикеты — детальные спецификации
+### 3.2. Новые v7 BETA тикеты — детальные спецификации (B-24..B-30)
 
 ---
 
@@ -498,7 +498,171 @@ v6 имеет 5 базовых + oriahs_search + oriahs_index + memory_search + 
 
 ---
 
-## 10. Архитектура BETA (delta к ALPHA)
+## 10. B-30 — Multi-language programming capabilities + per-language LSP bindings (Java, Rust, Go, JavaScript, Frontend) 🆕
+
+> **Component:** ARCHITECT7 §3 #20 (LSP-native extension), §6.3 (LSP-bus), §8 (API surface) | **Dependencies:** B-26 (LSP-bus + 6 LSP-servers), B-29 (CapabilityRegistry), B-06 (Skills framework, v6), B-04 (Hooks, v6), B-24 (DFC) | **Estimate:** 5 дней | **TRIZ:** #15 Dynamicity + #28 Mechanics substitution + #5 Merging + #25 Self-service | **ADR:** ADR-0002 (LSP-native code facts), ADR-v02-007 (Tool discovery)
+
+### Context
+
+B-26 уже даёт LSP-bus + 7 LSP-tools + 6 LSP-servers (pyright, typescript-language-server, rust-analyzer, gopls, jdtls, lua-language-server) — но это **инфраструктура** для code-facts. Что отсутствует: единая **capability-функция агента** для программирования на каждом языке — то есть декларативный контракт `agent_program(language, task)` + per-language skill-bundles (YAML) + per-language hook-sets (lint/format/build) + per-language LSP-config matrix. Без B-30 агент умеет «вызвать LSP-инструменты», но не имеет единой «функции программирования на Java/Rust/Go/JS» с встроенными best-practices, автоформатированием и рефакторинг-рецептами для каждого языка.
+
+B-30 закрывает этот пробел: вводит `LanguageCapabilityRegistry` (надстройка над `CapabilityRegistry` из B-29), capability-function `agent_program(language, task)`, 5 языковых skill-bundles (Java/Rust/Go/JS/Frontend), 9 per-language hook-sets (auto-format + auto-lint + frontend accessibility-hint) и per-language `LSPServerConfig` (init options + file-exts + build/test/lint/format commands).
+
+**Языки и LSP-binding'и (B-30 contract):**
+
+| Language | LSP server | File extensions | Build | Test | Lint | Format |
+|---|---|---|---|---|---|---|
+| Java | `jdtls` (Eclipse JDT) | `.java` | `mvn compile` (Maven) / `gradle compileJava` (Gradle) | `mvn test` / `gradle test` | `checkstyle` | `google-java-format` |
+| Rust | `rust-analyzer` | `.rs` | `cargo build` | `cargo test` | `cargo clippy` | `rustfmt` |
+| Go | `gopls` | `.go` | `go build ./...` | `go test ./...` | `go vet` | `gofmt -w` |
+| JavaScript | `typescript-language-server` (`allow_js: true`) | `.js`, `.mjs`, `.cjs` | `npm run build` | `npm test` | `eslint` | `prettier --write` |
+| Frontend (TSX/JSX + CSS/HTML) | `typescript-language-server` (`jsx: "react"`) + `vscode-css-languageserver` + `vscode-html-languageserver` (FUTURE+ в PROD) | `.tsx`, `.jsx`, `.css`, `.html` | `npm run build` | `npm test` | `eslint` (TSX/JSX) + `stylelint` (CSS) | `prettier --write` + axe-core hint (non-blocking) |
+
+### Goal
+
+1. Реализовать `app/core/capability/language_registry.py::LanguageCapabilityRegistry`:
+   - `LANGUAGES`: dict с поддерживаемыми языками и их LSP-binding'ами (таблица выше).
+   - `resolve(language: str) -> LanguageCapability` — returns `LanguageCapability` dataclass (`language`, `lsp_server`, `file_exts`, `build_cmd`, `test_cmd`, `lint_cmd`, `format_cmd`, `skill_bundle`, `hooks`).
+   - `detect(file_path: str | Path) -> str` — auto-detect language by extension (`.java` → `java`, `.rs` → `rust`, `.go` → `go`, `.js`/`.mjs`/`.cjs` → `javascript`, `.tsx`/`.jsx` → `frontend`, `.py` → `python`, `.ts` → `typescript`, `.lua` → `lua`).
+   - `is_supported(language: str) -> bool`.
+   - `list_supported() -> list[str]` — для `/capability/languages` endpoint.
+2. Реализовать capability-function `agent_program(language: str, task: str) -> str` в `app/core/capability/program.py`:
+   - Не LLM-tool, а **capability-router** (internal callable): detect-language → resolve-capability → activate skill-bundle (B-06) → activate hook-set (B-04) → ensure LSP-server lazy (B-26 `LSPBus.ensure_server`) → return "ready" message для system-prompt.
+   - В system-prompt появляется блок: «Active language: Java (jdtls LSP). Skills: java-maven-build, java-junit-test, java-refactor. Hooks: auto-format-google-java-format, auto-lint-checkstyle. Build: `mvn compile`. Test: `mvn test`.»
+   - Вызывается planner'ой (B-25) явно: `agent_program("java", "add logging to UserService.create")` — агент переходит в «Java-mode» с bound lsp_* tools, skill-bundle и hook-set.
+3. Реализовать 5 языковых skill-bundles в `app/skills/`:
+   - `java-maven.yaml`: tools = `[lsp_hover, lsp_definition, lsp_references, lsp_rename, lsp_diagnostics, lsp_code_action, lsp_symbol_search, bash, read, write, edit, grep]`; hooks = `[auto-format-google-java-format, auto-lint-checkstyle]`; build_cmd = `mvn -q compile`; test_cmd = `mvn -q test`; refactor_actions = `[extract_method, convert_to_record, generate_hashCode_equals, add_missing_interface_methods]`.
+   - `rust-cargo.yaml`: tools = `[lsp_*, bash (cargo build/test/clippy/fmt), read, write, edit, grep]`; hooks = `[auto-format-rustfmt, auto-lint-clippy]`; build_cmd = `cargo build`; test_cmd = `cargo test`; refactor_actions = `[extract_function, convert_to_async, generate_impl_block, fix_clippy_lint]`.
+   - `go-mod.yaml`: tools = `[lsp_*, bash (go build/test/vet/fmt), read, write, edit, grep]`; hooks = `[auto-format-gofmt, auto-lint-govet]`; build_cmd = `go build ./...`; test_cmd = `go test ./...`; refactor_actions = `[extract_function, convert_to_interface, implement_missing_methods, fix_struct_tag]`.
+   - `javascript-node.yaml`: tools = `[lsp_*, bash (npm/pnpm/yarn run), read, write, edit, grep]`; hooks = `[auto-format-prettier, auto-lint-eslint]`; build_cmd = `npm run build`; test_cmd = `npm test`; refactor_actions = `[extract_to_function, convert_to_arrow_function, add_missing_return_type, fix_eslint_rule]`.
+   - `frontend-tsx.yaml`: tools = `[lsp_*, bash (npm/pnpm run), read, write, edit, grep]`; hooks = `[auto-format-prettier, auto-lint-eslint, accessibility-hint-axe]`; build_cmd = `npm run build`; test_cmd = `npm test`; refactor_actions = `[extract_to_component, convert_to_arrow_function, add_missing_return_type, fix_eslint_rule, fix_a11y_violation]`.
+4. Реализовать per-language hook-sets в `app/hooks/` (post-write/edit, non-blocking):
+   - `auto_format_google_java_format.py` — `google-java-format -i <file>` на `.java`.
+   - `auto_format_rustfmt.py` — `rustfmt --edition 2021 <file>` на `.rs`.
+   - `auto_format_gofmt.py` — `gofmt -w <file>` на `.go`.
+   - `auto_format_prettier.py` — `prettier --write <file>` на `.js`/`.mjs`/`.cjs`/`.jsx`/`.tsx`/`.css`/`.html`.
+   - `auto_lint_checkstyle.py` — `checkstyle -c /google_checks.xml <file>` на `.java`.
+   - `auto_lint_clippy.py` — `cargo clippy --message-format=short` на `.rs` (cargo workspace).
+   - `auto_lint_govet.py` — `go vet ./...` на `.go` (package-level).
+   - `auto_lint_eslint.py` — `eslint --format=compact <file>` на `.js`/`.mjs`/`.cjs`/`.jsx`/`.tsx`.
+   - `accessibility_hint_axe.py` — `axe-core` headless hint на `.tsx`/`.jsx` (non-blocking, suggestion-only, через Playwright FUTURE+ в PROD; в BETA — static-rules hint).
+5. Реализовать per-language LSP-config в `app/core/lsp/config.py::LSPServerConfig`:
+   - `LANGUAGES`: dict с init options для каждого LSP-сервера.
+   - Java (jdtls): `settings.java.configuration.runtimes` (auto-detect `JAVA_HOME`), `settings.java.import.maven.enabled=true`, `settings.java.import.gradle.enabled=true`, `initializationOptions.workspaceFolders`, `-data <workspace_dir>`, `bundles=[]`.
+   - Rust (rust-analyzer): `initializationOptions.cargo.loadOutDirsFromCheck=true`, `initializationOptions.procMacro.enable=true`, `initializationOptions.checkOnSave.command="clippy"`, `initializationOptions.diagnostics.enable=true`.
+   - Go (gopls): `initializationOptions.build.staticcheck=true`, `initializationOptions.buildFlags=[]`, `initializationOptions.go.buildTags=""`, `initializationOptions.ui.diagnostic.staticcheck=true`.
+   - JavaScript/TypeScript (typescript-language-server): `initializationOptions.tsserver.preferences.includePackageJsonAutomaticImports=true`, `initializationOptions.tsserver.preferences.importModuleSpecifierPreference="relative"`, `initializationOptions.javascript.implicitProjectConfig.allowJs=true` (для чистого JS), `initializationOptions.typescript.preferences.jsxAttributeCompletionStyle="auto"`.
+   - Frontend TSX/JSX: `initializationOptions.typescript.jsx="react"`, `initializationOptions.typescript.suggest.enabled=true`, `initializationOptions.tsserver.preferences.jsxAttributeCompletionStyle="auto"`; CSS LSP (`vscode-css-languageserver`) и HTML LSP (`vscode-html-languageserver`) — FUTURE+ в PROD (BETA: TSX/JSX через tsserver, CSS/HTML — без LSP, plain `read+grep`).
+6. Реализовать per-language LSP-рефакторинг-рецепты (mapping code-action → execution):
+   - Java: `lsp_code_action` → `extract_method`, `convert_to_record`, `generate_hashCode_equals`, `add_missing_interface_methods`.
+   - Rust: `lsp_code_action` → `extract_function`, `convert_to_async`, `generate_impl_block`, `fix_clippy_lint`.
+   - Go: `lsp_code_action` → `extract_function`, `convert_to_interface`, `implement_missing_methods`, `fix_struct_tag`.
+   - JS/TS/Frontend: `lsp_code_action` → `extract_to_function`/`extract_to_component`, `convert_to_arrow_function`, `add_missing_return_type`, `fix_eslint_rule`, `fix_a11y_violation` (frontend only).
+7. Integration с B-29 (CapabilityRegistry): `LanguageCapabilityRegistry.resolve(language).tools` добавляет per-language LSP-tools в `CapabilityRegistry.filter(...)` через новый trigger `ctx.language == capability.language` (extensions `.java`/`.rs`/`.go`/`.js`/`.tsx`).
+8. Integration с B-06 (Skills, v6): skill-bundles (YAML) регистрируются через `SkillRegistry.register(...)`; активируются автоматически при `agent_program(language, task)`.
+9. Integration с B-04 (Hooks, v6): per-language hook-sets регистрируются через `HookRegistry.register(...)`; активируются автоматически при `agent_program(language, task)` (post-write/edit).
+10. Integration с B-26 (LSP-bus): `LanguageCapabilityRegistry.resolve(language).lsp_server` → `LSPBus.ensure_server(language, workspace)` — lazy init, auto-restart, workspace isolation (все контракты B-26).
+11. Integration с B-24 (DFC): `agent_program(language, task)` добавляет capability-stamp в DFC.hot (через `dfc.promote_to_hot("language_capability", capability_block)`), ≤500 токенов.
+12. Integration с v6 SystemPromptBuilder: новый блок `language_capability_block()` → `build_system_prompt(state, tools, dfc, language_capability)` (stable-then-dynamic ordering сохраняется).
+13. Metrics: `orya_language_program_total{language}`, `orya_language_program_duration_ms{language}`, `orya_language_skill_activated_total{language,skill}`, `orya_language_hook_executed_total{language,hook}`, `orya_lsp_call_total{method,language}` (extended из B-26 с per-language label).
+14. Spans: `language.program` (с `language.name`, `language.lsp_server`, `language.skill_count`, `language.hook_count`, `language.build_cmd`, `language.test_cmd`).
+
+### Constraints
+
+- Per-language LSP-server config: see `app/core/lsp/config.py::LSPServerConfig.LANGUAGES` (rule-based table, не LLM-based).
+- Java (jdtls): requires JDK 17+ на машине (auto-detected via `JAVA_HOME`); workspace dir = `.orya/jdtls/{workspace_hash}`; supports Maven (`pom.xml`) и Gradle (`build.gradle`, `build.gradle.kts`); `bundles=[]` (no VSCode extensions).
+- Rust (rust-analyzer): requires `rustup` + `cargo`; `rust-analyzer` binary via `rustup component add rust-analyzer`; workspace = `Cargo.toml` parent dir.
+- Go (gopls): requires Go 1.21+; `gopls` via `go install golang.org/x/tools/gopls@latest`; workspace = `go.mod` parent dir.
+- JavaScript/TypeScript (typescript-language-server): requires Node.js 20+; npm packages `typescript-language-server` + `typescript`; workspace = `package.json` parent dir.
+- Frontend (TSX/JSX): TS server handles `.tsx`/`.jsx` via `typescript.jsx="react"`; CSS LSP (`vscode-css-languageserver`) и HTML LSP (`vscode-html-languageserver`) — FUTURE+ в PROD (BETA: TSX/JSX через tsserver, CSS/HTML — без LSP, plain `read+grep`).
+- Per-language hook-set: post-write/edit hooks (auto-format, auto-lint) — non-blocking, errors → `ToolMessage` warning (не failure).
+- `accessibility-hint-axe` hook (frontend): non-blocking suggestion-only (no turn fail); в BETA — static-rules hint (rules table), full axe-core в PROD через Playwright.
+- Skill-bundle activation: max 1 skill-bundle active per turn (per language); смена языка в mid-turn → deactivate previous skill-bundle.
+- `agent_program(language, task)` capability-function: **не** LLM-tool, а capability-router (internal callable); exposed to LLM через system-prompt block + bound tools (не через `bind_tools`).
+- Per-language LSP-server lifecycle: lazy init (B-26), auto-restart (B-26, max 3 retries), workspace isolation (B-26).
+- Per-language build/test/lint/format commands: через settings (`ORYA_JAVA_BUILD_CMD`, `ORYA_RUST_BUILD_CMD`, `ORYA_GO_BUILD_CMD`, `ORYA_JS_BUILD_CMD`, `ORYA_FRONTEND_BUILD_CMD`, и аналоги для `*_TEST_CMD`, `*_LINT_CMD`, `*_FORMAT_CMD`) с defaults из таблицы выше.
+- Per-language refactor-recipe execution: через `lsp_code_action` + `lsp_rename` (B-26), confirmation needed для > 100 refs (B-26 constraint).
+- Per-language LSP-tools bound в CapabilityRegistry: trigger `ctx.language == capability.language` → visible lsp_* tools; default invisible (B-29 contract).
+- `agent_program` fail-closed: unknown `language` → `ValueError("Unsupported language: <lang>. Supported: <list>")`, no fallback.
+
+### Acceptance Criteria
+
+- ✅ `LanguageCapabilityRegistry.resolve("java")` возвращает `LanguageCapability(language="java", lsp_server="jdtls", file_exts=[".java"], build_cmd="mvn compile", test_cmd="mvn test", lint_cmd="checkstyle", format_cmd="google-java-format", skill_bundle="java-maven", hooks=["auto-format-google-java-format", "auto-lint-checkstyle"])`.
+- ✅ `LanguageCapabilityRegistry.resolve("rust")` → rust-analyzer, `cargo build`/`cargo test`, `rustfmt`, `cargo clippy`.
+- ✅ `LanguageCapabilityRegistry.resolve("go")` → gopls, `go build`/`go test`/`go vet`/`gofmt`.
+- ✅ `LanguageCapabilityRegistry.resolve("javascript")` → typescript-language-server (`allow_js: true`), `npm run build`/`npm test`, `prettier`, `eslint`.
+- ✅ `LanguageCapabilityRegistry.resolve("frontend")` → typescript-language-server (`jsx: "react"`), `npm run build`/`npm test`, `prettier`, `eslint`, axe-hint; CSS/HTML LSP — FUTURE+ (BETA: TSX/JSX через tsserver).
+- ✅ `LanguageCapabilityRegistry.detect("src/com/example/Main.java")` → `"java"`.
+- ✅ `LanguageCapabilityRegistry.detect("src/lib.rs")` → `"rust"`.
+- ✅ `LanguageCapabilityRegistry.detect("cmd/server/main.go")` → `"go"`.
+- ✅ `LanguageCapabilityRegistry.detect("src/App.tsx")` → `"frontend"`.
+- ✅ `LanguageCapabilityRegistry.detect("src/utils.js")` → `"javascript"`.
+- ✅ `agent_program("java", "add logging to UserService.create")` активирует java-maven skill + jdtls LSP (lazy) + auto-format-google-java-format + auto-lint-checkstyle hooks; system-prompt содержит «Active language: Java (jdtls LSP)»; LLM видит lsp_* tools bound к jdtls; `dfc.promote_to_hot("language_capability", ...)` вызван.
+- ✅ Java refactoring: `lsp_code_action` на `.java` возвращает `extract_method` / `generate_hashCode_equals` (если применимо к курсору).
+- ✅ Rust refactoring: `lsp_code_action` на `.rs` возвращает `extract_function` / `fix_clippy_lint`.
+- ✅ Go refactoring: `lsp_code_action` на `.go` возвращает `extract_function` / `implement_missing_methods`.
+- ✅ JS/TS refactoring: `lsp_code_action` на `.tsx` возвращает `extract_to_component` / `convert_to_arrow_function`.
+- ✅ Auto-format hooks: после `edit("src/com/example/Main.java", ...)` → `google-java-format -i Main.java` runs → file reformatted (verified через re-read).
+- ✅ Auto-format hooks (Rust): после `edit("src/lib.rs", ...)` → `rustfmt --edition 2021 lib.rs` runs → file reformatted.
+- ✅ Auto-format hooks (Go): после `edit("main.go", ...)` → `gofmt -w main.go` runs.
+- ✅ Auto-format hooks (Frontend): после `edit("src/Button.tsx", ...)` → `prettier --write Button.tsx` runs.
+- ✅ Auto-lint hooks: после `edit("src/lib.rs", ...)` → `cargo clippy` runs → warnings в `ToolMessage` (non-blocking).
+- ✅ Frontend axe-hint: после `edit("src/Button.tsx", ...)` → static-rules accessibility hint в `ToolMessage` (non-blocking, suggestion-only).
+- ✅ Integration с B-29 CapabilityRegistry: `CapabilityRegistry.filter(all_tools, ctx_java_file)` включает lsp_* tools (jdtls-bound) + java-maven skill-bundle tools (max 15 active tools).
+- ✅ Integration с B-26 LSPBus: `agent_program("rust", ...)` → `LSPBus.ensure_server("rust", workspace)` запускает rust-analyzer (lazy).
+- ✅ Integration с v6 Skills (B-06): skill-bundle `java-maven.yaml` registered в `SkillRegistry`, activated при `agent_program("java", ...)`.
+- ✅ Integration с v6 Hooks (B-04): hook `auto_format_google_java_format.py` registered в `HookRegistry`, executed post-write/edit на `.java`.
+- ✅ Integration с B-24 DFC: `agent_program` → `dfc.promote_to_hot("language_capability", capability_block)` (≤500 токенов).
+- ✅ Latency p95: `agent_program(language, task)` (warm LSP-server) < 100 ms; cold-start LSP-server (first time): < 10 s (jdtls), < 5 s (rust-analyzer), < 3 s (gopls, tsserver).
+- ✅ Fail-closed: `agent_program("klingon", ...)` → `ValueError("Unsupported language: klingon. Supported: ['python', 'typescript', 'javascript', 'rust', 'go', 'java', 'lua', 'frontend']")`.
+- ✅ Metrics exported: `orya_language_program_total{language="java"}` counter инкрементируется после `agent_program("java", ...)`.
+- ✅ Spans: `language.program` с правильными атрибутами (`language.name`, `language.lsp_server`, `language.skill_count`, `language.hook_count`).
+
+### Forbidden patterns
+
+- ❌ Hardcoded LSP-server configs — через `LSPServerConfig.LANGUAGES` table.
+- ❌ Hardcoded build/test/lint/format commands — через settings (`ORYA_<LANG>_*_CMD`).
+- ❌ Block agent-loop на `agent_program` (LSP-server lazy init в background, capability-router sync < 100 ms).
+- ❌ Per-language hook fails hard — non-blocking, errors → `ToolMessage` warning (не ToolException).
+- ❌ Mix languages в одном skill-bundle (один bundle = один language; frontend TSX/JSX + CSS/HTML — один bundle, т.к. это один «frontend» language domain).
+- ❌ Use Sonnet для `agent_program` (capability-router — не LLM-call; planner B-25 вызывает `agent_program` synchronously без LLM).
+- ❌ Frontend LSP без TSX/JSX support (tsserver `typescript.jsx="react"` обязателен для `.tsx`/`.jsx`).
+- ❌ Auto-format hooks modify files outside the language's extensions (e.g., `google-java-format` на `.py` — forbidden; hook должен no-op).
+- ❌ `agent_program` без `LanguageCapabilityRegistry.resolve` (fail-closed если `language` unsupported).
+- ❌ CSS/HTML LSP в BETA (FUTURE+ в PROD через `vscode-css-languageserver` / `vscode-html-languageserver`); в BETA CSS/HTML — plain `read+grep`.
+- ❌ Activate > 1 skill-bundle per turn (max 1 per language; смена языка → deactivate previous).
+- ❌ axe-hint hook в BETA — full axe-core через Playwright (только PROD); в BETA static-rules hint.
+- ❌ Bypass `CapabilityRegistry` (B-29) при активации per-language tools — все tool-filtering через `CapabilityRegistry.filter(...)`.
+
+### Suggested files
+
+- `app/core/capability/__init__.py`
+- `app/core/capability/language_registry.py` (`LanguageCapabilityRegistry`, `LanguageCapability` dataclass)
+- `app/core/capability/program.py` (`agent_program` capability-function)
+- `app/core/lsp/config.py` (`LSPServerConfig`, per-language init options)
+- `app/skills/java-maven.yaml`
+- `app/skills/rust-cargo.yaml`
+- `app/skills/go-mod.yaml`
+- `app/skills/javascript-node.yaml`
+- `app/skills/frontend-tsx.yaml`
+- `app/hooks/auto_format_google_java_format.py`
+- `app/hooks/auto_format_rustfmt.py`
+- `app/hooks/auto_format_gofmt.py`
+- `app/hooks/auto_format_prettier.py`
+- `app/hooks/auto_lint_checkstyle.py`
+- `app/hooks/auto_lint_clippy.py`
+- `app/hooks/auto_lint_govet.py`
+- `app/hooks/auto_lint_eslint.py`
+- `app/hooks/accessibility_hint_axe.py`
+- `app/api/capability.py` (`GET /capability/languages`, `POST /capability/program`)
+- `tests/test_language_capability_registry.py`
+- `tests/test_agent_program.py`
+- `tests/test_lsp_config.py`
+- `tests/fixtures/multi_lang_proj/` (small Java/Rust/Go/JS/TSX projects for testing)
+
+---
+
+## 11. Архитектура BETA (delta к ALPHA)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -558,7 +722,7 @@ v6 имеет 5 базовых + oriahs_search + oriahs_index + memory_search + 
 
 ---
 
-## 11. Целевые NFR (delta к ALPHA)
+## 12. Целевые NFR (delta к ALPHA)
 
 | Параметр | ALPHA | BETA v7 | v6 было |
 |---|---|---|---|
@@ -578,7 +742,7 @@ v6 имеет 5 базовых + oriahs_search + oriahs_index + memory_search + 
 
 ---
 
-## 12. Definition of Done (delta к ALPHA)
+## 13. Definition of Done (delta к ALPHA)
 
 - ✅ (все DoD из ALPHA)
 - ✅ MCP: `oriahs-mcp` работает как MCP-сервер, `oriahs_search`, `oriahs_index` доступны как tools.
@@ -607,11 +771,19 @@ v6 имеет 5 базовых + oriahs_search + oriahs_index + memory_search + 
 - ✅ **Default `ukb.lookup(query)` → parallel lookup all namespaces, dedupe.**
 - ✅ **RetrievalOrchestrator: 7 strategies, decision accuracy > 75% на synthetic dataset.**
 - ✅ **CapabilityRegistry: active tools 8-15 per turn (vs ~25+ без registry).**
-- ✅ **`orya_capability_filter_active_count` metric exported.**
+- ✅ **`orya_capability_filter_active_count` metric exported.
+- ✅ **B-30 Multi-language: `LanguageCapabilityRegistry.resolve("java"|"rust"|"go"|"javascript"|"frontend")` возвращает корректные `LanguageCapability` dataclass instances.**
+- ✅ **`agent_program(language, task)` capability-function: активирует per-language skill-bundle + hook-set + LSP-server (lazy), stamp в DFC.hot.**
+- ✅ **Per-language skill-bundles (YAML): java-maven, rust-cargo, go-mod, javascript-node, frontend-tsx — registered в SkillRegistry (v6 B-06).**
+- ✅ **Per-language hook-sets (9 hooks): auto-format (4: google-java-format/rustfmt/gofmt/prettier), auto-lint (4: checkstyle/clippy/govet/eslint), accessibility-hint-axe (frontend) — registered в HookRegistry (v6 B-04), non-blocking.**
+- ✅ **Per-language LSP-config в `app/core/lsp/config.py::LSPServerConfig` (init options для jdtls/rust-analyzer/gopls/typescript-language-server).**
+- ✅ **Per-language refactor-recipes: `lsp_code_action` mapping для extract_method/extract_function/extract_to_component/generate_hashCode_equals/implement_missing_methods/fix_clippy_lint/fix_eslint_rule/fix_a11y_violation.**
+- ✅ **Frontend TSX/JSX через tsserver (`typescript.jsx="react"`); CSS/HTML LSP — FUTURE+ (PROD).**
+- ✅ **Latency p95 `agent_program` (warm LSP): < 100 ms; cold-start LSP-server: < 10 s (jdtls), < 5 s (rust-analyzer), < 3 s (gopls/tsserver).****
 
 ---
 
-## 13. TRIZ-gates фазы (delta к ALPHA)
+## 14. TRIZ-gates фазы (delta к ALPHA)
 
 | Gate | Принцип | Что встроено |
 |---|---|---|
@@ -630,10 +802,11 @@ v6 имеет 5 базовых + oriahs_search + oriahs_index + memory_search + 
 | **RetrievalOrchestrator** 🆕 | ТРИЗ #24 Intermediary + #10 Preliminary | Policy-driven retrieval |
 | **CapabilityRegistry** 🆕 | ТРИЗ #15 Dynamicity + #25 Self-service | Dynamic tool-filter |
 | **BackgroundCompactor** 🆕 | ТРИЗ #19 Periodic + #15 Dynamicity | async context compaction |
+| **Multi-language programming capabilities (B-30)** 🆕 | ТРИЗ #15 Dynamicity + #28 Mechanics substitution + #5 Merging + #25 Self-service | Per-language capability-router `agent_program(lang, task)` + skill-bundles + hook-sets + LSP-config |
 
 ---
 
-## 14. Risks и mitigations (delta к ALPHA)
+## 15. Risks и mitigations (delta к ALPHA)
 
 - (все риски из ALPHA)
 - **LSP-server crash на большом проекте** 🆕: auto-restart + degraded mode (read/grep fallback); workspace isolation; health-check.
@@ -646,10 +819,18 @@ v6 имеет 5 базовых + oriahs_search + oriahs_index + memory_search + 
 - **SQLCipher key management** — env-var `ORYA_SQLCIPHER_KEY` + keyring fallback.
 - **Memory-extractor LLM cost** — batch haiku, max 1 extraction per 10 messages.
 - **BranchManager merge conflicts** — manual merge dialog в UI; tool-call replay.
+- **LSP-server cold-start latency (jdtls до 10 s на большом Maven-проекте)** 🆕: lazy init (B-26); warm-pool в PROD (P-26); capability-router `agent_program` не блокирует turn (sync < 100 ms, LSP init в background).
+- **Per-language hook fails (e.g., `checkstyle` missing)** 🆕: non-blocking, errors → `ToolMessage` warning (не ToolException); auto-detect binary via `shutil.which`; degraded mode (skip hook) если binary missing.
+- **Skill-bundle conflict (2 languages в одном turn)** 🆕: max 1 skill-bundle per turn; смена языка → `SkillRegistry.deactivate(previous)` + `activate(new)`.
+- **Frontend axe-hint false positives** 🆕: non-blocking suggestion-only (no turn fail); в PROD — full axe-core через Playwright с configurable rules.
+- **Java JDK version mismatch (jdtls требует JDK 17+, project на JDK 11)** 🆕: auto-detect `JAVA_HOME` + `java -version`; warning если major < 17; fallback на JDK 17 runtime + project target bytecode (jdtls supports cross-compilation).
+- **Rust `rust-analyzer` version drift vs `cargo`** 🆕: pin `rust-analyzer` через `rustup component add rust-analyzer` (matches toolchain); CI test на stable + nightly.
+- **Go `gopls` workspace folder mismatch (`go.mod` в subdir)** 🆕: auto-detect nearest `go.mod` parent; workspace = `go.mod` dir (не session cwd).
+- **Frontend CSS/HTML LSP missing в BETA** 🆕: BETA — plain `read+grep` для CSS/HTML; PROD — `vscode-css-languageserver` + `vscode-html-languageserver` (FUTURE+).
 
 ---
 
-## 15. Forbidden patterns (delta к ALPHA)
+## 16. Forbidden patterns (delta к ALPHA)
 
 - ❌ Использовать `read+grep` когда LSP available — LSP-first.
 - ❌ Replace v6 memory-layer (L0/L1/L2) — DFC = in-window discipline.
@@ -665,10 +846,21 @@ v6 имеет 5 базовых + oriahs_search + oriahs_index + memory_search + 
 - ❌ Hardcoded token limits в DFC — through settings.
 - ❌ Mix LSP-server state between workspaces — workspace isolation.
 - ❌ Always retrieve (default strategy = `none`).
+- ❌ Hardcoded LSP-server configs в `LanguageCapabilityRegistry` — через `LSPServerConfig.LANGUAGES` table.
+- ❌ Block agent-loop на `agent_program` (LSP-server lazy init в background).
+- ❌ Per-language hook fails hard — non-blocking, errors → `ToolMessage` warning.
+- ❌ Mix languages в одном skill-bundle (один bundle = один language; frontend TSX/JSX + CSS/HTML — один bundle).
+- ❌ Use Sonnet для `agent_program` (capability-router — не LLM-call).
+- ❌ Frontend LSP без TSX/JSX support (`typescript.jsx="react"` обязателен).
+- ❌ Auto-format hooks modify files outside the language's extensions.
+- ❌ `agent_program` без `LanguageCapabilityRegistry.resolve` (fail-closed для unsupported language).
+- ❌ CSS/HTML LSP в BETA (FUTURE+ в PROD).
+- ❌ Activate > 1 skill-bundle per turn.
+- ❌ Bypass `CapabilityRegistry` (B-29) при активации per-language tools.
 
 ---
 
-## 16. Структура файлов (delta к ALPHA)
+## 17. Структура файлов (delta к ALPHA)
 
 ```
 app/
@@ -689,7 +881,8 @@ app/
 │   │   ├── __init__.py
 │   │   ├── bus.py                  # LSPBus
 │   │   ├── client.py               # LSPClient (stdio JSON-RPC)
-│   │   └── watcher.py              # file watcher → didChange
+│   │   ├── watcher.py              # file watcher → didChange
+│   │   └── config.py               # 🆕 B-30: LSPServerConfig (per-language init options)
 │   ├── ukb/                        # 🆕 B-27
 │   │   ├── __init__.py
 │   │   └── router.py               # UKBRouter
@@ -708,6 +901,10 @@ app/
 │   │   ├── outbox.py               # MemoryOutbox + drain-worker
 │   │   ├── extractor.py            # memory-extractor (batch LLM)
 │   │   └── compactor.py            # L0→L1 compaction (from MVP M-27)
+│   ├── capability/                 # 🆕 B-30: per-language programming
+│   │   ├── __init__.py
+│   │   ├── language_registry.py    # LanguageCapabilityRegistry + LanguageCapability
+│   │   └── program.py              # agent_program(language, task)
 │   ├── hooks.py                    # B-04: hooks framework
 │   ├── skills.py                   # B-06: skills framework
 │   └── branch_manager.py           # B-09, B-10
@@ -717,10 +914,28 @@ app/
 │   ├── oriahs_search.py            # B-02
 │   ├── oriahs_index.py             # B-03
 │   └── ... (5 базовых from MVP)
+├── skills/                        # 🆕 B-30: per-language skill-bundles (YAML)
+│   ├── java-maven.yaml             # 🆕 B-30: Java + Maven + jdtls
+│   ├── rust-cargo.yaml             # 🆕 B-30: Rust + Cargo + rust-analyzer
+│   ├── go-mod.yaml                 # 🆕 B-30: Go + modules + gopls
+│   ├── javascript-node.yaml        # 🆕 B-30: JavaScript + Node + tsserver
+│   └── frontend-tsx.yaml           # 🆕 B-30: TSX/JSX + tsserver + prettier + axe
+├── hooks/                         # 🆕 B-30: per-language hook-sets
+│   ├── auto_format_google_java_format.py
+│   ├── auto_format_rustfmt.py
+│   ├── auto_format_gofmt.py
+│   ├── auto_format_prettier.py
+│   ├── auto_lint_checkstyle.py
+│   ├── auto_lint_clippy.py
+│   ├── auto_lint_govet.py
+│   ├── auto_lint_eslint.py
+│   └── accessibility_hint_axe.py
+│   └── ... (5 базовых from MVP)
 ├── mcp/
 │   ├── lsp_mcp.py                  # 🆕 B-26: MCP wrapper for LSP
 │   └── oriahs_mcp.py               # B-01
 ├── api/
+│   ├── capability.py               # 🆕 B-30: GET /capability/languages, POST /capability/program
 │   ├── remember.py                 # B-23: /remember, /forget
 │   ├── memory.py                   # B-23: /memory list/export/import (extended)
 │   ├── branches.py                 # B-09, B-10: fork/merge
@@ -747,6 +962,9 @@ tests/
 ├── test_ukb_router.py              # 🆕
 ├── test_retrieval_orchestrator.py  # 🆕
 ├── test_capability_registry.py     # 🆕
+├── test_language_capability_registry.py # 🆕 B-30
+├── test_agent_program.py           # 🆕 B-30
+├── test_lsp_config.py              # 🆕 B-30
 ├── test_sqlitestore.py             # v6 B-21
 ├── test_memory_extractor.py        # v6 B-22
 ├── test_remember_forget.py         # v6 B-23
@@ -756,12 +974,13 @@ tests/
 └── fixtures/
     ├── synthetic_dataset.yml       # 🆕 B-25: 10 tri-model scenarios
     ├── retrieval_scenarios.yml     # 🆕 B-28: 10 retrieval scenarios
-    └── test_proj/                  # 🆕 B-26: small Python/TS/Rust/Go/Java/Lua projects
+    ├── test_proj/                  # 🆕 B-26: small Python/TS/Rust/Go/Java/Lua projects
+    └── multi_lang_proj/            # 🆕 B-30: small Java/Rust/Go/JS/TSX projects for testing
 ```
 
 ---
 
-## 17. API surface (delta к ALPHA)
+## 18. API surface (delta к ALPHA)
 
 | Method | Endpoint | Phase | Назначение |
 |---|---|---|---|
@@ -779,10 +998,14 @@ tests/
 | `GET` | `/skills` | BETA (v6 B-06) | List available skills |
 | `POST` | `/skills/{name}/activate` | BETA (v6 B-06) | Activate skill for session |
 | `GET` | `/hooks/executed` | BETA (v6 B-04) | Audit log of executed hooks |
+| `GET` | `/capability/languages` | BETA (B-30) | List supported languages + LSP-binding'и (java/rust/go/javascript/frontend/python/typescript/lua) |
+| `POST` | `/capability/program` | BETA (B-30) | Activate `agent_program(language, task)` — activates skill-bundle + hook-set + LSP-server (lazy) |
+| `GET` | `/capability/active` | BETA (B-30) | Currently active language + skill-bundle + hooks для session |
+| `GET` | `/lsp/config/{language}` | BETA (B-30) | Per-language `LSPServerConfig` (init options, file-exts, build/test/lint/format cmds) |
 
 ---
 
-## 18. Observability: расширенные spans (delta к ALPHA)
+## 19. Observability: расширенные spans (delta к ALPHA)
 
 | Span type | Атрибуты | Фаза |
 |---|---|---|
@@ -796,13 +1019,14 @@ tests/
 | `ukb.lookup` | `ukb.capability`, `ukb.namespace`, `ukb.top_k`, `ukb.merge_dedup_count` | BETA 🆕 |
 | `retrieval.orchestrate` | `retrieval.strategy`, `retrieval.query`, `retrieval.rerank_applied` | BETA 🆕 |
 | `capability.filter` | `capability.active_count`, `capability.filtered_out_count` | BETA 🆕 |
+| `language.program` | `language.name`, `language.lsp_server`, `language.skill_count`, `language.hook_count`, `language.build_cmd`, `language.test_cmd` | BETA 🆕 (B-30) |
 | `memory.extract` | `memory.extract.facts_count`, `memory.extract.source_messages` | BETA (v6 B-22) |
 | `branch.fork` | `branch.source_turn`, `branch.new_session_id` | BETA (v6 B-09) |
 | `branch.merge` | `branch.source_session`, `branch.target_session`, `branch.conflicts_count` | BETA (v6 B-10) |
 
 ---
 
-## 19. Порядок реализации (рекомендуемый)
+## 20. Порядок реализации (рекомендуемый)
 
 ### Недели 1-2 (v6 BETA baseline)
 
@@ -823,10 +1047,11 @@ tests/
 5. **Неделя 5:** B-26 (LSP-bus + 6 servers + 7 tools — 7 дней, самый объёмный). Демонстрация: LSP-tools работают, sub-ms latency.
 6. **Неделя 6:** B-24 (DFC — 5 дней), B-25 (Tri-Model — 4 дня, параллельно с B-24). Демонстрация: tri-model pipeline, DFC держит окно ≤16K.
 7. **Неделя 7:** B-27 (UKB — 3 дня), B-28 (RetrievalOrchestrator — 4 дня), B-29 (CapabilityRegistry — 2 дня). Демонстрация: UKB unified retrieval, orchestrator 7 strategies, capability filter 8-15 tools.
+8. **Неделя 7 (продолжение):** B-30 (Multi-language programming capabilities — 5 дней, параллельно с B-28/B-29 во второй половине недели). Демонстрация: `agent_program("java"|"rust"|"go"|"javascript"|"frontend", task)` активирует per-language skill-bundle + hook-set + LSP-server; auto-format и auto-lint hooks работают; per-language refactor-recipes через `lsp_code_action`.
 
 ---
 
-## 20. Exit criteria (переход BETA → PROD)
+## 21. Exit criteria (переход BETA → PROD)
 
 - ✅ (все exit-criteria из ALPHA → BETA)
 - ✅ L1 SQLiteStore работает: insert, search, forget, supersede, export, import.
@@ -844,21 +1069,28 @@ tests/
 - ✅ **UKB: 5 namespaces routing (lsp, oriahs, memory, code, kb) — partial в BETA (lsp + memory).**
 - ✅ **RetrievalOrchestrator: 7 strategies, decision accuracy > 75%.**
 - ✅ **CapabilityRegistry: active tools per turn ≤ 15 (vs ~25+ без registry).**
+- ✅ **B-30 Multi-language: `agent_program("java"|"rust"|"go"|"javascript"|"frontend", task)` работает end-to-end (skill-bundle + hook-set + LSP-server).**
+- ✅ **Per-language skill-bundles (5 YAML): java-maven, rust-cargo, go-mod, javascript-node, frontend-tsx.**
+- ✅ **Per-language hook-sets (9 hooks): auto-format (4) + auto-lint (4) + accessibility-hint-axe (frontend).**
+- ✅ **Per-language LSP-config: jdtls / rust-analyzer / gopls / typescript-language-server с правильными init options.**
+- ✅ **Latency p95 `agent_program` (warm LSP): < 100 ms; cold-start: < 10 s (jdtls), < 5 s (rust-analyzer), < 3 s (gopls/tsserver).**
+- ✅ **Frontend TSX/JSX через tsserver (`typescript.jsx="react"`); CSS/HTML LSP — FUTURE+ (PROD).**
 
 ---
 
-## 21. UI-стратегия (delta к ALPHA)
+## 22. UI-стратегия (delta к ALPHA)
 
 | Фаза | UI |
 |---|---|
 | MVP | (без UI-изменений от v6) |
 | ALPHA | (без UI-изменений) |
 | **BETA** | **Next.js: DFC inspector (HEAT/HOT/WARM/COLD/ICE видимость), tier indicator (small/large/tournament), LSP-server status panel** |
+| **BETA (B-30)** | **+ Active language indicator (java/rust/go/javascript/frontend) + skill-bundle badge + hook-set status (auto-format/auto-lint) + LSP-config viewer (`/lsp/config/{language}`)** |
 | PROD | + Tournament progress, Batch dashboard, Predictive hints visualization |
 
 ---
 
-## 22. Безопасность (delta к ALPHA)
+## 23. Безопасность (delta к ALPHA)
 
 | Мера | Фаза | Описание |
 |---|---|---|
@@ -868,10 +1100,14 @@ tests/
 | Workspace isolation для LSP | BETA | LSP-servers не делят state между workspaces |
 | DFC state не persisted в PostgreSQL | BETA | in-memory only, восстанавливается из session-log + LSP + UKB |
 | CapabilityRegistry default deny | BETA | tools invisible по умолчанию, visible только через triggers |
+| Per-language hook sandbox (no FS write outside file-exts) | BETA (B-30) | auto-format/auto-lint hooks могут модифицировать только файлы своих расширений (`.java`/`.rs`/`.go`/`.js`/`.tsx`/`.jsx`/`.css`/`.html`); enforced через `validate_path()` + extension check (v6 `_validators.py`) |
+| Per-language build/test/lint cmd injection guard | BETA (B-30) | commands из settings (`ORYA_<LANG>_*_CMD`), не от LLM; `wrap_untrusted()` на output (v6 security seam) |
+| axe-hint non-blocking | BETA (B-30) | accessibility hint не может fail turn (suggestion-only) |
+| `agent_program` fail-closed для unsupported language | BETA (B-30) | unknown language → `ValueError`, no fallback |
 
 ---
 
-## 23. Ссылки на исходные документы
+## 24. Ссылки на исходные документы
 
 - `ARCHITECT7.md` §3 (улучшения #18, #19, #20, #22, #27, #28), §6.1-6.4 (модули dfc/tri_model/lsp/ukb), §6.7-6.8 (retrieval/capability), §6.11-6.12 (system-prompt + ukb.lookup tool), §7 (схема данных), §8 (API surface), §14.2 (LOC delta +5000), §16.1 (риски v7 BETA).
 - `ROADMAP7.md` §5 (Фаза BETA), §11.3 (BETA → PROD exit criteria), §13 (NFR-таргеты по фазам), §21 (UI-стратегия).
@@ -885,6 +1121,8 @@ tests/
 - `analytics/orya-architect2/adr/ADR-004-retrieval-orchestrator.md` — RetrievalOrchestrator.
 - `analytics/orya-architect2/adr/ADR-007-tool-discovery-via-mcp.md` — CapabilityRegistry.
 - `analytics/orya-architect2/adr/ADR-001-mcp-as-primary-tool-contract.md` — UKB.
+- `analytics/adr/ADR-0002-lsp-native-code-facts.md` §extension (B-30) — per-language programming capabilities + skill-bundles + hook-sets + LSP-config matrix (Java/Rust/Go/JS/Frontend).
+- `analytics/orya-architect2/adr/ADR-007-tool-discovery-via-mcp.md` §extension (B-30) — `LanguageCapabilityRegistry` надстройка над `CapabilityRegistry` (B-29).
 
 ---
 
