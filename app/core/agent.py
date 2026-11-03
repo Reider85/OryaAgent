@@ -67,6 +67,10 @@ from app.db.checkpoints import get_checkpointer
 
 logger = logging.getLogger(__name__)
 
+#: Process-wide MemorySaver for degraded mode (singleton per process)
+_memory_saver: Any = None
+_memory_saver_degraded_logged = False
+
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
@@ -306,14 +310,27 @@ async def resolve_checkpointer() -> tuple[Any, bool]:
     ``MemorySaver`` so clients still run. ``degraded=True`` means state
     will not survive a restart.
     """
+    global _memory_saver, _memory_saver_degraded_logged
     try:
         return await get_checkpointer(), False
     except Exception as exc:
-        logger.warning(
-            "Postgres checkpointer unavailable (%s); using in-memory MemorySaver",
-            exc,
-        )
-        return MemorySaver(), True
+        if not _memory_saver_degraded_logged:
+            logger.warning(
+                "Postgres checkpointer unavailable (%s); using in-memory MemorySaver "
+                "(state will not survive restarts)",
+                exc,
+            )
+            _memory_saver_degraded_logged = True
+        if _memory_saver is None:
+            _memory_saver = MemorySaver()
+        return _memory_saver, True
+
+
+def reset_memory_saver() -> None:
+    """Reset the degraded-mode MemorySaver singleton (for testing and restarts)."""
+    global _memory_saver, _memory_saver_degraded_logged
+    _memory_saver = None
+    _memory_saver_degraded_logged = False
 
 
 async def has_pending_interrupt(graph: Any, config: dict[str, Any]) -> bool:

@@ -6,7 +6,7 @@ install:
 
 # Development server
 dev:
-	uv run uvicorn app.main:app --reload --port 8000
+	uv run uvicorn app.main:app --reload --port 8000 --loop app.core.loop_factory:selector_loop_factory
 
 # Chainlit UI (M-15) — port 8001 avoids clashing with `make dev` on 8000
 ui:

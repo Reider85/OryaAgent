@@ -654,6 +654,32 @@ async def test_resolve_checkpointer_falls_back_to_memory(
     assert isinstance(checkpointer, MemorySaver)
 
 
+async def test_resolve_checkpointer_memory_saver_singleton(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that degraded MemorySaver is a singleton per process."""
+    async def boom():
+        raise RuntimeError("psycopg unavailable")
+
+    monkeypatch.setattr(agent, "get_checkpointer", boom)
+
+    # First call creates the MemorySaver
+    saver1, degraded1 = await agent.resolve_checkpointer()
+    assert degraded1 is True
+    assert isinstance(saver1, MemorySaver)
+
+    # Second call returns the same instance
+    saver2, degraded2 = await agent.resolve_checkpointer()
+    assert degraded2 is True
+    assert saver2 is saver1  # Same object
+
+    # Reset function clears the singleton
+    agent.reset_memory_saver()
+    saver3, degraded3 = await agent.resolve_checkpointer()
+    assert degraded3 is True
+    assert saver3 is not saver1  # New object after reset
+
+
 # --- state probes ----------------------------------------------------------------
 
 

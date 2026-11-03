@@ -96,6 +96,13 @@ from app.db.session_log import (
 
 logger = logging.getLogger(__name__)
 
+try:
+    # Try to import langgraph 1.x+ error
+    from langgraph.errors import GraphRecursionError
+except ImportError:
+    # Fallback for older langgraph versions
+    GraphRecursionError = None
+
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 #: Process-wide per-session permission policies (M-13 session allowlist
@@ -376,7 +383,18 @@ async def _sse_turn(
             yield _sse("done", _done_payload(data, status))
     except Exception as exc:
         logger.exception("SSE run failed (session_id=%s)", session_id)
-        yield _sse("error", {"detail": str(exc)})
+        
+        # Friendly message for recursion limit errors
+        if GraphRecursionError and isinstance(exc, GraphRecursionError):
+            detail = (
+                "The agent reached its step limit and stopped. "
+                "Try increasing the recursion limit with ORYA_RECURSION_LIMIT=100, "
+                "or break the task into smaller parts."
+            )
+        else:
+            detail = str(exc)
+            
+        yield _sse("error", {"detail": detail})
         yield _sse("done", _done_payload({}, "error"))
         return
 

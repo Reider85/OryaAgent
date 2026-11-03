@@ -41,7 +41,6 @@ def build_openai_compat(
         params["default_headers"] = dict(extra_headers)
     if pool_client is not None:
         params["http_async_client"] = pool_client
-    # Enable prompt caching for OpenAI (automatic for prefixes >1024 tokens)
-    params.setdefault("enable_prompt_caching", True)
+
     params.update(kwargs)
     return ChatOpenAI(**params)
