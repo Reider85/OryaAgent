@@ -133,7 +133,7 @@ FastAPI · LangGraph · Chainlit · PostgreSQL · Redis
 
 - **Chainlit UI** on `:8001`, a pure `httpx` client of the FastAPI API — never builds or drives a graph.
 - **`orya` CLI** — `import`, `db migrate|downgrade|current`, `auth token`, `config show|check`.
-- **One-command start** (`scripts/start.sh` / `start.ps1`) — `uv sync` → `docker compose up -d postgres redis` → `orya db migrate` → API on `:8000` → Chainlit on `:8001`, with health-gated waits and log files in `logs/`.
+- **One-command start** (`scripts/start.sh` / `start.ps1`) — `uv sync` → `docker compose up -d postgres redis` → `orya db migrate` → API on `:8000` → Chainlit on `:8001`, with health-gated waits and log files in `logs/`; auto-starts a down Docker daemon, falls back to a free DB/Redis host port when the default is taken, and `--stack`/`-Stack` brings up the full containerized stack (app + observability) instead.
 - **Ruff** lint+format gate (`make lint` / `make format`), `asyncio_mode=auto` pytest.
 
 ---
@@ -168,7 +168,13 @@ scripts/start.sh                                  # Linux / macOS / Git Bash
 powershell -ExecutionPolicy Bypass -File scripts\start.ps1   # native Windows
 ```
 
-The script runs the full bring-up (`uv sync` → `docker compose up -d postgres redis` → `orya db migrate` → API → Chainlit), waits on `/health` at each stage, and writes `logs/runtime.env`, `logs/api.log`, `logs/ui.log` (plus `.err.log` twins). Stop with `scripts/stop.sh` / `stop.ps1`. Flags: `--skip-sync`, `--reload`.
+The script runs the full bring-up (`uv sync` → `docker compose up -d postgres redis` → `orya db migrate` → API → Chainlit), waits on `/health` at each stage, and writes `logs/runtime.env`, `logs/api.log`, `logs/ui.log` (plus `.err.log` twins). Flags: `--skip-sync`, `--reload`, `--stack`, `--no-docker-start` (PowerShell: `-SkipSync`, `-Reload`, `-Stack`, `-NoDockerStart`).
+
+- **Auto-start Docker** — if the daemon is down, the script launches Docker Desktop (Windows/macOS) or `systemctl start docker` (Linux) and waits up to 120 s; disable with `--no-docker-start`.
+- **DB/Redis port fallback** — a busy `POSTGRES_PORT`/`REDIS_PORT` that is *not* explicitly configured picks a free port from `+3` and records it in `logs/runtime.env`; an explicitly configured busy port fails fast with the owning process named.
+- **`--stack`** (`-Stack`) — full containerized stack instead of local processes: `docker compose --profile app --profile observability up -d --build` (degrades to the `app` profile when `../OryaObservability` is absent), then health-waits API/UI strictly and Langfuse best-effort. `uv sync`, migrations and PID files are skipped — the `api` container runs `orya db migrate` itself.
+
+Stop with `scripts/stop.sh` / `stop.ps1`: kills local API/UI by PID tree, then `docker compose --profile app --profile observability down` (the **whole** stack — postgres/redis + api/chainlit + langfuse/observability, volume kept; parity with `make stack-down`), sweeps leftover port listeners, and removes stale `start.*.lock` files. `--skip-docker` (`-SkipDocker`) leaves containers alone.
 
 ### Make targets
 

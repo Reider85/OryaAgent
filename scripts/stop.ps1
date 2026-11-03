@@ -5,11 +5,14 @@
 .DESCRIPTION
   1. Останавливает API и UI по PID-файлам (logs/api.pid, logs/ui.pid) —
      taskkill /T убивает дерево процессов (uvicorn reloader, дочерние chainlit).
-  2. Подстраховка: слушатели портов 8000/8001 (только python/uv/chainlit).
-  3. docker compose down — контейнеры postgres/redis удаляются
-     (volume postgres_data сохраняется, данные не теряются).
+  2. docker compose --profile app --profile observability down — снимает
+     ВЕСЬ стек: postgres/redis + api/chainlit + langfuse и observability
+     (паритет с make stack-down; volume postgres_data сохраняется).
+  3. Подстраховка: слушатели портов 8000/8001 (python/uv/chainlit/node;
+     docker-слушатели репортятся, но не убиваются).
+  4. Удаление stale lock-файлов start.*.lock (pid мёртв) и PID-файлов.
 
-  PID-файлы удаляются. Каталог logs/ остаётся.
+  Каталог logs/ и logs/runtime.env (память портов) остаются.
 
 .PARAMETER SkipDocker
   Остановить только процессы API/UI, контейнеры не трогать.
@@ -100,7 +103,33 @@ foreach ($entry in $PidFiles) {
     Remove-Item -LiteralPath $entry.Path -Force -ErrorAction SilentlyContinue
 }
 
-# --- 2. Подстраховка: порты --------------------------------------------------
+# --- 2. Docker compose down (весь стек, включая профили) --------------------
+# Без --profile down снимает только postgres/redis и оставляет api/chainlit/
+# langfuse висеть на 8000/8001/3000 — поэтому профили указываем явно
+# (паритет с make stack-down).
+if ($SkipDocker) {
+    Write-Skip "docker compose пропущен (-SkipDocker)"
+}
+else {
+    Write-Step "docker compose --profile app --profile observability down"
+    & docker info *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Skip "Docker daemon недоступен — контейнеры не останавливались"
+    }
+    else {
+        & docker compose --profile app --profile observability down
+        if ($LASTEXITCODE -eq 0) {
+            Write-Done "весь стек остановлен (postgres/redis + app + observability, volume postgres_data сохранён)"
+        }
+        else {
+            Write-Host "!!  docker compose down завершился с кодом $LASTEXITCODE" -ForegroundColor Yellow
+        }
+    }
+}
+
+# --- 3. Подстраховка: порты --------------------------------------------------
+# Идёт ПОСЛЕ compose down: контейнерные слушатели уже освобождены,
+# здесь добиваются только локальные процессы.
 $ProcessNameFilter = 'python', 'pythonw', 'uv', 'uvicorn', 'chainlit', 'node'
 foreach ($Port in @($ApiPort, $UiPort)) {
     $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
@@ -108,6 +137,10 @@ foreach ($Port in @($ApiPort, $UiPort)) {
     foreach ($ownerPid in $listeners) {
         $proc = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
         if (-not $proc) { continue }
+        if ($proc.ProcessName -match 'docker|vmmem|wslrelay') {
+            Write-Skip "порт $Port всё ещё занят Docker ($($proc.ProcessName), pid=$ownerPid) — контейнер не остановился, см. docker compose ps"
+            continue
+        }
         if ($ProcessNameFilter -notcontains $proc.ProcessName) {
             Write-Skip "порт $Port занят посторонним процессом $($proc.ProcessName) (pid=$ownerPid) — не трогаю"
             continue
@@ -117,25 +150,20 @@ foreach ($Port in @($ApiPort, $UiPort)) {
     }
 }
 
-# --- 3. Docker compose down -------------------------------------------------
-if ($SkipDocker) {
-    Write-Skip "docker compose пропущен (-SkipDocker)"
-}
-else {
-    Write-Step "docker compose down"
-    & docker info *> $null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Skip "Docker daemon недоступен — контейнеры не останавливались"
+# --- 4. Stale lock-файлы start.* --------------------------------------------
+# Живой lock (start в процессе) не трогаем — только предупреждаем.
+foreach ($lockName in @('start.ps1.lock', 'start.sh.lock')) {
+    $lockPath = Join-Path $Logs $lockName
+    if (-not (Test-Path -LiteralPath $lockPath)) { continue }
+    $lockRaw = (Get-Content -LiteralPath $lockPath -Raw -ErrorAction SilentlyContinue)
+    $lockPid = 0
+    if ($lockRaw -and $lockRaw.Trim() -match '^\d+$') { $lockPid = [int]$lockRaw.Trim() }
+    if ($lockPid -gt 0 -and (Get-Process -Id $lockPid -ErrorAction SilentlyContinue)) {
+        Write-Host "!!  $lockName принадлежит живому процессу pid=$lockPid — не трогаю" -ForegroundColor Yellow
+        continue
     }
-    else {
-        & docker compose down
-        if ($LASTEXITCODE -eq 0) {
-            Write-Done "контейнеры postgres/redis остановлены (volume postgres_data сохранён)"
-        }
-        else {
-            Write-Host "!!  docker compose down завершился с кодом $LASTEXITCODE" -ForegroundColor Yellow
-        }
-    }
+    Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+    Write-Skip "удалён stale lock $lockName"
 }
 
 Write-Host ""

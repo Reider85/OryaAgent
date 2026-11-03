@@ -3,21 +3,30 @@
   Полный запуск OryaAgent (Windows / PowerShell 5.1+).
 
 .DESCRIPTION
-  Последовательность:
+  Последовательность (локальный режим, по умолчанию):
     1. Проверка, что порты API и UI свободны.
     2. uv sync (зависимости).
-    3. docker compose up -d postgres redis + ожидание pg_isready.
+    3. docker daemon; при выключенном — автозапуск Docker Desktop
+       (отключается флагом -NoDockerStart).
+    4. docker compose up -d postgres redis + ожидание pg_isready.
        Хост-порты БД/Redis берутся из POSTGRES_PORT/REDIS_PORT (env или .env),
        а при их отсутствии — из уже запущенного контейнера (без recreate).
-    4. uv run python -m app.db.migrate (DATABASE_URL выравнивается под порт БД).
-    5. Фоновый uvicorn  -> logs/api.log  + logs/api.pid
-    6. Ожидание GET /health на порту API.
-    7. Фоновый Chainlit -> logs/ui.log   + logs/ui.pid
+       Если порт занят посторонним процессом, а явно не задан — подбирается
+       свободный (с +3); явно заданный занятый порт = fail-fast с владельцем.
+    5. uv run python -m app.db.migrate (DATABASE_URL выравнивается под порт БД).
+    6. Фоновый uvicorn  -> logs/api.log  + logs/api.pid
+    7. Ожидание GET /health на порту API.
+    8. Фоновый Chainlit -> logs/ui.log   + logs/ui.pid
        (ORYA_API_URL указывает на запущенный API).
-    8. Ожидание ответа на порту UI.
+    9. Ожидание ответа на порту UI.
+
+  Режим -Stack: вместо шагов 2/5-9 полный контейнерный стек
+  `docker compose --profile app --profile observability up -d --build`
+  (без ../OryaObservability — деградация до профиля app) + ожидание
+  health-чеков API/UI строго, Langfuse — best-effort.
 
   Логи: logs/api.log, logs/api.err.log, logs/ui.log, logs/ui.err.log
-  Остановка: scripts/stop.ps1
+  Остановка: scripts/stop.ps1 (снимает и локальные процессы, и весь стек)
 
 .PARAMETER SkipSync
   Пропустить `uv sync` (зависимости уже установлены).
@@ -25,21 +34,33 @@
 .PARAMETER Reload
   Запустить uvicorn с --reload (авто-reload при изменении файлов).
 
+.PARAMETER Stack
+  Полный контейнерный стек (api + chainlit + observability) вместо
+  локальных процессов; uv sync/миграции/спавн не выполняются.
+
+.PARAMETER NoDockerStart
+  Не пытаться автозапускать Docker Desktop при выключенном демоне.
+
 .PARAMETER ApiPort
   Порт API (по умолчанию $env:API_PORT, иначе 8000).
+  В режиме -Stack экспортируется в compose (${API_PORT:-8000}).
 
 .PARAMETER UiPort
   Порт UI (по умолчанию $env:CHAINLIT_PORT, иначе 8001).
+  В режиме -Stack экспортируется в compose (${CHAINLIT_PORT:-8001}).
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\start.ps1
   powershell -ExecutionPolicy Bypass -File scripts\start.ps1 -SkipSync -Reload
   powershell -ExecutionPolicy Bypass -File scripts\start.ps1 -ApiPort 8002
+  powershell -ExecutionPolicy Bypass -File scripts\start.ps1 -Stack
 #>
 [CmdletBinding()]
 param(
     [switch]$SkipSync,
     [switch]$Reload,
+    [switch]$Stack,
+    [switch]$NoDockerStart,
     [int]$ApiPort = 0,
     [int]$UiPort = 0
 )
@@ -143,7 +164,37 @@ function Test-PortBusy([int]$Port) {
     return (Get-ListenerPids $Port).Count -gt 0
 }
 
-function Wait-Http([string]$Url, [int]$TimeoutS, [string]$What) {
+# Владелец порта: pid + имя процесса (для сообщений об ошибке).
+function Get-PortOwner([int]$Port) {
+    $pidValue = Get-ListenerPids $Port | Select-Object -First 1
+    if (-not $pidValue) { return $null }
+    $proc = Get-Process -Id $pidValue -ErrorAction SilentlyContinue
+    $name = if ($proc) { $proc.ProcessName } else { '?' }
+    return @{ Pid = [int]$pidValue; Name = $name }
+}
+
+# docker-слушатель (docker-proxy / com.docker.backend / wslrelay / vmmem).
+function Test-DockerOwner([int]$Port) {
+    $owner = Get-PortOwner $Port
+    if (-not $owner) { return $false }
+    return $owner.Name -match 'docker|vmmem|wslrelay'
+}
+
+# Свободный порт начиная с $From (диапазон 30 попыток) либо $null.
+function Get-FreePort([int]$From) {
+    for ($p = $From; $p -lt ($From + 30); $p++) {
+        if (-not (Test-PortBusy $p)) { return $p }
+    }
+    return $null
+}
+
+function Wait-Http {
+    param(
+        [string]$Url,
+        [int]$TimeoutS,
+        [string]$What,
+        [switch]$Optional  # best-effort: таймаут = предупреждение, не ошибка
+    )
     $deadline = (Get-Date).AddSeconds($TimeoutS)
     while ((Get-Date) -lt $deadline) {
         try {
@@ -153,6 +204,10 @@ function Wait-Http([string]$Url, [int]$TimeoutS, [string]$What) {
         catch {
             Start-Sleep -Milliseconds 1000
         }
+    }
+    if ($Optional) {
+        Write-Host "!!  Таймаут ${TimeoutS}s: $What ($Url) не ответил — продолжаю без него" -ForegroundColor Yellow
+        return $false
     }
     Write-Host "!!  Таймаут ${TimeoutS}s: $What ($Url) не ответил" -ForegroundColor Red
     return $false
@@ -185,53 +240,89 @@ Set-Content -LiteralPath $LockFile -Value $PID -Encoding ascii
 # --- 1. Повторный запуск? ----------------------------------------------------
 Write-Step "Проверка портов ($ApiPort API / $UiPort UI)"
 if (Test-PortBusy $ApiPort) {
+    if (Test-DockerOwner $ApiPort) {
+        Stop-Fail "Порт $ApiPort занят контейнером Docker — похоже, стек уже поднят. Остановите: scripts\stop.ps1"
+    }
     Stop-Fail "Порт $ApiPort уже занят — агент, похоже, уже запущен. Остановите: scripts\stop.ps1"
 }
 if (Test-PortBusy $UiPort) {
+    if (Test-DockerOwner $UiPort) {
+        Stop-Fail "Порт $UiPort занят контейнером Docker — похоже, стек уже поднят. Остановите: scripts\stop.ps1"
+    }
     Stop-Fail "Порт $UiPort уже занят — UI, похоже, уже запущен. Остановите: scripts\stop.ps1"
 }
 Write-Done "порты свободны"
 
 # --- 1. Зависимости ---------------------------------------------------------
-if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-    Stop-Fail "uv не найден в PATH — установите: https://docs.astral.sh/uv/"
-}
-if (-not $SkipSync) {
-    Write-Step "uv sync"
-    $syncCode = Invoke-Native { uv sync }
-    if ($syncCode -ne 0) { Stop-Fail "uv sync завершился с кодом $syncCode" }
-    Write-Done "зависимости установлены"
+# В режиме -Stack всё крутится в контейнерах: uv sync и .venv не нужны.
+if ($Stack) {
+    Write-Step "Режим -Stack: uv sync / локальный venv пропущены"
 }
 else {
-    Write-Step "uv sync пропущен (-SkipSync)"
+    if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+        Stop-Fail "uv не найден в PATH — установите: https://docs.astral.sh/uv/"
+    }
+    if (-not $SkipSync) {
+        Write-Step "uv sync"
+        $syncCode = Invoke-Native { uv sync }
+        if ($syncCode -ne 0) { Stop-Fail "uv sync завершился с кодом $syncCode" }
+        Write-Done "зависимости установлены"
+    }
+    else {
+        Write-Step "uv sync пропущен (-SkipSync)"
+    }
+
+    # Python из venv: модули запускаем напрямую (`python -m ...`), минуя
+    # console-script .exe-лаунчеры — при старте через Start-Process они не
+    # наследуют stdout/stderr, и логи в logs/*.log остаются пустыми.
+    $PyExe = Join-Path $Root '.venv\Scripts\python.exe'
+    if (-not (Test-Path -LiteralPath $PyExe)) {
+        Stop-Fail ".venv не найден: $PyExe — запустите без -SkipSync, чтобы выполнить uv sync"
+    }
 }
 
-# Python из venv: модули запускаем напрямую (`python -m ...`), минуя
-# console-script .exe-лаунчеры — при старте через Start-Process они не
-# наследуют stdout/stderr, и логи в logs/*.log остаются пустыми.
-$PyExe = Join-Path $Root '.venv\Scripts\python.exe'
-if (-not (Test-Path -LiteralPath $PyExe)) {
-    Stop-Fail ".venv не найден: $PyExe — запустите без -SkipSync, чтобы выполнить uv sync"
-}
-
-# --- 2. Docker: postgres + redis -------------------------------------------
+# --- 2. Docker daemon (+ автозапуск) ----------------------------------------
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     Stop-Fail "docker CLI не найден в PATH — установите Docker Desktop"
 }
 Write-Step "Docker daemon"
 $dockerCode = Invoke-Native { docker info --format "{{.ServerVersion}}" } -Quiet
 if ($dockerCode -ne 0) {
-    Stop-Fail "Docker недоступен — запустите Docker Desktop и повторите запуск"
+    if ($NoDockerStart) {
+        Stop-Fail "Docker недоступен (-NoDockerStart) — запустите Docker Desktop и повторите запуск"
+    }
+    $ddExe = Join-Path ${env:ProgramFiles} 'Docker\Docker\Docker Desktop.exe'
+    if (-not (Test-Path -LiteralPath $ddExe)) {
+        Stop-Fail "Docker недоступен, Docker Desktop не найден ($ddExe) — запустите его вручную"
+    }
+    Write-Step "Docker daemon не запущен — стартую Docker Desktop (до 120s, -NoDockerStart отключает)"
+    Start-Process -FilePath $ddExe -WindowStyle Hidden | Out-Null
+    $ddDeadline = (Get-Date).AddSeconds(120)
+    $dockerCode = 1
+    while ((Get-Date) -lt $ddDeadline) {
+        Start-Sleep -Seconds 3
+        $dockerCode = Invoke-Native { docker info --format "{{.ServerVersion}}" } -Quiet
+        if ($dockerCode -eq 0) { break }
+    }
+    if ($dockerCode -ne 0) {
+        Stop-Fail "Docker не поднялся за 120s — запустите Docker Desktop вручную и повторите"
+    }
+    Write-Done "Docker Desktop запущен"
 }
 Write-Done "Docker доступен"
 
 # Хост-порты: env > .env > уже запущенный контейнер > дефолт compose.
 # Произведённые значения экспортируются, чтобы `compose up` не пересоздавал
-# существующие контейнеры (и чтобы миграции/API попали в тот же порт.
+# существующие контейнеры (и чтобы миграции/API попали в тот же порт).
+# Фолбэк: занятый порт, не являющийся нашим контейнером, при непрямом
+# источнике (дефолт/runtime.env) → подбор свободного с +3; при явном
+# источнике (env/.env) → fail-fast с именем владельца.
+$PgExplicit = $false
+$RedisExplicit = $false
 $PgPort = $null
 $RedisPort = $null
-if ($env:POSTGRES_PORT) { $PgPort = [int]$env:POSTGRES_PORT }
-elseif ($envFilePg = Get-EnvFileValue 'POSTGRES_PORT') { $PgPort = [int]$envFilePg }
+if ($env:POSTGRES_PORT) { $PgPort = [int]$env:POSTGRES_PORT; $PgExplicit = $true }
+elseif ($envFilePg = Get-EnvFileValue 'POSTGRES_PORT') { $PgPort = [int]$envFilePg; $PgExplicit = $true }
 else {
     $detected = Get-DockerPort 'oryaagent-postgres-1' '5432/tcp'
     if (-not $detected) { $detected = Get-FileValue $RuntimeFile 'POSTGRES_PORT' }
@@ -241,8 +332,8 @@ else {
         Write-Step "POSTGRES_PORT не задан — использую порт из запуска/контейнера: $PgPort"
     }
 }
-if ($env:REDIS_PORT) { $RedisPort = [int]$env:REDIS_PORT }
-elseif ($envFileRedis = Get-EnvFileValue 'REDIS_PORT') { $RedisPort = [int]$envFileRedis }
+if ($env:REDIS_PORT) { $RedisPort = [int]$env:REDIS_PORT; $RedisExplicit = $true }
+elseif ($envFileRedis = Get-EnvFileValue 'REDIS_PORT') { $RedisPort = [int]$envFileRedis; $RedisExplicit = $true }
 else {
     $detected = Get-DockerPort 'oryaagent-redis-1' '6379/tcp'
     if (-not $detected) { $detected = Get-FileValue $RuntimeFile 'REDIS_PORT' }
@@ -257,15 +348,106 @@ if ($PgPort) { $PgResolved = $PgPort }
 $RedisResolved = 6379
 if ($RedisPort) { $RedisResolved = $RedisPort }
 
-Write-Step "docker compose up -d postgres redis"
-$composeCode = Invoke-Native { docker compose up -d postgres redis }
-if ($composeCode -ne 0) { Stop-Fail "docker compose up завершился с кодом $composeCode" }
+# Занятость: если порт публикует наш контейнер — это он и есть (compose не
+# пересоздаёт); иначе чужой слушатель. Явный порт чужим процессом = ошибка.
+function Resolve-HostPort {
+    param([int]$Port, [string]$Key, [string]$Container, [string]$Spec, [bool]$Explicit)
+    $ours = Get-DockerPort $Container $Spec
+    if ($ours -and $ours -eq $Port) { return $Port }  # наш контейнер уже на этом порту
+    if (-not (Test-PortBusy $Port)) { return $Port }
+    $owner = Get-PortOwner $Port
+    $ownerDesc = "?"
+    if ($owner) { $ownerDesc = "$($owner.Name) (pid $($owner.Pid))" }
+    if ($Explicit) {
+        Stop-Fail "$Key=$Port задан явно, но занят посторонним процессом $ownerDesc — освободите порт или задайте другой"
+    }
+    $free = Get-FreePort ($Port + 3)
+    if (-not $free) {
+        Stop-Fail "$Key=$Port занят ($ownerDesc), свободных в диапазоне +30 не найдено"
+    }
+    Write-Step "$Key=$Port занят ($ownerDesc) — подбираю свободный: $free"
+    Set-Item -Path "env:$Key" -Value "$free"
+    return $free
+}
+$PgResolved = Resolve-HostPort -Port $PgResolved -Key 'POSTGRES_PORT' `
+    -Container 'oryaagent-postgres-1' -Spec '5432/tcp' -Explicit:$PgExplicit
+$RedisResolved = Resolve-HostPort -Port $RedisResolved -Key 'REDIS_PORT' `
+    -Container 'oryaagent-redis-1' -Spec '6379/tcp' -Explicit:$RedisExplicit
 
-# Запоминаем выбранные порты: после `docker compose down` контейнеров нет,
-# но следующий запуск должен поднять их на тех же хост-портах.
+# Запоминаем выбранные порты ДО compose up: после `docker compose down`
+# контейнеров нет, но следующий запуск должен поднять их на тех же
+# хост-портах; при падении up выбор тоже сохраняется.
 New-Item -ItemType Directory -Force -Path $Logs | Out-Null
 Set-Content -LiteralPath $RuntimeFile `
     -Value "POSTGRES_PORT=$PgResolved`nREDIS_PORT=$RedisResolved" -Encoding ascii
+
+if ($Stack) {
+    # --- Режим -Stack: полный контейнерный стек ----------------------------
+    if ($SkipSync) { Write-Step "-SkipSync не нужен в режиме -Stack (uv sync и так пропущен)" }
+    if ($Reload) { Write-Host "!!  -Reload не действует в режиме -Stack (контейнеры)" -ForegroundColor Yellow }
+    $Profiles = @('--profile', 'app')
+    $sibling = Join-Path (Split-Path -Parent $Root) 'OryaObservability'
+    if (Test-Path -LiteralPath $sibling) {
+        $Profiles += @('--profile', 'observability')
+    }
+    else {
+        Write-Host "!!  $sibling не найден — профиль observability пропущен (только app)" -ForegroundColor Yellow
+    }
+    # Порты API/UI тоже уходят в compose (${API_PORT:-8000} / ${CHAINLIT_PORT:-8001}).
+    $env:API_PORT = "$ApiPort"
+    $env:CHAINLIT_PORT = "$UiPort"
+
+    Write-Step ("docker compose " + ($Profiles -join ' ') + " up -d --build")
+    $composeCode = Invoke-Native { docker compose @Profiles up -d --build }
+    if ($composeCode -ne 0) {
+        Invoke-Native { docker compose logs --tail 60 } | Out-Null
+        Stop-Fail "docker compose up завершился с кодом $composeCode (логи выше)"
+    }
+
+    Write-Step "Ожидание Postgres (pg_isready)"
+    $pgDeadline = (Get-Date).AddSeconds(60)
+    $pgReady = $false
+    while ((Get-Date) -lt $pgDeadline) {
+        $pgCode = Invoke-Native { docker compose exec -T postgres pg_isready -U orya -d orya_sessions } -Quiet
+        if ($pgCode -eq 0) { $pgReady = $true; break }
+        Start-Sleep -Seconds 2
+    }
+    if (-not $pgReady) { Stop-Fail "Postgres не стал готов за 60s (docker compose logs postgres)" }
+    Write-Done "Postgres готов"
+
+    if (-not (Wait-Http "http://127.0.0.1:$ApiPort/health" 180 "API")) {
+        Invoke-Native { docker compose logs --tail 60 api } | Out-Null
+        Stop-Fail "API не ответил /health — подробности в логах выше"
+    }
+    Write-Done "API здоров: http://127.0.0.1:$ApiPort/health"
+    if (-not (Wait-Http "http://127.0.0.1:$UiPort/" 120 "Chainlit")) {
+        Invoke-Native { docker compose logs --tail 60 chainlit } | Out-Null
+        Stop-Fail "UI не ответил — подробности в логах выше"
+    }
+    Write-Done "UI доступен: http://127.0.0.1:$UiPort/"
+    if ($Profiles -contains 'observability') {
+        # Langfuse v3 поднимается долго (миграции ClickHouse/Postgres) — best-effort.
+        $null = Wait-Http "http://127.0.0.1:3000/api/public/health" 120 "Langfuse" -Optional
+    }
+
+    Remove-Item -LiteralPath $LockFile -Force -ErrorAction SilentlyContinue
+    Write-Host ""
+    Write-Host "OryaAgent запущен (режим -Stack, контейнеры)" -ForegroundColor Green
+    Write-Host "  API        : http://127.0.0.1:$ApiPort/health"
+    Write-Host "  UI         : http://127.0.0.1:$UiPort/"
+    if ($Profiles -contains 'observability') {
+        Write-Host "  Langfuse   : http://127.0.0.1:3000/"
+        Write-Host "  Prometheus : http://127.0.0.1:9090/"
+        Write-Host "  Sampler    : http://127.0.0.1:4321/sampler/status"
+    }
+    Write-Host "  Логи       : docker compose logs -f"
+    Write-Host "  Стоп       : scripts\stop.ps1"
+    exit 0
+}
+
+Write-Step "docker compose up -d postgres redis"
+$composeCode = Invoke-Native { docker compose up -d postgres redis }
+if ($composeCode -ne 0) { Stop-Fail "docker compose up завершился с кодом $composeCode" }
 
 Write-Step "Ожидание готовности Postgres (pg_isready)"
 $pgDeadline = (Get-Date).AddSeconds(60)
@@ -279,10 +461,18 @@ if (-not $pgReady) { Stop-Fail "Postgres не стал готов за 60s (dock
 Write-Done "Postgres готов"
 
 # --- 3. URL'ы БД/Redis (env > .env > дефолт под фактический порт) -----------
-if (-not $env:DATABASE_URL -and -not (Get-EnvFileValue 'DATABASE_URL')) {
+$envDbUrl = $env:DATABASE_URL
+$fileDbUrl = Get-EnvFileValue 'DATABASE_URL'
+if (-not $envDbUrl -and -not $fileDbUrl) {
     $env:DATABASE_URL = "postgresql://orya:orya_password@localhost:$PgResolved/orya_sessions"
     if ($PgResolved -ne 5432) {
         Write-Step "DATABASE_URL -> localhost:$PgResolved (порт контейнера)"
+    }
+}
+elseif ($PgResolved -ne 5432) {
+    $configured = if ($envDbUrl) { $envDbUrl } else { $fileDbUrl }
+    if ($configured -match ':(\d+)/' -and [int]$Matches[1] -ne $PgResolved) {
+        Write-Host "!!  DATABASE_URL указывает на порт $($Matches[1]), а контейнер БД на $PgResolved — миграции/API могут не достучаться" -ForegroundColor Yellow
     }
 }
 if (-not $env:REDIS_URL -and -not (Get-EnvFileValue 'REDIS_URL')) {

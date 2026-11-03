@@ -5,11 +5,14 @@
 #   1. Останавливает API и UI по PID-файлам (logs/api.pid, logs/ui.pid):
 #      на Windows — taskkill /T (дерево процессов, покрывает uvicorn reloader
 #      и дочерние процессы chainlit), на POSIX — TERM с дожигом KILL.
-#   2. Подстраховка: слушатели портов 8000/8001 — только python/uv/chainlit/node.
-#   3. docker compose down — контейнеры postgres/redis удаляются
-#      (volume postgres_data сохраняется, данные не теряются).
+#   2. docker compose --profile app --profile observability down — снимает
+#      ВЕСЬ стек: postgres/redis + api/chainlit + langfuse и observability
+#      (паритет с make stack-down; volume postgres_data сохраняется).
+#   3. Подстраховка: слушатели портов 8000/8001 — python/uv/chainlit/node;
+#      docker-слушатели репортятся, но не убиваются.
+#   4. Удаление stale lock-файлов start.*.lock (pid мёртв) и PID-файлов.
 #
-# PID-файлы удаляются, каталог logs/ остаётся.
+# Каталог logs/ и logs/runtime.env (память портов) остаются.
 #
 # Использование:
 #   scripts/stop.sh [--skip-docker]
@@ -135,7 +138,28 @@ for entry in "${PID_FILES[@]}"; do
     fi
 done
 
-# --- 2. Подстраховка: порты --------------------------------------------------
+# --- 2. Docker compose down (весь стек, включая профили) ---------------------
+# Без --profile down снимает только postgres/redis и оставляет api/chainlit/
+# langfuse висеть на 8000/8001/3000 — поэтому профили указываем явно
+# (паритет с make stack-down).
+if [ "$SKIP_DOCKER" = 1 ]; then
+    skip_msg "docker compose пропущен (--skip-docker)"
+elif ! command -v docker >/dev/null 2>&1; then
+    skip_msg "docker не найден в PATH — контейнеры не останавливались"
+elif ! docker info >/dev/null 2>&1; then
+    skip_msg "Docker daemon недоступен — контейнеры не останавливались"
+else
+    step "docker compose --profile app --profile observability down"
+    if docker compose --profile app --profile observability down; then
+        done_msg "весь стек остановлен (postgres/redis + app + observability, volume postgres_data сохранён)"
+    else
+        echo "!!  docker compose down завершился с кодом $?" >&2
+    fi
+fi
+
+# --- 3. Подстраховка: порты ---------------------------------------------------
+# Идёт ПОСЛЕ compose down: контейнерные слушатели уже освобождены,
+# здесь добиваются только локальные процессы.
 for port in "$API_PORT" "$UI_PORT"; do
     for owner_pid in $(port_pids "$port"); do
         case "$owner_pid" in
@@ -143,6 +167,10 @@ for port in "$API_PORT" "$UI_PORT"; do
         esac
         name="$(proc_name "$owner_pid")"
         case "$name" in
+            *docker* | vmmem | wslrelay)
+                skip_msg "порт $port всё ещё занят Docker (${name:-?}, pid=$owner_pid) — контейнер не остановился, см. docker compose ps"
+                continue
+                ;;
             python* | uv | uvicorn | chainlit | node) ;;
             *)
                 skip_msg "порт $port занят посторонним процессом ${name:-?} (pid=$owner_pid) — не трогаю"
@@ -155,21 +183,18 @@ for port in "$API_PORT" "$UI_PORT"; do
     done
 done
 
-# --- 3. Docker compose down --------------------------------------------------
-if [ "$SKIP_DOCKER" = 1 ]; then
-    skip_msg "docker compose пропущен (--skip-docker)"
-elif ! command -v docker >/dev/null 2>&1; then
-    skip_msg "docker не найден в PATH — контейнеры не останавливались"
-elif ! docker info >/dev/null 2>&1; then
-    skip_msg "Docker daemon недоступен — контейнеры не останавливались"
-else
-    step "docker compose down"
-    if docker compose down; then
-        done_msg "контейнеры postgres/redis остановлены (volume postgres_data сохранён)"
-    else
-        echo "!!  docker compose down завершился с кодом $?" >&2
+# --- 4. Stale lock-файлы start.* ---------------------------------------------
+# Живой lock (start в процессе) не трогаем — только предупреждаем.
+for lock_file in "$LOGS/start.sh.lock" "$LOGS/start.ps1.lock"; do
+    [ -f "$lock_file" ] || continue
+    lock_pid="$(tr -cd '0-9' <"$lock_file" 2>/dev/null || true)"
+    if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
+        echo "!!  $(basename "$lock_file") принадлежит живому процессу pid=$lock_pid — не трогаю" >&2
+        continue
     fi
-fi
+    rm -f "$lock_file"
+    skip_msg "удалён stale lock $(basename "$lock_file")"
+done
 
 echo
 echo "OryaAgent остановлен"
