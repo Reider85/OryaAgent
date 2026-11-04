@@ -1133,19 +1133,19 @@ async def on_message(message: cl.Message) -> None:
                     pending.tool,
                     thread_id,
                 )
-done, pending, error = await _stream(
-                client,
-                f"/sessions/{thread_id}/resume",
-                {**overrides, "decision": _DECISIONS.get(answer, "deny")},
-                reply,
-                steps,
-            )
-            # Show degraded warning if applicable
-            if done.get("degraded"):
-                await cl.Message(
-                    content="⚠️ Chat session is running in degraded mode (memory not persisted between restarts). "
-                    "Some features may not work as expected."
-                ).send()
+                done, pending, error = await _stream(
+                    client,
+                    f"/sessions/{thread_id}/resume",
+                    {**overrides, "decision": _DECISIONS.get(answer, "deny")},
+                    reply,
+                    steps,
+                )
+                # Show degraded warning if applicable
+                if done.get("degraded"):
+                    await cl.Message(
+                        content="⚠️ Chat session is running in degraded mode (memory not persisted between restarts). "
+                        "Some features may not work as expected."
+                    ).send()
     except ApiError as exc:
         logger.exception("UI run failed (thread_id=%s)", thread_id)
         await _close_steps(steps)
