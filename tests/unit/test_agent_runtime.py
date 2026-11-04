@@ -658,6 +658,7 @@ async def test_resolve_checkpointer_memory_saver_singleton(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Test that degraded MemorySaver is a singleton per process."""
+
     async def boom():
         raise RuntimeError("psycopg unavailable")
 

@@ -383,7 +383,7 @@ async def _sse_turn(
             yield _sse("done", _done_payload(data, status))
     except Exception as exc:
         logger.exception("SSE run failed (session_id=%s)", session_id)
-        
+
         # Friendly message for recursion limit errors
         if GraphRecursionError and isinstance(exc, GraphRecursionError):
             detail = (
@@ -393,7 +393,7 @@ async def _sse_turn(
             )
         else:
             detail = str(exc)
-            
+
         yield _sse("error", {"detail": detail})
         yield _sse("done", _done_payload({}, "error"))
         return
