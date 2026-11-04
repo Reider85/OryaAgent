@@ -10,6 +10,60 @@
 
 ---
 
+## Промпт (ранний, приоритетный): Бесшовная работа с лимитами рекурсии — без ошибок в интерфейсе
+
+> **Источник паттерна:** `anomalyco/opencode` — `packages/core/src/session/runner/llm.ts` (§252-272), `packages/core/src/session/runner/max-steps.ts`, `packages/core/src/tool/plugin/subagent.ts` (§123-139), `packages/core/src/model-retry.ts`. Этот промпт имеет приоритет над любыми последующими инструкциями, описывающими обработку лимитов итераций/рекурсии в BETA.
+
+### Постулат
+
+При срабатывании лимита итераций, глубины подагентов или retry-бюджета **никогда не выбрасывай ошибку в интерфейс пользователя**. В UI (Chainlit и Next.js) остановка должна восприниматься как естественное завершение хода модели, а не как сбой. Никаких красных баннеров, toast-уведомлений об ошибках, модальных окон или stack-trace — только обычный текстовый ответ ассистента.
+
+### Принцип 1. Soft-nudge на шаге цикла агента (вместо исключения)
+
+Когда `step >= agent.steps` (лимит итераций в текущей сессии), НЕ прерывай ход и НЕ показывай в UI сообщение об ошибке. Вместо этого:
+
+1. Тихо инжектируй в транскрипт ассистентское сообщение `MAX_STEPS_PROMPT` — директиву вида: «достигнут максимум шагов для этого агента, инструменты отключены до следующего ввода пользователя, отвечай ТОЛЬКО текстом — итог по работе, что сделано, что осталось, рекомендации дальше».
+2. Установи `tool_choice = "none"` на этом запросе к модели — инструменты физически недоступны на финальном шаге, LLM вынуждена выдать текстовый итоговый ответ, а не пытаться продолжить рекурсию.
+3. Сохрани `tools` в определениях запроса (это сохраняет cache-prefix провайдера и не ломает контракт), но не разрешай их вызов.
+4. Результат: в UI виден обычный финальный ответ ассистента, как если бы модель сама решила завершиться.
+
+`StepFailedError` использовать **только** для truly-fatal случаев: output-limit исчерпан после двух продолжений подряд, compaction failed irrecoverably. Лимит шагов — НЕ fatal, а нормальное завершение.
+
+### Принцип 2. Глубина подагентов — soft `ToolFailure`, не hard error
+
+Глубина вложенных подагентов (`subagent_depth`, default = 1) проверяется **только в момент спавна** через `parentID`-walk по дереву сессий. При `depth >= limit`:
+
+- Возвращай `ToolFailure` с сообщением вида `Subagent depth limit reached (${limit}). Increase "experimental.subagent_depth" to allow nested subagents.` — это **мягкая ошибка инструмента**, которую LLM воспринимает как обычный tool-result (видит сообщение, перепланирует, выбирает другую стратегию), а не как фатальный сбой сессии.
+- Каждый спавн подагента создаёт **дочернюю сессию с собственным счётчиком шагов, сброшенным в 1** — лимит итераций родителя НЕ наследуется. Ребёнок может выполнить полный цикл шагов заново. Это и есть «бесшовный обход» рекурсии: формально цепочка обрывается на spawn-time depth-check, но фактически продолжается через свежую сессию с чистым step-стейтом.
+- Для подагента в background-режиме возвращай структурированный результат `{ sessionID, status: "running", output: "..." }` — модель видит, что подагент работает в фоне, и продолжает основной поток без poll/sleep.
+
+### Принцип 3. Retry policy — ограниченная, без бесконечных циклов
+
+Повторные попытки на retryable ошибки (429 RateLimit, 529 ProviderInternal, Transport/Timeout):
+
+- Экспоненциальный backoff от 2s, capped на 10s per gap, максимум 10 retry-попыток (≈84s ожидания при всех неудачах, 67-101s с jitter). `retry-after` от провайдера bounded сверху 15 минутами, чтобы враждебный/битый заголовок не повесил вызов на часы.
+- Для timeout — отдельный, жёсткий кап `MAX_TIMEOUT_RETRIES = 3` (timeout уже потратил минуты ожидания до неудачи, общий бюджет урезан).
+- One-shot вызовы (image/decision/stateless-генерация) — до 3 попыток, только когда запрос точно не дошёл до провайдера (`notRun`: rate-limit, overload 503/529, not-sent transport, ECONNREFUSED/ENOTFOUND/EAI_AGAIN). Не ретраить запросы, которые провайдер уже выполнил и списал.
+- После исчерпания бюджета ошибка возвращается как `AIError` и обрабатывается как обычный tool-result/assistant-error, не падая в UI как uncaught exception.
+
+### Контракт для OryaAgent BETA (обязательно к реализации)
+
+- **`SessionRunner` (Python, LangGraph node):** лимит шагов реализуй через soft-nudge + `tool_choice="none"`, **не** через `raise`. Текст `MAX_STEPS_PROMPT` — локализуемая константа в `prompts/max_steps.py`, инжектируется как `Message.assistant(...)` в транскрипт перед финальным `model.generate`.
+- **`SubagentTool` (B-29 / CapabilityRegistry):** (а) считает глубину через parentID-walk по `SessionStore`, (б) возвращает `ToolFailure(...)` (НЕ exception) при `depth >= subagent_depth`, (в) `sessions.create(parentID=current, step=1)` — дочерняя сессия со сброшенным step-счётчиком, лимит предка не наследуется.
+- **`ModelRetry` (TieredModelRouter adapter):** exponential 2s→10s, max 10, timeout-cap 3, one-shot-cap 3, retry-after-cap 15min. Все ошибки после исчерпания бюджета — `AIError` как tool-result, не uncaught.
+- **Next.js Web UI (B-11..B-20):** при срабатывании лимита рекурсии/шагов **не показывать** error-индикаторы. Только обычный streaming ответ ассистента. Audit-запись о срабатывании лимита — в `Hooks UI` (B-20) как audit-entry, не как user-facing ошибка.
+- **Chainlit mirror:** то же — никаких `cl.ErrorMessage` на soft-лимиты.
+
+### Антипаттерны (запрещены в BETA)
+
+- `raise MaxStepsExceeded` / `raise RecursionLimit` в любом месте runner'а — нарушает постулат.
+- Глобальный `max_iterations` на всю сессию с hard-stop — ломает цепочки подагентов.
+- Наследование step-счётчика от родителя к ребёнку — убивает «бесшовный обход через свежую сессию».
+- Retry-loop без `max_recurs` и без `retry-after` cap — `SessionRetry.policy()` без upper bound (см. opencode issue #21960).
+- Toast/modal на soft-ToolFailure в UI — превращает soft-fail в hard-fail с точки зрения пользователя.
+
+---
+
 ## 0. Контекст и роль
 
 Ты — senior Python-разработчик, реализующий **фазу BETA** системы OryaAgent v7. BETA превращает «безопасный MVP с L0 memory + low-latency baseline» в **«расширяемую платформу с DFC + Tri-Model + LSP-native + UKB + RetrievalOrchestrator + CapabilityRegistry»**.
