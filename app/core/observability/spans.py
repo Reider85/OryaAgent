@@ -331,3 +331,71 @@ def incident_scope() -> Iterator[dict[str, str]]:
         yield bag
     finally:
         _incident_bag.reset(token)
+
+
+# MCP spans for B-02 semantic search
+def emit_mcp_span(
+    tool_name: str,
+    server_url: str,
+    status: str = "success",
+    latency_ms: float | None = None,
+    error: str | None = None,
+    **attributes: Any,
+) -> None:
+    """Emit span for MCP tool operations (B-02).
+    
+    Args:
+        tool_name: Name of the MCP tool called
+        server_url: URL of the MCP server
+        status: Operation status (success, error, timeout)
+        latency_ms: Operation latency in milliseconds
+        error: Error message if status is error
+        **attributes: Additional span attributes
+    """
+    emit_span(
+        span_type="mcp.call",
+        name=f"mcp.{tool_name}",
+        attributes={
+            "mcp.tool_name": tool_name,
+            "mcp.server_url": server_url,
+            "mcp.status": status,
+            "mcp.error": error,
+            **attributes,
+        },
+        status="error" if status == "error" else None,
+    )
+
+
+def emit_semantic_search_span(
+    query: str,
+    top_k: int,
+    results_count: int,
+    status: str = "success",
+    latency_ms: float | None = None,
+    error: str | None = None,
+    **attributes: Any,
+) -> None:
+    """Emit span for semantic search operations (B-02).
+    
+    Args:
+        query: Search query
+        top_k: Number of results requested
+        results_count: Number of results returned
+        status: Operation status (success, error, timeout)
+        latency_ms: Operation latency in milliseconds
+        error: Error message if status is error
+        **attributes: Additional span attributes
+    """
+    emit_span(
+        span_type="semantic.search",
+        name="semantic.search",
+        attributes={
+            "semantic.query": query[:100],  # Truncate for privacy
+            "semantic.top_k": top_k,
+            "semantic.results_count": results_count,
+            "semantic.status": status,
+            "semantic.error": error,
+            **attributes,
+        },
+        status="error" if status == "error" else None,
+    )

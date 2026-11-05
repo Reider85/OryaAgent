@@ -32,6 +32,7 @@ from app.tools.bash import bash
 from app.tools.edit import edit
 from app.tools.glob import glob
 from app.tools.grep import grep
+from app.tools.oriahs_search import oriahs_search
 from app.tools.read import read
 from app.tools.write import write
 
@@ -39,8 +40,9 @@ from app.tools.write import write
 def get_tools(session_id: str | None = None) -> list[BaseTool]:
     """Return the tools available to the agent.
 
+    Updated for BETA to include semantic search tools.
     ``session_id`` is reserved for per-session tool filtering (M-13+ /
     v7 BETA ``CapabilityRegistry``); the MVP list is global.
     """
     del session_id  # reserved for per-session filtering
-    return [read, write, edit, bash, grep, glob]
+    return [read, write, edit, bash, grep, glob, oriahs_search]

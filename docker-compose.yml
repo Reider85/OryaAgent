@@ -97,46 +97,52 @@ services:
       timeout: 5s
       retries: 5
 
-  api:
-    profiles: ["app"]
-    build:
-      context: .
-      dockerfile: deploy/Dockerfile
-    image: orya-agent:local
-    restart: unless-stopped
-    # Migrations are idempotent (A-11/Alembic replaces this later); fail-fast
-    # container exit + restart lets postgres come back after a reboot.
-    command: sh -c "orya db migrate && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"
-    env_file:
-      - path: .env
-        required: false
-    environment:
-      <<: *orya-app-env
-      AUTH_ENABLED: ${AUTH_ENABLED:-false}
-      AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-}
-      ORYA_RATE_LIMIT_ENABLED: ${ORYA_RATE_LIMIT_ENABLED:-false}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8001}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    ports:
-      - "${API_PORT:-8000}:8000"
-    volumes:
-      # Agent workspace (tools validate_path allows cwd) + persistent ~/.orya
-      # (sessions JSONL, permissions) + L0 memory dir (ARCHITECT6 §13.1).
-      - ${ORYA_WORKSPACE:-.}:/workspace
-      - ./data/orya:/root/.orya
-      - ./data/memory:/data/memory
-    working_dir: /workspace
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status == 200 else 1)"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+   api:
+     profiles: ["app"]
+     build:
+       context: .
+       dockerfile: deploy/Dockerfile
+     image: orya-agent:local
+     restart: unless-stopped
+     # Migrations are idempotent (A-11/Alembic replaces this later); fail-fast
+     # container exit + restart lets postgres come back after a reboot.
+     command: sh -c "orya db migrate && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"
+     env_file:
+       - path: .env
+         required: false
+     environment:
+       <<: *orya-app-env
+       AUTH_ENABLED: ${AUTH_ENABLED:-false}
+       AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-}
+       ORYA_RATE_LIMIT_ENABLED: ${ORYA_RATE_LIMIT_ENABLED:-false}
+       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8001}
+       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+       # B-02 MCP server configuration
+       MCP_SERVER_URL: http://oriahs-mcp:8765
+       ORIAHS_BASE_URL: http://oriahs:8000
+       ORIAHS_TOKEN: ${ORIAHS_TOKEN:-}
+     ports:
+       - "${API_PORT:-8000}:8000"
+     volumes:
+       # Agent workspace (tools validate_path allows cwd) + persistent ~/.orya
+       # (sessions JSONL, permissions) + L0 memory dir (ARCHITECT6 §13.1).
+       - ${ORYA_WORKSPACE:-.}:/workspace
+       - ./data/orya:/root/.orya
+       - ./data/memory:/data/memory
+     working_dir: /workspace
+     depends_on:
+       postgres:
+         condition: service_healthy
+       redis:
+         condition: service_healthy
+       oriahs-mcp:
+         condition: service_healthy
+     healthcheck:
+       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status == 200 else 1)"]
+       interval: 10s
+       timeout: 5s
+       retries: 5
+       start_period: 30s
 
   chainlit:
     profiles: ["app"]
@@ -152,17 +158,40 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       - "${CHAINLIT_PORT:-8001}:8001"
-    depends_on:
-      api:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/', timeout=3).status == 200 else 1)"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 60s
+     depends_on:
+       api:
+         condition: service_healthy
+       oriahs-mcp:
+         condition: service_healthy
+     healthcheck:
+       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status == 200 else 1)"]
+       interval: 10s
+       timeout: 5s
+       retries: 5
+       start_period: 30s
 
-  # Idempotent CREATE DATABASE langfuse on the shared postgres. The stock
+   oriahs-mcp:
+     profiles: ["app"]
+     build:
+       context: .
+       dockerfile: deploy/Dockerfile.oriahs-mcp
+     image: orya-agent-oriahs-mcp:local
+     restart: unless-stopped
+     environment:
+       ORIAHS_BASE_URL: ${ORIAHS_BASE_URL:-http://oriahs:8000}
+       ORIAHS_TOKEN: ${ORIAHS_TOKEN:-}
+       ORIAHS_TIMEOUT: ${ORIAHS_TIMEOUT:-10.0}
+       ORIAHS_MAX_RETRIES: ${ORIAHS_MAX_RETRIES:-3}
+     ports:
+       - "8765:8765"
+     healthcheck:
+       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8765/health', timeout=3).status == 200 else 1)"]
+       interval: 30s
+       timeout: 10s
+       retries: 3
+       start_period: 30s
+
+   # Idempotent CREATE DATABASE langfuse on the shared postgres. The stock
   # entrypoint only runs docker-entrypoint-initdb.d on an EMPTY data dir, so an
   # existing postgres_data volume never gets the langfuse DB — this one-shot
   # does, on every `up` (safe to re-run).

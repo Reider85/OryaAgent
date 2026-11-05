@@ -39,7 +39,7 @@ from app.core.tools import get_tools
 glob_module = importlib.import_module("app.tools.glob")
 grep_module = importlib.import_module("app.tools.grep")
 
-EXPECTED_NAMES = ["read", "write", "edit", "bash", "grep", "glob"]
+EXPECTED_NAMES = ["read", "write", "edit", "bash", "grep", "glob", "oriahs_search"]
 
 EXPECTED_REQUIRED_ARGS = {
     "read": {"path"},
@@ -48,6 +48,7 @@ EXPECTED_REQUIRED_ARGS = {
     "bash": {"command"},
     "grep": {"pattern"},
     "glob": {"pattern"},
+    "oriahs_search": {"query"},
 }
 
 
