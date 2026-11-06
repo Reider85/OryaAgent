@@ -1,0 +1,23 @@
+name: code-review
+description: "Comprehensive code review skill that analyzes code quality, identifies issues, and suggests improvements"
+version: "1.0.0"
+author: "OryaAgent Team"
+category: "development"
+tags: ["code-quality", "review", "static-analysis", "linting"]
+tools:
+  - "read"
+  - "grep"
+  - "lsp_diagnostics"
+  - "lsp_symbol_search"
+  - "lsp_definition"
+  - "lsp_references"
+hooks:
+  - "auto-format"
+  - "auto-lint"
+dependencies: []
+metadata:
+  languages: ["python", "javascript", "typescript", "java", "rust", "go"]
+  complexity_threshold: 10
+  max_file_size: 1000000  # 1MB
+  review_types: ["security", "performance", "readability", "best-practices"]
+  supported_patterns: ["**/*.py", "**/*.js", "**/*.ts", "**/*.java", "**/*.rs", "**/*.go"]
