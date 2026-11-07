@@ -1,0 +1,427 @@
+"""Synthetic dataset for Tri-Model Pipeline testing."""
+
+import json
+from typing import Dict, List, Any
+
+
+class SyntheticDataset:
+    """Synthetic dataset for testing Tri-Model Pipeline."""
+    
+    def __init__(self):
+        self.scenarios = self._generate_scenarios()
+    
+    def _generate_scenarios(self) -> List[Dict[str, Any]]:
+        """Generate synthetic test scenarios."""
+        return [
+            {
+                "id": "file_creation",
+                "task": "Create a Python file with a simple function",
+                "expected_plan": {
+                    "steps": [
+                        "Create a new Python file",
+                        "Define a simple function",
+                        "Add basic documentation",
+                        "Test the function"
+                    ],
+                    "criteria": [
+                        "File is created successfully",
+                        "Function is properly defined",
+                        "Function has basic documentation",
+                        "Function works correctly"
+                    ],
+                    "prefetch_hints": ["python_file", "function_definition"],
+                    "tier": "small"
+                },
+                "expected_execution": {
+                    "success": True,
+                    "tools_used": ["write", "read"],
+                    "output": "Python file created successfully"
+                },
+                "expected_verdict": {
+                    "verdict": "pass",
+                    "confidence": 0.95,
+                    "failed_criteria": []
+                }
+            },
+            {
+                "id": "code_refactoring",
+                "task": "Refactor a function to use list comprehension",
+                "expected_plan": {
+                    "steps": [
+                        "Read the current function implementation",
+                        "Analyze the function for refactoring opportunities",
+                        "Refactor using list comprehension",
+                        "Test the refactored function"
+                    ],
+                    "criteria": [
+                        "Original function is read and understood",
+                        "List comprehension is used correctly",
+                        "Refactored function produces same output",
+                        "Function is more concise and readable"
+                    ],
+                    "prefetch_hints": ["read_file", "function_analysis"],
+                    "tier": "small"
+                },
+                "expected_execution": {
+                    "success": True,
+                    "tools_used": ["read", "edit"],
+                    "output": "Function refactored successfully"
+                },
+                "expected_verdict": {
+                    "verdict": "pass",
+                    "confidence": 0.9,
+                    "failed_criteria": []
+                }
+            },
+            {
+                "id": "bug_fix",
+                "task": "Fix a bug in a sorting function",
+                "expected_plan": {
+                    "steps": [
+                        "Read the sorting function implementation",
+                        "Identify the bug in the logic",
+                        "Fix the bug",
+                        "Test the function with various inputs"
+                    ],
+                    "criteria": [
+                        "Bug is correctly identified",
+                        "Fix addresses the root cause",
+                        "Function works correctly after fix",
+                        "Fix doesn't introduce new bugs"
+                    ],
+                    "prefetch_hints": ["read_file", "bug_analysis"],
+                    "tier": "small"
+                },
+                "expected_execution": {
+                    "success": True,
+                    "tools_used": ["read", "edit", "bash"],
+                    "output": "Bug fixed successfully"
+                },
+                "expected_verdict": {
+                    "verdict": "pass",
+                    "confidence": 0.85,
+                    "failed_criteria": []
+                }
+            },
+            {
+                "id": "documentation",
+                "task": "Add comprehensive documentation to a module",
+                "expected_plan": {
+                    "steps": [
+                        "Read the current module structure",
+                        "Analyze existing documentation",
+                        "Add module-level documentation",
+                        "Add function-level documentation",
+                        "Add examples and usage"
+                    ],
+                    "criteria": [
+                        "Module structure is understood",
+                        "Documentation is comprehensive",
+                        "Functions are properly documented",
+                        "Examples are provided"
+                    ],
+                    "prefetch_hints": ["read_file", "module_analysis"],
+                    "tier": "small"
+                },
+                "expected_execution": {
+                    "success": True,
+                    "tools_used": ["read", "edit"],
+                    "output": "Documentation added successfully"
+                },
+                "expected_verdict": {
+                    "verdict": "pass",
+                    "confidence": 0.9,
+                    "failed_criteria": []
+                }
+            },
+            {
+                "id": "test_creation",
+                "task": "Create unit tests for a utility module",
+                "expected_plan": {
+                    "steps": [
+                        "Read the utility module",
+                        "Identify functions that need tests",
+                        "Create test file structure",
+                        "Write unit tests for each function",
+                        "Run tests to verify they pass"
+                    ],
+                    "criteria": [
+                        "All functions are covered by tests",
+                        "Tests are comprehensive",
+                        "Tests pass successfully",
+                        "Test cases include edge cases"
+                    ],
+                    "prefetch_hints": ["read_file", "test_analysis"],
+                    "tier": "small"
+                },
+                "expected_execution": {
+                    "success": True,
+                    "tools_used": ["read", "write", "bash"],
+                    "output": "Unit tests created and passed"
+                },
+                "expected_verdict": {
+                    "verdict": "pass",
+                    "confidence": 0.95,
+                    "failed_criteria": []
+                }
+            },
+            {
+                "id": "error_handling",
+                "task": "Add proper error handling to a function",
+                "expected_plan": {
+                    "steps": [
+                        "Read the current function implementation",
+                        "Identify potential error scenarios",
+                        "Add appropriate error handling",
+                        "Test error handling with various inputs",
+                        "Verify error messages are clear"
+                    ],
+                    "criteria": [
+                        "All potential errors are handled",
+                        "Error handling is appropriate",
+                        "Error messages are clear",
+                        "Function doesn't crash on errors"
+                    ],
+                    "prefetch_hints": ["read_file", "error_analysis"],
+                    "tier": "small"
+                },
+                "expected_execution": {
+                    "success": True,
+                    "tools_used": ["read", "edit", "bash"],
+                    "output": "Error handling added successfully"
+                },
+                "expected_verdict": {
+                    "verdict": "pass",
+                    "confidence": 0.9,
+                    "failed_criteria": []
+                }
+            },
+            {
+                "id": "performance_optimization",
+                "task": "Optimize a function for better performance",
+                "expected_plan": {
+                    "steps": [
+                        "Read the current function implementation",
+                        "Analyze performance bottlenecks",
+                        "Identify optimization opportunities",
+                        "Implement optimizations",
+                        "Test performance improvements"
+                    ],
+                    "criteria": [
+                        "Performance bottlenecks are identified",
+                        "Optimizations are implemented correctly",
+                        "Function performance improves",
+                        "Function behavior remains unchanged"
+                    ],
+                    "prefetch_hints": ["read_file", "performance_analysis"],
+                    "tier": "large"  # More complex task
+                },
+                "expected_execution": {
+                    "success": True,
+                    "tools_used": ["read", "edit", "bash"],
+                    "output": "Function optimized successfully"
+                },
+                "expected_verdict": {
+                    "verdict": "pass",
+                    "confidence": 0.85,
+                    "failed_criteria": []
+                }
+            },
+            {
+                "id": "api_integration",
+                "task": "Integrate with an external API",
+                "expected_plan": {
+                    "steps": [
+                        "Research the API documentation",
+                        "Create API client functions",
+                        "Implement API integration logic",
+                        "Add error handling for API calls",
+                        "Test the integration"
+                    ],
+                    "criteria": [
+                        "API documentation is understood",
+                        "API client functions are implemented",
+                        "Integration logic is correct",
+                        "Error handling is comprehensive"
+                    ],
+                    "prefetch_hints": ["web_search", "api_analysis"],
+                    "tier": "large"
+                },
+                "expected_execution": {
+                    "success": True,
+                    "tools_used": ["write", "edit", "bash"],
+                    "output": "API integration completed"
+                },
+                "expected_verdict": {
+                    "verdict": "pass",
+                    "confidence": 0.8,
+                    "failed_criteria": []
+                }
+            },
+            {
+                "id": "data_migration",
+                "task": "Migrate data from one format to another",
+                "expected_plan": {
+                    "steps": [
+                        "Analyze source data format",
+                        "Analyze target data format",
+                        "Create migration script",
+                        "Test migration with sample data",
+                        "Execute full migration"
+                    ],
+                    "criteria": [
+                        "Source data format is understood",
+                        "Target data format is correct",
+                        "Migration script works correctly",
+                        "All data is migrated accurately"
+                    ],
+                    "prefetch_hints": ["read_file", "data_analysis"],
+                    "tier": "large"
+                },
+                "expected_execution": {
+                    "success": True,
+                    "tools_used": ["read", "write", "bash"],
+                    "output": "Data migration completed successfully"
+                },
+                "expected_verdict": {
+                    "verdict": "pass",
+                    "confidence": 0.9,
+                    "failed_criteria": []
+                }
+            },
+            {
+                "id": "security_audit",
+                "task": "Perform security audit of a web application",
+                "expected_plan": {
+                    "steps": [
+                        "Review application code for security issues",
+                        "Check for common vulnerabilities",
+                        "Implement security fixes",
+                        "Run security tests",
+                        "Verify fixes are effective"
+                    ],
+                    "criteria": [
+                        "Security issues are identified",
+                        "Fixes are implemented correctly",
+                        "Security tests pass",
+                        "Application is secure"
+                    ],
+                    "prefetch_hints": ["read_file", "security_analysis"],
+                    "tier": "tournament"  # Most complex task
+                },
+                "expected_execution": {
+                    "success": True,
+                    "tools_used": ["read", "edit", "bash"],
+                    "output": "Security audit completed"
+                },
+                "expected_verdict": {
+                    "verdict": "pass",
+                    "confidence": 0.85,
+                    "failed_criteria": []
+                }
+            }
+        ]
+    
+    def get_scenario(self, scenario_id: str) -> Dict[str, Any]:
+        """Get a specific scenario by ID."""
+        for scenario in self.scenarios:
+            if scenario["id"] == scenario_id:
+                return scenario
+        raise ValueError(f"Scenario {scenario_id} not found")
+    
+    def get_all_scenarios(self) -> List[Dict[str, Any]]:
+        """Get all scenarios."""
+        return self.scenarios
+    
+    def get_random_scenario(self) -> Dict[str, Any]:
+        """Get a random scenario."""
+        import random
+        return random.choice(self.scenarios)
+    
+    def get_scenarios_by_tier(self, tier: str) -> List[Dict[str, Any]]:
+        """Get scenarios by tier."""
+        return [scenario for scenario in self.scenarios if scenario["expected_plan"]["tier"] == tier]
+    
+    def get_scenarios_by_difficulty(self, difficulty: str) -> List[Dict[str, Any]]:
+        """Get scenarios by difficulty level."""
+        difficulty_mapping = {
+            "easy": ["small"],
+            "medium": ["small", "large"],
+            "hard": ["large", "tournament"],
+            "expert": ["tournament"]
+        }
+        
+        tiers = difficulty_mapping.get(difficulty, [])
+        return [scenario for scenario in self.scenarios if scenario["expected_plan"]["tier"] in tiers]
+    
+    def generate_test_cases(self, count: int = 10) -> List[Dict[str, Any]]:
+        """Generate test cases for evaluation."""
+        import random
+        
+        test_cases = []
+        scenarios = self.get_all_scenarios()
+        
+        for i in range(count):
+            scenario = random.choice(scenarios)
+            test_case = {
+                "id": f"test_case_{i+1}",
+                "scenario_id": scenario["id"],
+                "task": scenario["task"],
+                "expected_plan": scenario["expected_plan"],
+                "expected_execution": scenario["expected_execution"],
+                "expected_verdict": scenario["expected_verdict"],
+                "difficulty": self._get_difficulty_level(scenario["expected_plan"]["tier"])
+            }
+            test_cases.append(test_case)
+        
+        return test_cases
+    
+    def _get_difficulty_level(self, tier: str) -> str:
+        """Get difficulty level for a tier."""
+        if tier == "small":
+            return "easy"
+        elif tier == "large":
+            return "medium"
+        else:  # tournament
+            return "hard"
+
+
+def load_synthetic_dataset(file_path: str) -> SyntheticDataset:
+    """Load synthetic dataset from file."""
+    with open(file_path, 'r') as f:
+        data = json.load(f)
+    
+    dataset = SyntheticDataset()
+    dataset.scenarios = data["scenarios"]
+    
+    return dataset
+
+
+def save_synthetic_dataset(dataset: SyntheticDataset, file_path: str) -> None:
+    """Save synthetic dataset to file."""
+    data = {
+        "scenarios": dataset.scenarios,
+        "generated_at": dataset.__class__.__name__,
+        "total_scenarios": len(dataset.scenarios)
+    }
+    
+    with open(file_path, 'w') as f:
+        json.dump(data, f, indent=2)
+
+
+# Example usage
+if __name__ == "__main__":
+    # Create synthetic dataset
+    dataset = SyntheticDataset()
+    
+    # Save dataset
+    save_synthetic_dataset(dataset, "synthetic_dataset.json")
+    
+    # Load dataset
+    loaded_dataset = load_synthetic_dataset("synthetic_dataset.json")
+    
+    # Generate test cases
+    test_cases = dataset.generate_test_cases(10)
+    
+    print(f"Generated {len(test_cases)} test cases")
+    print(f"Dataset contains {len(dataset.scenarios)} scenarios")
