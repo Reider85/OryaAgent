@@ -78,6 +78,7 @@ from app.core.agent import (
     stream_resume,
     stream_turn,
 )
+from app.core.branch_manager import get_branch_manager
 from app.core.cost_tracker import set_cost_identity, with_cost_identity
 from app.core.graph import default_run_config
 from app.core.llm.cost_router import ModelSelection, resolve_turn_model
@@ -172,6 +173,38 @@ class SessionPatch(BaseModel):
     """
 
     working_dir: str | None = None
+
+
+class ForkSessionRequest(BaseModel):
+    """Request body for ``POST /sessions/{id}/fork``."""
+
+    turn_id: str | None = Field(
+        default=None,
+        description="Specific turn to fork from (defaults to latest)"
+    )
+    branch_name: str | None = Field(
+        default=None,
+        description="Name for the new branch (auto-generated if None)"
+    )
+
+
+class BranchInfoResponse(BaseModel):
+    """Response for branch information."""
+
+    id: str
+    name: str
+    parent_session_id: str
+    parent_turn_id: str
+    created_at: str
+    status: str
+    metadata: dict[str, Any]
+
+
+class BranchListResponse(BaseModel):
+    """Response for listing branches."""
+
+    branches: list[BranchInfoResponse]
+    total: int
 
 
 def _policy_for(
@@ -709,3 +742,92 @@ async def delete_session(session_id: str) -> dict:
     _session_policies.pop(session_id, None)
     logger.info("session soft-deleted: %s", session_id)
     return {"session_id": session_id, "status": "closed"}
+
+
+@router.post("/{session_id}/fork")
+async def fork_session(
+    session_id: str,
+    body: ForkSessionRequest | None = None,
+) -> dict:
+    """Create a new branch from any session turn (B-09).
+    
+    Creates a new session that inherits state from the parent session
+    up to the specified turn. Returns the new branch session ID.
+    """
+    body = body or ForkSessionRequest()
+    branch_manager = get_branch_manager()
+    
+    try:
+        branch_session_id = await branch_manager.fork_session(
+            session_id=session_id,
+            turn_id=body.turn_id,
+            branch_name=body.branch_name,
+        )
+        
+        logger.info("session forked: %s -> %s", session_id, branch_session_id)
+        return {
+            "session_id": session_id,
+            "branch_session_id": branch_session_id,
+            "turn_id": body.turn_id,
+            "branch_name": body.branch_name,
+        }
+    except Exception as exc:
+        logger.exception("session fork failed (session_id=%s)", session_id)
+        raise HTTPException(status_code=400, detail=f"fork failed: {exc}") from exc
+
+
+@router.get("/{session_id}/branches")
+async def list_branches(session_id: str) -> BranchListResponse:
+    """List all branches for a session (B-09)."""
+    branch_manager = get_branch_manager()
+    branches = await branch_manager.list_branches(session_id)
+    
+    branch_responses = []
+    for branch in branches:
+        branch_responses.append(BranchInfoResponse(
+            id=branch["id"],
+            name=branch["name"],
+            parent_session_id=branch["parent_session_id"],
+            parent_turn_id=branch["parent_turn_id"],
+            created_at=branch["created_at"].isoformat(),
+            status=branch["status"],
+            metadata=branch["metadata"],
+        ))
+    
+    return BranchListResponse(
+        branches=branch_responses,
+        total=len(branch_responses)
+    )
+
+
+@router.get("/{session_id}/branches/{branch_id}")
+async def get_branch_info(session_id: str, branch_id: str) -> BranchInfoResponse:
+    """Get information about a specific branch (B-09)."""
+    branch_manager = get_branch_manager()
+    branch_info = await branch_manager.get_branch_info(branch_id)
+    
+    if branch_info is None:
+        raise HTTPException(status_code=404, detail=f"Branch {branch_id} not found")
+    
+    return BranchInfoResponse(
+        id=branch_info["id"],
+        name=branch_info["name"],
+        parent_session_id=branch_info["parent_session_id"],
+        parent_turn_id=branch_info["parent_turn_id"],
+        created_at=branch_info["created_at"].isoformat(),
+        status=branch_info["status"],
+        metadata=branch_info["metadata"],
+    )
+
+
+@router.delete("/{session_id}/branches/{branch_id}")
+async def delete_branch(session_id: str, branch_id: str) -> dict:
+    """Delete a branch session (B-09)."""
+    branch_manager = get_branch_manager()
+    success = await branch_manager.delete_branch(branch_id)
+    
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Branch {branch_id} not found")
+    
+    logger.info("branch deleted: %s", branch_id)
+    return {"branch_id": branch_id, "status": "deleted"}

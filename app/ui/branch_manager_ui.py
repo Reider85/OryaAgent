@@ -1,423 +1,475 @@
-"""BranchManager UI (B-18) - visualize branches, merge dialog.
-
-Provides web interface for managing session branches and merges.
-"""
+"""BranchManager UI for B-18: visualize branches, merge dialog."""
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
 
 from app.core.branch_manager import get_branch_manager
-from app.core.branch_merger import get_branch_merger
-from app.core.session import SessionManager
+from app.core.security import get_current_user
+from app.core.observability.spans import emit_span
 
 logger = logging.getLogger(__name__)
-
-router = APIRouter(prefix="/ui/api", tags=["nextjs-web-ui"])
-
-
-class BranchModel(BaseModel):
-    """Branch model."""
-    id: str
-    name: str
-    parent_session_id: str
-    parent_turn_id: str
-    created_at: str
-    status: str
-    turn_count: int
-    metadata: Dict[str, Any]
+router = APIRouter(prefix="/ui/branches", tags=["branch-ui"])
+templates = Jinja2Templates(directory="app/ui/templates")
 
 
-class MergeModel(BaseModel):
-    """Merge model."""
-    id: str
-    parent_session_id: str
-    branch_session_id: str
-    merge_strategy: str
-    conflict_resolution: str
-    created_at: str
-    status: str
-    result: Optional[Dict[str, Any]] = None
-
-
-class BranchFilter(BaseModel):
-    """Branch filter model."""
-    parent_session_id: Optional[str] = None
-    status: Optional[str] = None
-    search: Optional[str] = None
-    limit: int = 50
-    offset: int = 0
-
-
-class BranchManagerUI:
-    """UI for managing session branches."""
-
-    def __init__(self):
-        self.branch_manager = get_branch_manager()
-        self.branch_merger = get_branch_merger()
-        self.session_manager = SessionManager()
-
-    async def list_branches(self, filter: BranchFilter) -> Dict[str, Any]:
-        """List branches with filtering."""
-        try:
-            # Get all branches
-            if filter.parent_session_id:
-                branches = await self.branch_manager.list_branches(filter.parent_session_id)
-            else:
-                # Get all sessions and filter branches
-                all_sessions = await self.session_manager.list_sessions()
-                branches = []
-                for session in all_sessions:
-                    if session.get("metadata", {}).get("parent_session_id"):
-                        session_branches = await self.branch_manager.list_branches(session["id"])
-                        branches.extend(session_branches)
-
-            # Apply search filter
-            if filter.search:
-                search_term = filter.search.lower()
-                filtered_branches = [
-                    branch for branch in branches
-                    if search_term in branch.get("name", "").lower()
-                    or search_term in branch.get("metadata", {}).get("branch_name", "").lower()
-                ]
-            else:
-                filtered_branches = branches
-
-            # Apply status filter
-            if filter.status:
-                filtered_branches = [
-                    branch for branch in filtered_branches
-                    if branch.get("status") == filter.status
-                ]
-
-            # Sort by created_at (newest first)
-            filtered_branches.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-
-            # Apply pagination
-            total_count = len(filtered_branches)
-            paginated_branches = filtered_branches[filter.offset : filter.offset + filter.limit]
-
-            # Format branch models
-            branch_models = []
-            for branch in paginated_branches:
-                turn_count = await self.session_manager.get_session_turn_count(branch["id"])
-                branch_models.append(BranchModel(
-                    id=branch["id"],
-                    name=branch.get("name", "Untitled Branch"),
-                    parent_session_id=branch.get("parent_session_id", ""),
-                    parent_turn_id=branch.get("parent_turn_id", ""),
-                    created_at=branch.get("created_at", ""),
-                    status=branch.get("status", "active"),
-                    turn_count=turn_count,
-                    metadata=branch.get("metadata", {}),
-                ))
-
-            return {
-                "branches": branch_models,
-                "total_count": total_count,
-                "filtered_count": len(filtered_branches),
-                "limit": filter.limit,
-                "offset": filter.offset,
+@router.get("/", response_class=HTMLResponse)
+async def branches_list_ui(
+    request: Request,
+    session_id: str = None,
+    current_user: str = Depends(get_current_user),
+):
+    """Branches list UI page with enhanced visualization."""
+    try:
+        branch_manager = get_branch_manager()
+        
+        if session_id:
+            branches = await branch_manager.list_branches(session_id)
+            # Get performance metrics
+            performance_metrics = await branch_manager.get_branch_performance_metrics(session_id)
+        else:
+            branches = []
+            performance_metrics = {"branch_count": 0}
+        
+        # Process branches for better visualization
+        processed_branches = []
+        for branch in branches:
+            branch_data = {
+                **branch,
+                "created_at_relative": _format_relative_time(branch["created_at"]),
+                "status_class": _get_status_class(branch["status"]),
+                "has_merge_history": len(await branch_manager.get_merge_history(branch["id"])) > 0,
             }
-
-        except Exception as e:
-            logger.error(f"Failed to list branches: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to list branches: {str(e)}")
-
-    async def get_branch_info(self, branch_id: str) -> BranchModel:
-        """Get detailed information about a branch."""
-        try:
-            branch_info = await self.branch_manager.get_branch_info(branch_id)
-            if not branch_info:
-                raise HTTPException(status_code=404, detail="Branch not found")
-
-            turn_count = await self.session_manager.get_session_turn_count(branch_id)
-            
-            return BranchModel(
-                id=branch_info["id"],
-                name=branch_info["name"],
-                parent_session_id=branch_info["parent_session_id"],
-                parent_turn_id=branch_info["parent_turn_id"],
-                created_at=branch_info["created_at"],
-                status=branch_info["status"],
-                turn_count=turn_count,
-                metadata=branch_info["metadata"],
-            )
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Failed to get branch info: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to get branch info: {str(e)}")
-
-    async def create_branch(
-        self,
-        parent_session_id: str,
-        parent_turn_id: Optional[str] = None,
-        branch_name: Optional[str] = None,
-    ) -> BranchModel:
-        """Create a new branch."""
-        try:
-            branch_id = await self.branch_manager.fork_session(
-                parent_session_id, parent_turn_id, branch_name
-            )
-
-            # Get branch info
-            branch_info = await self.branch_manager.get_branch_info(branch_id)
-            turn_count = await self.session_manager.get_session_turn_count(branch_id)
-
-            return BranchModel(
-                id=branch_info["id"],
-                name=branch_info["name"],
-                parent_session_id=branch_info["parent_session_id"],
-                parent_turn_id=branch_info["parent_turn_id"],
-                created_at=branch_info["created_at"],
-                status=branch_info["status"],
-                turn_count=turn_count,
-                metadata=branch_info["metadata"],
-            )
-
-        except Exception as e:
-            logger.error(f"Failed to create branch: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to create branch: {str(e)}")
-
-    async def delete_branch(self, branch_id: str) -> bool:
-        """Delete a branch."""
-        try:
-            success = await self.branch_manager.delete_branch(branch_id)
-            if not success:
-                raise HTTPException(status_code=404, detail="Branch not found")
-            return True
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Failed to delete branch: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to delete branch: {str(e)}")
-
-    async def merge_branches(
-        self,
-        parent_session_id: str,
-        branch_session_id: str,
-        merge_strategy: str = "auto",
-        conflict_resolution: str = "parent_wins",
-    ) -> MergeModel:
-        """Merge a branch into the parent session."""
-        try:
-            # Perform merge
-            merge_result = await self.branch_merger.merge_branches(
-                parent_session_id,
-                branch_session_id,
-                merge_strategy,
-                conflict_resolution,
-            )
-
-            # Create merge record
-            merge_id = f"merge_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            merge_model = MergeModel(
-                id=merge_id,
-                parent_session_id=parent_session_id,
-                branch_session_id=branch_session_id,
-                merge_strategy=merge_strategy,
-                conflict_resolution=conflict_resolution,
-                created_at=datetime.utcnow().isoformat(),
-                status="completed",
-                result=merge_result,
-            )
-
-            return merge_model
-
-        except Exception as e:
-            logger.error(f"Failed to merge branches: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to merge branches: {str(e)}")
-
-    async def list_merge_history(self, session_id: str) -> List[Dict[str, Any]]:
-        """List merge history for a session."""
-        try:
-            return await self.branch_merger.list_merge_history(session_id)
-
-        except Exception as e:
-            logger.error(f"Failed to list merge history: {e}")
-            return []
-
-    async def get_branch_differences(self, parent_session_id: str, branch_session_id: str) -> Dict[str, Any]:
-        """Get differences between parent and branch."""
-        try:
-            # Get turns from both sessions
-            parent_turns = await self.session_manager.get_session_turns(parent_session_id)
-            branch_turns = await self.session_manager.get_session_turns(branch_session_id)
-
-            # Find fork point
-            fork_point = await self.branch_merger._find_fork_point(parent_turns, branch_turns)
-            if not fork_point:
-                return {"error": "Could not find fork point"}
-
-            # Analyze differences
-            differences = await self.branch_merger._analyze_differences(
-                parent_turns, branch_turns, fork_point
-            )
-
-            return {
-                "fork_point": fork_point,
-                "differences": differences,
-                "parent_turns_after_fork": len(differences["unique_parent"]),
-                "branch_turns_after_fork": len(differences["unique_branch"]),
-                "conflicts": len(differences["conflicts"]),
-            }
-
-        except Exception as e:
-            logger.error(f"Failed to get branch differences: {e}")
-            return {"error": str(e)}
-
-    async def get_merge_strategies(self) -> List[Dict[str, Any]]:
-        """Get available merge strategies."""
-        return [
+            processed_branches.append(branch_data)
+        
+        return templates.TemplateResponse(
+            "branches/list.html",
             {
-                "name": "auto",
-                "description": "Automatically merge turns, resolving conflicts based on strategy",
-                "conflict_resolution_options": ["parent_wins", "branch_wins", "manual"],
+                "request": request,
+                "branches": processed_branches,
+                "session_id": session_id,
+                "performance_metrics": performance_metrics,
+                "current_user": current_user,
             },
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in branches list UI: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load branches list: {str(e)}")
+
+@router.get("/tree", response_class=HTMLResponse)
+async def branches_tree_ui(
+    request: Request,
+    session_id: str = None,
+    current_user: str = Depends(get_current_user),
+):
+    """Branches tree visualization UI page."""
+    try:
+        branch_manager = get_branch_manager()
+        
+        if session_id:
+            branches = await branch_manager.list_branches(session_id)
+            # Build tree structure for visualization
+            tree_data = _build_branch_tree(branches)
+        else:
+            tree_data = []
+        
+        return templates.TemplateResponse(
+            "branches/tree.html",
             {
-                "name": "preserve_branch",
-                "description": "Preserve all branch turns and append to parent session",
-                "conflict_resolution_options": ["append_all"],
+                "request": request,
+                "tree_data": tree_data,
+                "session_id": session_id,
+                "current_user": current_user,
             },
-        ]
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in branches tree UI: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load branches tree: {str(e)}")
 
-    async def get_branch_statistics(self) -> Dict[str, Any]:
-        """Get branch statistics."""
-        try:
-            # Get all sessions
-            all_sessions = await self.session_manager.list_sessions()
+@router.get("/dashboard", response_class=HTMLResponse)
+async def branches_dashboard_ui(
+    request: Request,
+    current_user: str = Depends(get_current_user),
+):
+    """Branches dashboard UI page with overview and statistics."""
+    try:
+        branch_manager = get_branch_manager()
+        
+        # Get all sessions with branches
+        from app.db.session_log import list_sessions
+        sessions = await list_sessions(limit=50)
+        
+        # Process sessions for dashboard
+        dashboard_data = []
+        for session in sessions:
+            session_id = session["session_id"]
+            branches = await branch_manager.list_branches(session_id)
+            performance_metrics = await branch_manager.get_branch_performance_metrics(session_id)
             
-            # Count branches
-            branches = 0
-            active_branches = 0
-            total_merges = 0
-            
-            for session in all_sessions:
-                if session.get("metadata", {}).get("parent_session_id"):
-                    branches += 1
-                    if session.get("status") == "active":
-                        active_branches += 1
-                
-                # Count merges
-                merge_history = await self.branch_merger.list_merge_history(session["id"])
-                total_merges += len(merge_history)
-
-            return {
-                "total_branches": branches,
-                "active_branches": active_branches,
-                "completed_branches": branches - active_branches,
-                "total_merges": total_merges,
-                "average_branches_per_session": branches / len(all_sessions) if all_sessions else 0,
+            dashboard_item = {
+                "session_id": session_id,
+                "session_title": session.get("title", "Untitled Session"),
+                "branch_count": len(branches),
+                "performance_metrics": performance_metrics,
+                "latest_activity": session.get("last_activity_at"),
+                "created_at": session.get("created_at"),
             }
+            dashboard_data.append(dashboard_item)
+        
+        return templates.TemplateResponse(
+            "branches/dashboard.html",
+            {
+                "request": request,
+                "dashboard_data": dashboard_data,
+                "current_user": current_user,
+            },
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in branches dashboard UI: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load branches dashboard: {str(e)}")
 
-        except Exception as e:
-            logger.error(f"Failed to get branch statistics: {e}")
-            return {"error": str(e)}
-
-
-# Global instance
-_branch_manager_ui = None
-
-
-def get_branch_manager_ui() -> BranchManagerUI:
-    """Get the global branch manager UI instance."""
-    global _branch_manager_ui
-    if _branch_manager_ui is None:
-        _branch_manager_ui = BranchManagerUI()
-    return _branch_manager_ui
-
-
-@router.get("/branches")
-async def list_branches(
-    parent_session_id: Optional[str] = Query(None, description="Filter by parent session ID"),
-    status: Optional[str] = Query(None, description="Filter by status"),
-    search: Optional[str] = Query(None, description="Search term"),
-    limit: int = Query(50, ge=1, le=100, description="Maximum number of branches"),
-    offset: int = Query(0, ge=0, description="Offset for pagination"),
+@router.get("/compare/{branch_session_id}", response_class=HTMLResponse)
+async def branches_compare_ui(
+    request: Request,
+    branch_session_id: str,
+    current_user: str = Depends(get_current_user),
 ):
-    """List branches with optional filtering."""
-    filter = BranchFilter(
-        parent_session_id=parent_session_id,
-        status=status,
-        search=search,
-        limit=limit,
-        offset=offset,
-    )
-    branch_manager_ui = get_branch_manager_ui()
-    return await branch_manager_ui.list_branches(filter)
+    """Branch comparison UI page."""
+    try:
+        branch_manager = get_branch_manager()
+        
+        # Get branch info
+        branch_info = await branch_manager.get_branch_info(branch_session_id)
+        if not branch_info:
+            raise HTTPException(status_code=404, detail="Branch not found")
+        
+        # Get parent session info
+        parent_session_id = branch_info["parent_session_id"]
+        parent_branches = await branch_manager.list_branches(parent_session_id)
+        
+        # Get merge history
+        merge_history = await branch_manager.get_merge_history(branch_session_id)
+        
+        return templates.TemplateResponse(
+            "branches/compare.html",
+            {
+                "request": request,
+                "branch_info": branch_info,
+                "parent_session_id": parent_session_id,
+                "parent_branches": parent_branches,
+                "merge_history": merge_history,
+                "current_user": current_user,
+            },
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in branches compare UI: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load branches compare: {str(e)}")
+
+# Helper functions for enhanced UI
+def _format_relative_time(timestamp: str) -> str:
+    """Format timestamp as relative time for display."""
+    try:
+        dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+        now = datetime.now(dt.tzinfo)
+        delta = now - dt
+        
+        if delta.days > 0:
+            return f"{delta.days} days ago"
+        elif delta.seconds > 3600:
+            hours = delta.seconds // 3600
+            return f"{hours} hours ago"
+        elif delta.seconds > 60:
+            minutes = delta.seconds // 60
+            return f"{minutes} minutes ago"
+        else:
+            return "just now"
+    except:
+        return timestamp
+
+def _get_status_class(status: str) -> str:
+    """Get CSS class for status display."""
+    status_classes = {
+        "active": "status-active",
+        "merged": "status-merged",
+        "closed": "status-closed",
+        "archived": "status-archived",
+    }
+    return status_classes.get(status, "status-unknown")
+
+def _build_branch_tree(branches: List[Dict]) -> List[Dict]:
+    """Build tree structure for branch visualization."""
+    tree = []
+    
+    # Group branches by parent session
+    parent_groups = {}
+    for branch in branches:
+        parent_id = branch["parent_session_id"]
+        if parent_id not in parent_groups:
+            parent_groups[parent_id] = []
+        parent_groups[parent_id].append(branch)
+    
+    # Build tree structure
+    for parent_id, child_branches in parent_groups.items():
+        parent_node = {
+            "id": parent_id,
+            "type": "parent",
+            "branches": child_branches,
+            "children": [],
+        }
+        
+        # Add nested branches if they have their own branches
+        for child_branch in child_branches:
+            # In a real implementation, we'd check if this branch has its own children
+            parent_node["children"].append({
+                "id": child_branch["id"],
+                "type": "branch",
+                "branch_info": child_branch,
+                "children": [],
+            })
+        
+        tree.append(parent_node)
+    
+    return tree
 
 
-@router.get("/branches/{branch_id}")
-async def get_branch_info(branch_id: str):
-    """Get detailed information about a branch."""
-    branch_manager_ui = get_branch_manager_ui()
-    return await branch_manager_ui.get_branch_info(branch_id)
-
-
-@router.post("/branches")
-async def create_branch(
-    parent_session_id: str,
-    parent_turn_id: Optional[str] = None,
-    branch_name: Optional[str] = None,
+@router.get("/create", response_class=HTMLResponse)
+async def branches_create_ui(
+    request: Request,
+    session_id: str = None,
+    turn_id: str = None,
+    current_user: str = Depends(get_current_user),
 ):
-    """Create a new branch."""
-    branch_manager_ui = get_branch_manager_ui()
-    return await branch_manager_ui.create_branch(parent_session_id, parent_turn_id, branch_name)
+    """Branches create UI page."""
+    try:
+        return templates.TemplateResponse(
+            "branches/create.html",
+            {
+                "request": request,
+                "session_id": session_id,
+                "turn_id": turn_id,
+                "current_user": current_user,
+            },
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in branches create UI: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load branches create: {str(e)}")
 
 
-@router.delete("/branches/{branch_id}")
-async def delete_branch(branch_id: str):
-    """Delete a branch."""
-    branch_manager_ui = get_branch_manager_ui()
-    success = await branch_manager_ui.delete_branch(branch_id)
-    return {"success": success}
-
-
-@router.post("/branches/{branch_id}/merge")
-async def merge_branches(
-    branch_id: str,
-    parent_session_id: str,
-    merge_strategy: str = "auto",
-    conflict_resolution: str = "parent_wins",
+@router.post("/create")
+async def branches_create_post(
+    request: Request,
+    current_user: str = Depends(get_current_user),
 ):
-    """Merge a branch into the parent session."""
-    branch_manager_ui = get_branch_manager_ui()
-    return await branch_manager_ui.merge_branches(
-        parent_session_id, branch_id, merge_strategy, conflict_resolution
-    )
+    """Create a new branch via UI."""
+    try:
+        form_data = await request.form()
+        session_id = form_data.get("session_id")
+        turn_id = form_data.get("turn_id")
+        branch_name = form_data.get("branch_name")
+        
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Session ID is required")
+        
+        branch_manager = get_branch_manager()
+        new_branch_id = await branch_manager.fork_session(
+            session_id=session_id,
+            turn_id=turn_id,
+            branch_name=branch_name,
+        )
+        
+        return RedirectResponse(f"/ui/branches/?session_id={new_branch_id}", status_code=303)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating branch: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create branch: {str(e)}")
 
 
-@router.get("/branches/{branch_id}/differences")
-async def get_branch_differences(branch_id: str, parent_session_id: str):
-    """Get differences between parent and branch."""
-    branch_manager_ui = get_branch_manager_ui()
-    return await branch_manager_ui.get_branch_differences(parent_session_id, branch_id)
+@router.get("/merge", response_class=HTMLResponse)
+async def branches_merge_ui(
+    request: Request,
+    source_session_id: str = None,
+    target_session_id: str = None,
+    current_user: str = Depends(get_current_user),
+):
+    """Branches merge UI page."""
+    try:
+        branch_manager = get_branch_manager()
+        
+        # Get branch info for source and target
+        source_info = None
+        target_info = None
+        
+        if source_session_id:
+            source_info = await branch_manager.get_branch_info(source_session_id)
+        
+        if target_session_id:
+            target_info = await branch_manager.get_branch_info(target_session_id)
+        
+        # Get merge history for target
+        merge_history = []
+        if target_session_id:
+            merge_history = await branch_manager.get_merge_history(target_session_id)
+        
+        return templates.TemplateResponse(
+            "branches/merge.html",
+            {
+                "request": request,
+                "source_session_id": source_session_id,
+                "target_session_id": target_session_id,
+                "source_info": source_info,
+                "target_info": target_info,
+                "merge_history": merge_history,
+                "current_user": current_user,
+            },
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in branches merge UI: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load branches merge: {str(e)}")
 
 
-@router.get("/branches/statistics")
-async def get_branch_statistics():
-    """Get branch statistics."""
-    branch_manager_ui = get_branch_manager_ui()
-    return await branch_manager_ui.get_branch_statistics()
+@router.post("/merge")
+async def branches_merge_post(
+    request: Request,
+    current_user: str = Depends(get_current_user),
+):
+    """Merge branches via UI."""
+    try:
+        form_data = await request.form()
+        source_session_id = form_data.get("source_session_id")
+        target_session_id = form_data.get("target_session_id")
+        merge_strategy = form_data.get("merge_strategy", "append")
+        conflict_resolution = form_data.get("conflict_resolution", "manual")
+        
+        if not source_session_id or not target_session_id:
+            raise HTTPException(status_code=400, detail="Source and target session IDs are required")
+        
+        branch_manager = get_branch_manager()
+        merge_result = await branch_manager.merge_branches(
+            source_session_id=source_session_id,
+            target_session_id=target_session_id,
+            merge_strategy=merge_strategy,
+            conflict_resolution=conflict_resolution,
+        )
+        
+        # Redirect to target session with success message
+        return RedirectResponse(
+            f"/ui/branches/?session_id={target_session_id}", 
+            status_code=303
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error merging branches: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to merge branches: {str(e)}")
 
 
-@router.get("/merge/strategies")
-async def get_merge_strategies():
-    """Get available merge strategies."""
-    branch_manager_ui = get_branch_manager_ui()
-    return await branch_manager_ui.get_merge_strategies()
+@router.get("/delete/{branch_session_id}", response_class=HTMLResponse)
+async def branches_delete_ui(
+    request: Request,
+    branch_session_id: str,
+    current_user: str = Depends(get_current_user),
+):
+    """Branches delete confirmation UI page."""
+    try:
+        branch_manager = get_branch_manager()
+        branch_info = await branch_manager.get_branch_info(branch_session_id)
+        
+        if not branch_info:
+            raise HTTPException(status_code=404, detail="Branch not found")
+        
+        return templates.TemplateResponse(
+            "branches/delete.html",
+            {
+                "request": request,
+                "branch_info": branch_info,
+                "current_user": current_user,
+            },
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in branches delete UI: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load branches delete: {str(e)}")
 
 
-@router.get("/sessions/{session_id}/merge-history")
-async def get_merge_history(session_id: str):
-    """Get merge history for a session."""
-    branch_manager_ui = get_branch_manager_ui()
-    return await branch_manager_ui.list_merge_history(session_id)
+@router.post("/delete/{branch_session_id}")
+async def branches_delete_post(
+    branch_session_id: str,
+    current_user: str = Depends(get_current_user),
+):
+    """Delete a branch via UI."""
+    try:
+        branch_manager = get_branch_manager()
+        success = await branch_manager.delete_branch(branch_session_id)
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Branch not found")
+        
+        # Redirect to parent session
+        # In a real implementation, we'd get the parent session ID from branch_info
+        return RedirectResponse("/ui/branches/", status_code=303)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting branch: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete branch: {str(e)}")
+
+
+@router.get("/info/{branch_session_id}", response_class=HTMLResponse)
+async def branches_info_ui(
+    request: Request,
+    branch_session_id: str,
+    current_user: str = Depends(get_current_user),
+):
+    """Branches info UI page."""
+    try:
+        branch_manager = get_branch_manager()
+        branch_info = await branch_manager.get_branch_info(branch_session_id)
+        
+        if not branch_info:
+            raise HTTPException(status_code=404, detail="Branch not found")
+        
+        # Get merge history
+        merge_history = await branch_manager.get_merge_history(branch_session_id)
+        
+        return templates.TemplateResponse(
+            "branches/info.html",
+            {
+                "request": request,
+                "branch_info": branch_info,
+                "merge_history": merge_history,
+                "current_user": current_user,
+            },
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in branches info UI: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load branches info: {str(e)}")
+
+
+# Helper function to initialize the UI router
+def setup_branch_ui():
+    """Setup branch UI routes."""
+    return router

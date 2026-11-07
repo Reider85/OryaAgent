@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Branches List - OryaAgent</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 30px;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        .header h1 {
+            color: #333;
+            margin: 0;
+        }
+        .nav-links {
+            display: flex;
+            gap: 15px;
+        }
+        .nav-links a {
+            color: #007bff;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            transition: background-color 0.2s;
+        }
+        .nav-links a:hover {
+            background-color: #f0f0f0;
+        }
+        .filters {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            align-items: center;
+        }
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .filter-group label {
+            font-size: 14px;
+            color: #666;
+            font-weight: 500;
+        }
+        .filter-group select,
+        .filter-group input {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .stats-bar {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+        }
+        .stat-item {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
+        }
+        .stat-value {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+        }
+        .branches-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        .branches-table th,
+        .branches-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .branches-table th {
+            background-color: #f8f9fa;
+            font-weight: 600;
+            color: #666;
+        }
+        .branches-table tr:hover {
+            background-color: #f8f9fa;
+        }
+        .branch-name {
+            font-weight: 600;
+            color: #333;
+        }
+        .branch-id {
+            font-size: 12px;
+            color: #666;
+            margin-left: 10px;
+        }
+        .status-active {
+            color: #28a745;
+            font-weight: 500;
+        }
+        .status-merged {
+            color: #6c757d;
+            font-weight: 500;
+        }
+        .status-closed {
+            color: #dc3545;
+            font-weight: 500;
+        }
+        .status-archived {
+            color: #ffc107;
+            font-weight: 500;
+        }
+        .merge-indicator {
+            color: #007bff;
+            font-size: 12px;
+        }
+        .action-buttons {
+            display: flex;
+            gap: 8px;
+        }
+        .btn {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            text-decoration: none;
+            font-size: 14px;
+            transition: background-color 0.2s;
+        }
+        .btn-primary {
+            background-color: #007bff;
+            color: white;
+        }
+        .btn-primary:hover {
+            background-color: #0056b3;
+        }
+        .btn-secondary {
+            background-color: #6c757d;
+            color: white;
+        }
+        .btn-secondary:hover {
+            background-color: #545b62;
+        }
+        .btn-danger {
+            background-color: #dc3545;
+            color: white;
+        }
+        .btn-danger:hover {
+            background-color: #c82333;
+        }
+        .time-ago {
+            color: #666;
+            font-size: 14px;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        .empty-state h3 {
+            margin: 0 0 10px 0;
+            color: #999;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Branches</h1>
+            <div class="nav-links">
+                <a href="/ui/branches/dashboard">Dashboard</a>
+                <a href="/ui/branches/tree">Tree View</a>
+                <a href="/ui/branches/create">Create Branch</a>
+            </div>
+        </div>
+
+        {% if session_id %}
+        <div style="margin-bottom: 20px;">
+            <a href="/ui/branches/" style="color: #666;">← Back to all sessions</a>
+        </div>
+        {% endif %}
+
+        <div class="filters">
+            <div class="filter-group">
+                <label>Filter by Status</label>
+                <select id="status-filter">
+                    <option value="">All Status</option>
+                    <option value="active">Active</option>
+                    <option value="merged">Merged</option>
+                    <option value="closed">Closed</option>
+                    <option value="archived">Archived</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>Search</label>
+                <input type="text" id="search-input" placeholder="Search branches...">
+            </div>
+        </div>
+
+        <div class="stats-bar">
+            <div class="stat-item">
+                <div class="stat-label">Total Branches</div>
+                <div class="stat-value">{{ branches|length }}</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Active</div>
+                <div class="stat-value">{{ branches|selectattr('status', 'equalto', 'active')|list|length }}</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Merged</div>
+                <div class="stat-value">{{ branches|selectattr('status', 'equalto', 'merged')|list|length }}</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">With Merge History</div>
+                <div class="stat-value">{{ branches|selectattr('has_merge_history', 'equalto', true)|list|length }}</div>
+            </div>
+        </div>
+
+        {% if branches %}
+        <table class="branches-table">
+            <thead>
+                <tr>
+                    <th>Branch Name</th>
+                    <th>ID</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                    <th>Parent Session</th>
+                    <th>Turn</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for branch in branches %}
+                <tr>
+                    <td>
+                        <div class="branch-name">{{ branch.name }}</div>
+                    </td>
+                    <td>
+                        <span class="branch-id">{{ branch.id[:8] }}...</span>
+                    </td>
+                    <td>
+                        <span class="status-{{ branch.status }}">{{ branch.status }}</span>
+                        {% if branch.has_merge_history %}
+                        <span class="merge-indicator">📊 Has merge history</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <div class="time-ago">{{ branch.created_at_relative }}</div>
+                        <small class="time-ago">{{ branch.created_at[:10] }}</small>
+                    </td>
+                    <td>
+                        <div class="time-ago">{{ branch.parent_session_id[:8] }}...</div>
+                    </td>
+                    <td>
+                        {% if branch.parent_turn_id %}
+                        <span class="time-ago">{{ branch.parent_turn_id[:8] }}...</span>
+                        {% else %}
+                        <span class="time-ago">Latest</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <div class="action-buttons">
+                            <a href="/ui/branches/info/{{ branch.id }}" class="btn btn-primary">View</a>
+                            <a href="/ui/branches/merge?source_session_id={{ branch.id }}" class="btn btn-secondary">Merge</a>
+                            <a href="/ui/branches/compare/{{ branch.id }}" class="btn btn-secondary">Compare</a>
+                            <a href="/ui/branches/delete/{{ branch.id }}" class="btn btn-danger">Delete</a>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty-state">
+            <h3>No branches found</h3>
+            <p>Create your first branch to get started with parallel development workflows.</p>
+            <a href="/ui/branches/create" class="btn btn-primary" style="margin-top: 15px;">Create Branch</a>
+        </div>
+        {% endif %}
+    </div>
+
+    <script>
+        // Simple client-side filtering
+        document.getElementById('status-filter').addEventListener('change', filterTable);
+        document.getElementById('search-input').addEventListener('input', filterTable);
+
+        function filterTable() {
+            const statusFilter = document.getElementById('status-filter').value;
+            const searchFilter = document.getElementById('search-input').value.toLowerCase();
+            const rows = document.querySelectorAll('.branches-table tbody tr');
+
+            rows.forEach(row => {
+                const status = row.cells[2].textContent.trim();
+                const name = row.cells[0].textContent.toLowerCase();
+                const id = row.cells[1].textContent.toLowerCase();
+
+                const statusMatch = !statusFilter || status.includes(statusFilter);
+                const searchMatch = !searchFilter || name.includes(searchFilter) || id.includes(searchFilter);
+
+                row.style.display = statusMatch && searchMatch ? '' : 'none';
+            });
+        }
+    </script>
+</body>
+</html>
