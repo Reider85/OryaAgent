@@ -740,16 +740,22 @@ def build_graph(
         # scanning node signatures under `from __future__ import annotations`.
         config: Optional[RunnableConfig] = None,  # noqa: UP045
     ) -> Any:
-        """Run the tool batch, emit tool.call spans (A-16), stamp (A-06).
+        """Run the tool batch through hooks framework, emit tool.call spans (A-16), stamp (A-06).
 
         The batch is timed as a whole (LangGraph runs the parallel calls
         concurrently — per-tool wall time is not observable here) and one
         span is emitted per call with the shared window. Each ToolMessage
         is stamped with its span id for the JSONL cross-link.
+        B-04: All tool executions go through pre and post hooks.
         """
+        from app.core.hooks_integration import HooksIntegratedToolNode
+        
+        # Create hooks-integrated tool node
+        hooks_tool_node = HooksIntegratedToolNode(tool_list)
+        
         tool_calls = _pending_tool_calls(state)
         started = time.time()
-        result = await raw_tool_node.ainvoke(state, config)
+        result = await hooks_tool_node.ainvoke(state, config)
         # A-17: pass incident attributes from scope to span emission
         from app.core.observability.spans import _incident_bag
 

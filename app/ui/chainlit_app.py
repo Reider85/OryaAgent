@@ -81,6 +81,7 @@ from app.ui.settings import (
     provider_choices,
     save_settings,
 )
+from app.ui.skills import get_skills_ui
 
 logger = logging.getLogger(__name__)
 
@@ -815,6 +816,10 @@ async def on_chat_start() -> None:
     settings = load_settings()
     await _show_sidebar()
     await _show_settings_panel(settings)
+    
+    # Initialize skills UI
+    skills_ui = get_skills_ui()
+    await skills_ui.show_skills_browser()
 
 
 async def _show_sidebar() -> None:
@@ -1094,6 +1099,10 @@ async def on_message(message: cl.Message) -> None:
         # M-27: slash-command — reads/compacts L0, never a chat turn.
         await _handle_memory(str(thread_id), memory_action)
         return
+    if text == "/skills" or text.startswith("/skills "):
+        # B-07: slash-command — skills management, never a chat turn.
+        await _handle_skills(text)
+        return
 
     settings = load_settings()
     overrides = settings_payload(settings)
@@ -1168,3 +1177,23 @@ async def on_message(message: cl.Message) -> None:
         return
     if reply.content:
         await reply.send()
+
+
+async def _handle_skills(text: str) -> None:
+    """Handle skills management commands."""
+    skills_ui = get_skills_ui()
+    
+    if text == "/skills":
+        # Show skills browser
+        await skills_ui.show_skills_browser()
+    elif text.startswith("/skills activate "):
+        skill_name = text[len("/skills activate "):].strip()
+        await skills_ui._activate_skill(skill_name, cl.Message(content=""))
+    elif text.startswith("/skills deactivate "):
+        skill_name = text[len("/skills deactivate "):].strip()
+        await skills_ui._deactivate_skill(skill_name, cl.Message(content=""))
+    elif text.startswith("/skills info "):
+        skill_name = text[len("/skills info "):].strip()
+        await skills_ui._show_skill_info(skill_name, cl.Message(content=""))
+    else:
+        await cl.Message(content="Usage: /skills [activate|deactivate|info] <skill_name>").send()

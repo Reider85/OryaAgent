@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OryaAgent - Hooks UI</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 20px;
+        }
+        
+        .header {
+            border-bottom: 1px solid #e0e0e0;
+            padding-bottom: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .header h1 {
+            margin: 0;
+            color: #333;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        
+        .control-group label {
+            font-size: 14px;
+            font-weight: 500;
+            color: #666;
+        }
+        
+        .control-group input,
+        .control-group select {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.2s;
+        }
+        
+        .btn-primary {
+            background-color: #007bff;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background-color: #0056b3;
+        }
+        
+        .btn-danger {
+            background-color: #dc3545;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background-color: #c82333;
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+        
+        .stat-card {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            border-left: 4px solid #007bff;
+        }
+        
+        .stat-card h3 {
+            margin: 0 0 5px 0;
+            font-size: 14px;
+            color: #666;
+        }
+        
+        .stat-card .value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+        }
+        
+        .history {
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        
+        .history-header {
+            background: #f8f9fa;
+            padding: 15px;
+            border-bottom: 1px solid #e0e0e0;
+            font-weight: 600;
+        }
+        
+        .history-item {
+            padding: 15px;
+            border-bottom: 1px solid #e0e0e0;
+            transition: background-color 0.2s;
+        }
+        
+        .history-item:hover {
+            background-color: #f8f9fa;
+        }
+        
+        .history-item:last-child {
+            border-bottom: none;
+        }
+        
+        .item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        
+        .item-title {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .item-badge {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        
+        .badge-success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        
+        .badge-error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        
+        .item-details {
+            font-size: 14px;
+            color: #666;
+        }
+        
+        .item-message {
+            margin-top: 8px;
+            padding: 8px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        
+        .error {
+            color: #dc3545;
+            background-color: #f8d7da;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+        
+        .empty {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🪝 Hooks UI - B-20</h1>
+            <p>View hook execution history and statistics</p>
+        </div>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label for="session-id">Session ID</label>
+                <input type="text" id="session-id" placeholder="Enter session ID...">
+            </div>
+            
+            <div class="control-group">
+                <label for="tool-name">Tool Name</label>
+                <input type="text" id="tool-name" placeholder="Enter tool name...">
+            </div>
+            
+            <div class="control-group">
+                <label for="hook-name">Hook Name</label>
+                <input type="text" id="hook-name" placeholder="Enter hook name...">
+            </div>
+            
+            <div class="control-group">
+                <label for="hook-type">Hook Type</label>
+                <select id="hook-type">
+                    <option value="">All</option>
+                    <option value="pre">Pre-tool</option>
+                    <option value="post">Post-tool</option>
+                </select>
+            </div>
+            
+            <div class="control-group">
+                <label for="success">Success</label>
+                <select id="success">
+                    <option value="">All</option>
+                    <option value="true">Success</option>
+                    <option value="false">Failed</option>
+                </select>
+            </div>
+            
+            <div class="control-group">
+                <label for="time-range">Time Range</label>
+                <select id="time-range">
+                    <option value="1">Last 1 hour</option>
+                    <option value="6">Last 6 hours</option>
+                    <option value="24" selected>Last 24 hours</option>
+                    <option value="168">Last 7 days</option>
+                </select>
+            </div>
+            
+            <button class="btn btn-primary" onclick="refreshData()">🔄 Refresh</button>
+            <button class="btn btn-danger" onclick="clearHistory()">Clear History</button>
+        </div>
+        
+        <div id="stats" class="stats"></div>
+        
+        <div class="history">
+            <div class="history-header">
+                Execution History
+            </div>
+            <div id="history-content">
+                <div class="loading">Loading hooks data...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentData = null;
+        
+        async function fetchHooksData(endpoint, params = {}) {
+            try {
+                const url = new URL(`http://localhost:8000${endpoint}`, window.location.href);
+                Object.keys(params).forEach(key => {
+                    if (params[key]) {
+                        url.searchParams.append(key, params[key]);
+                    }
+                });
+                
+                const response = await fetch(url);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                return await response.json();
+            } catch (error) {
+                console.error('Error fetching hooks data:', error);
+                throw error;
+            }
+        }
+        
+        async function loadStatistics() {
+            try {
+                const stats = await fetchHooksData('/hooks/statistics', {
+                    hours: document.getElementById('time-range').value
+                });
+                
+                const statsContainer = document.getElementById('stats');
+                statsContainer.innerHTML = `
+                    <div class="stat-card">
+                        <h3>Total Executions</h3>
+                        <div class="value">${stats.total_executions}</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Success Rate</h3>
+                        <div class="value">${stats.success_rate.toFixed(1)}%</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Average Duration</h3>
+                        <div class="value">${stats.average_duration_ms.toFixed(1)}ms</div>
+                    </div>
+                `;
+                
+                // Add detailed statistics
+                let detailsHtml = '<div style="grid-column: 1 / -1; margin-top: 20px;">';
+                
+                if (stats.by_tool && Object.keys(stats.by_tool).length > 0) {
+                    detailsHtml += '<h3 style="margin-bottom: 10px;">By Tool</h3>';
+                    Object.entries(stats.by_tool).forEach(([tool, toolStats]) => {
+                        const successRate = (toolStats.successful / toolStats.total * 100).toFixed(1);
+                        detailsHtml += `
+                            <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee;">
+                                <span>${tool}</span>
+                                <span>${toolStats.total} total, ${toolStats.successful} successful (${successRate}%)</span>
+                            </div>
+                        `;
+                    });
+                }
+                
+                if (stats.by_hook && Object.keys(stats.by_hook).length > 0) {
+                    detailsHtml += '<h3 style="margin: 20px 0 10px 0;">By Hook</h3>';
+                    Object.entries(stats.by_hook).forEach(([hook, hookStats]) => {
+                        const successRate = (hookStats.successful / hookStats.total * 100).toFixed(1);
+                        detailsHtml += `
+                            <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee;">
+                                <span>${hook}</span>
+                                <span>${hookStats.total} total, ${hookStats.successful} successful (${successRate}%)</span>
+                            </div>
+                        `;
+                    });
+                }
+                
+                detailsHtml += '</div>';
+                statsContainer.innerHTML += detailsHtml;
+                
+            } catch (error) {
+                const statsContainer = document.getElementById('stats');
+                statsContainer.innerHTML = `<div class="error">Error loading statistics: ${error.message}</div>`;
+            }
+        }
+        
+        async function loadHistory() {
+            try {
+                const historyContent = document.getElementById('history-content');
+                historyContent.innerHTML = '<div class="loading">Loading history...</div>';
+                
+                const history = await fetchHooksData('/hooks/executed', {
+                    session_id: document.getElementById('session-id').value,
+                    tool_name: document.getElementById('tool-name').value,
+                    hook_name: document.getElementById('hook-name').value,
+                    hook_type: document.getElementById('hook-type').value,
+                    success: document.getElementById('success').value,
+                    hours: document.getElementById('time-range').value,
+                    limit: 50
+                });
+                
+                currentData = history;
+                
+                if (history.entries.length === 0) {
+                    historyContent.innerHTML = '<div class="empty">No hook executions found for the selected filters.</div>';
+                    return;
+                }
+                
+                let historyHtml = '';
+                history.entries.forEach(entry => {
+                    const timestamp = new Date(entry.timestamp);
+                    const timeStr = timestamp.toLocaleString();
+                    const badgeClass = entry.success ? 'badge-success' : 'badge-error';
+                    const badgeText = entry.success ? 'Success' : 'Failed';
+                    const hookTypeText = entry.hook_type === 'pre' ? 'Pre-tool' : 'Post-tool';
+                    
+                    historyHtml += `
+                        <div class="history-item">
+                            <div class="item-header">
+                                <div class="item-title">${entry.tool_name} → ${entry.hook_name}</div>
+                                <div>
+                                    <span class="item-badge ${badgeClass}">${badgeText}</span>
+                                    <span class="item-badge" style="background-color: #6c757d; margin-left: 5px;">${hookTypeText}</span>
+                                </div>
+                            </div>
+                            <div class="item-details">
+                                <div>Session: ${entry.session_id}</div>
+                                <div>Time: ${timeStr}</div>
+                                ${entry.duration_ms ? `<div>Duration: ${entry.duration_ms.toFixed(1)}ms</div>` : ''}
+                                ${entry.turn_id ? `<div>Turn: ${entry.turn_id}</div>` : ''}
+                                ${entry.trace_id ? `<div>Trace: ${entry.trace_id}</div>` : ''}
+                            </div>
+                            ${entry.message ? `<div class="item-message">${entry.message}</div>` : ''}
+                        </div>
+                    `;
+                });
+                
+                historyContent.innerHTML = historyHtml;
+                
+                // Add pagination info
+                historyContent.innerHTML += `
+                    <div style="padding: 15px; text-align: center; color: #666; border-top: 1px solid #e0e0e0;">
+                        Showing ${history.entries.length} of ${history.total} entries
+                    </div>
+                `;
+                
+            } catch (error) {
+                const historyContent = document.getElementById('history-content');
+                historyContent.innerHTML = `<div class="error">Error loading history: ${error.message}</div>`;
+            }
+        }
+        
+        async function refreshData() {
+            await Promise.all([loadStatistics(), loadHistory()]);
+        }
+        
+        async function clearHistory() {
+            if (!confirm('Are you sure you want to clear all hook execution history?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('http://localhost:8000/hooks/history?confirm=true', {
+                    method: 'DELETE'
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                alert(result.message);
+                refreshData();
+            } catch (error) {
+                alert(`Error clearing history: ${error.message}`);
+            }
+        }
+        
+        // Auto-refresh every 30 seconds
+        setInterval(refreshData, 30000);
+        
+        // Initial load
+        document.addEventListener('DOMContentLoaded', refreshData);
+        
+        // Add event listeners for filter changes
+        ['session-id', 'tool-name', 'hook-name', 'hook-type', 'success', 'time-range'].forEach(id => {
+            document.getElementById(id).addEventListener('change', refreshData);
+        });
+    </script>
+</body>
+</html>

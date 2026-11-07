@@ -16,7 +16,14 @@ from app.api.memory import router as memory_router
 from app.api.metrics import router as metrics_router
 from app.api.middleware import install_middleware
 from app.api.sessions import router as sessions_router
+from app.api.skills import router as skills_router
+from app.api.sqlite_store import router as sqlite_store_router
 from app.api.workspace import router as workspace_router
+
+# Import UI routers
+from app.ui.branch_manager_ui import router as branch_manager_ui_router
+from app.ui.hooks_ui import router as hooks_ui_router
+from app.ui.skills_ui import router as skills_ui_router
 from app.core.logging_setup import (
     configure_cli_logging,
     install_file_logger,
@@ -137,8 +144,15 @@ app.include_router(sessions_router)
 app.include_router(learn_router)
 app.include_router(memory_router)
 app.include_router(metrics_router)
+app.include_router(skills_router)
 app.include_router(workspace_router)
 app.include_router(health_router)
+app.include_router(sqlite_store_router)
+
+# UI routers
+app.include_router(branch_manager_ui_router)
+app.include_router(hooks_ui_router)
+app.include_router(skills_ui_router)
 
 
 def main() -> None:

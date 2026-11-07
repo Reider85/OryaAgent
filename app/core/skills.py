@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.hooks import get_hook_registry
+from app.core.sqlite_store import get_sqlite_store
 from app.core.tools import get_tools
 
 logger = logging.getLogger(__name__)
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 class Skill:
     """Represents a skill defined in YAML configuration."""
 
-    def __init__(self, name: str, config: dict[str, Any]):
+    def __init__(self, name: str, config: dict[str, Any], is_active: bool = True):
         self.name = name
         self.config = config
         self.description = config.get("description", "")
@@ -29,16 +30,34 @@ class Skill:
         self.category = config.get("category", "general")
         self.tags = config.get("tags", [])
         self.metadata = config.get("metadata", {})
+        self.is_active = is_active
+        self._store_metadata = False
 
     def __repr__(self):
-        return f"Skill(name='{self.name}', version='{self.version}')"
+        return f"Skill(name='{self.name}', version='{self.version}', active={self.is_active})"
 
-    @property
-    def is_active(self) -> bool:
-        """Check if the skill is active."""
-        # For now, all skills are active by default
-        # In a real implementation, this would check activation state
-        return getattr(self, '_is_active', True)
+    async def save_metadata(self):
+        """Save skill metadata to SQLite store."""
+        if not self._store_metadata:
+            return
+            
+        store = get_sqlite_store()
+        skill_data = {
+            "name": self.name,
+            "description": self.description,
+            "version": self.version,
+            "author": self.author,
+            "category": self.category,
+            "tags": self.tags,
+            "tools": self.tools,
+            "hooks": self.hooks,
+            "dependencies": self.dependencies,
+            "metadata": self.metadata,
+            "is_active": self.is_active,
+            "validation_status": "valid" if self.is_valid else "unknown",
+        }
+        
+        await store.add_skill_metadata(skill_data)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert skill to dictionary representation."""
@@ -53,7 +72,14 @@ class Skill:
             "category": self.category,
             "tags": self.tags,
             "metadata": self.metadata,
+            "is_active": self.is_active,
         }
+
+    @property
+    def is_valid(self) -> bool:
+        """Check if the skill configuration is valid."""
+        # Basic validation - in a real implementation, this would be more thorough
+        return bool(self.name and self.description)
 
 
 class SkillRegistry:
@@ -64,6 +90,33 @@ class SkillRegistry:
         self._skill_paths: dict[str, Path] = {}
         self._hook_registry = get_hook_registry()
         self._skills_dir = Path(__file__).parent.parent / "skills"
+        self._store = get_sqlite_store()
+
+    async def _load_skills_from_store(self):
+        """Load skills metadata from SQLite store."""
+        try:
+            skills_metadata = await self._store.get_skills_metadata()
+            for metadata in skills_metadata:
+                # Create skill from metadata
+                skill = Skill(
+                    name=metadata["name"],
+                    config={
+                        "description": metadata["description"],
+                        "version": metadata["version"],
+                        "author": metadata["author"],
+                        "tools": metadata["tools"],
+                        "hooks": metadata["hooks"],
+                        "dependencies": metadata["dependencies"],
+                        "category": metadata["category"],
+                        "tags": metadata["tags"],
+                        "metadata": metadata["metadata"],
+                    },
+                    is_active=metadata["is_active"],
+                )
+                skill._store_metadata = True
+                self.register_skill(skill)
+        except Exception as e:
+            logger.warning(f"Failed to load skills from store: {e}")
 
     def register_skill(self, skill: Skill, path: Path | None = None) -> None:
         """Register a skill in the registry."""
@@ -100,8 +153,11 @@ class SkillRegistry:
         """Get skills by tag."""
         return [skill for skill in self._skills.values() if tag in skill.tags]
 
-    def load_skills_from_directory(self, directory: str | Path | None = None) -> None:
+    async def load_skills_from_directory(self, directory: str | Path | None = None) -> None:
         """Load all skills from a directory containing YAML files."""
+        # First load from store
+        await self._load_skills_from_store()
+        
         skills_dir = Path(directory) if directory else self._skills_dir
 
         if not skills_dir.exists():
@@ -112,7 +168,9 @@ class SkillRegistry:
 
         for yaml_file in skills_dir.glob("*.yaml"):
             try:
-                self.load_skill_from_yaml(yaml_file)
+                skill = self.load_skill_from_yaml(yaml_file)
+                # Save to store
+                await skill.save_metadata()
             except Exception as e:
                 logger.error(f"Failed to load skill from {yaml_file}: {e}")
 
@@ -131,17 +189,23 @@ class SkillRegistry:
             raise ValueError(f"Invalid skill file: {yaml_path} - missing 'name' field")
 
         skill = Skill(config["name"], config)
+        skill._store_metadata = True
         self.register_skill(skill, yaml_path)
         return skill
 
-    def activate_skill(self, skill_name: str) -> list[str]:
+    async def activate_skill(self, skill_name: str) -> list[str]:
         """Activate a skill by registering its tools and hooks."""
         skill = self.get_skill(skill_name)
         if not skill:
             raise ValueError(f"Skill not found: {skill_name}")
 
         # Set the skill as active
-        skill._is_active = True
+        skill.is_active = True
+        
+        # Update in store
+        if skill._store_metadata:
+            await self._store.update_skill_activation(skill_name, True)
+            await skill.save_metadata()
 
         activated_tools = []
         activated_hooks = []
@@ -173,14 +237,19 @@ class SkillRegistry:
         )
         return activated_tools + activated_hooks
 
-    def deactivate_skill(self, skill_name: str) -> list[str]:
+    async def deactivate_skill(self, skill_name: str) -> list[str]:
         """Deactivate a skill by unregistering its tools and hooks."""
         skill = self.get_skill(skill_name)
         if not skill:
             raise ValueError(f"Skill not found: {skill_name}")
 
         # Set the skill as inactive
-        skill._is_active = False
+        skill.is_active = False
+        
+        # Update in store
+        if skill._store_metadata:
+            await self._store.update_skill_activation(skill_name, False)
+            await skill.save_metadata()
 
         deactivated_tools = []
         deactivated_hooks = []
@@ -200,7 +269,7 @@ class SkillRegistry:
         )
         return deactivated_tools + deactivated_hooks
 
-    def validate_skill(self, skill_name: str) -> dict[str, Any]:
+    async def validate_skill(self, skill_name: str) -> dict[str, Any]:
         """Validate a skill configuration."""
         skill = self.get_skill(skill_name)
         if not skill:
@@ -221,30 +290,45 @@ class SkillRegistry:
             # In a real implementation, we would check if the hook exists
             pass
 
+        is_valid = len(issues) == 0
+        validation_status = "valid" if is_valid else "invalid"
+        
+        # Update validation status in store
+        if skill._store_metadata:
+            await self._store.update_skill_validation_status(skill_name, validation_status)
+            await skill.save_metadata()
+
         if issues:
-            return {"valid": False, "issues": issues}
+            return {"valid": False, "issues": issues, "validation_status": validation_status}
 
-        return {"valid": True, "message": "Skill configuration is valid"}
+        return {"valid": True, "message": "Skill configuration is valid", "validation_status": validation_status}
 
-    def get_skill_dependencies(self, skill_name: str) -> list[str]:
+    async def get_skill_dependencies(self, skill_name: str) -> list[str]:
         """Get the dependency tree for a skill."""
         skill = self.get_skill(skill_name)
         if not skill:
             return []
 
-        dependencies = []
-        for dep in skill.dependencies:
-            dependencies.append(dep)
-            dependencies.extend(self.get_skill_dependencies(dep))
+        # Try to get from store first
+        try:
+            store = get_sqlite_store()
+            deps = await store.get_skill_dependencies(skill_name)
+            return [dep["dependency_name"] for dep in deps]
+        except Exception:
+            # Fallback to in-memory calculation
+            dependencies = []
+            for dep in skill.dependencies:
+                dependencies.append(dep)
+                dependencies.extend(await self.get_skill_dependencies(dep))
 
-        return dependencies
+            return dependencies
 
     def resolve_skill_dependencies(self, skill_name: str) -> list[str]:
         """Resolve skill dependencies in order."""
         visited = set()
         resolved = []
 
-        def visit(skill_name: str):
+        async def visit(skill_name: str):
             if skill_name in visited:
                 return
             visited.add(skill_name)
@@ -252,10 +336,12 @@ class SkillRegistry:
             skill = self.get_skill(skill_name)
             if skill:
                 for dep in skill.dependencies:
-                    visit(dep)
+                    await visit(dep)
                 resolved.append(skill_name)
 
-        visit(skill_name)
+        # Run async function
+        import asyncio
+        asyncio.run(visit(skill_name))
         return resolved
 
     def export_skills(self, output_file: str | Path) -> None:
@@ -296,24 +382,24 @@ class SkillRegistry:
 _skill_registry = None
 
 
-def get_skill_registry() -> SkillRegistry:
+async def get_skill_registry() -> SkillRegistry:
     """Get the global skill registry instance."""
     global _skill_registry
     if _skill_registry is None:
         _skill_registry = SkillRegistry()
         # Load skills from the skills directory
-        _skill_registry.load_skills_from_directory()
+        await _skill_registry.load_skills_from_directory()
     return _skill_registry
 
 
-def initialize_skill_registry(directory: str | Path | None = None) -> SkillRegistry:
+async def initialize_skill_registry(directory: str | Path | None = None) -> SkillRegistry:
     """Initialize the skill registry with optional custom directory."""
     global _skill_registry
     _skill_registry = SkillRegistry()
     if directory:
-        _skill_registry.load_skills_from_directory(directory)
+        await _skill_registry.load_skills_from_directory(directory)
     else:
-        _skill_registry.load_skills_from_directory()
+        await _skill_registry.load_skills_from_directory()
     return _skill_registry
 
 
@@ -328,16 +414,25 @@ def get_skill(skill_name: str) -> Skill | None:
     return get_skill_registry().get_skill(skill_name)
 
 
-def activate_skill(skill_name: str) -> list[str]:
+async def activate_skill(skill_name: str) -> list[str]:
     """Activate a skill."""
-    return get_skill_registry().activate_skill(skill_name)
+    registry = get_skill_registry()
+    return await registry.activate_skill(skill_name)
 
 
-def deactivate_skill(skill_name: str) -> list[str]:
+async def deactivate_skill(skill_name: str) -> list[str]:
     """Deactivate a skill."""
-    return get_skill_registry().deactivate_skill(skill_name)
+    registry = get_skill_registry()
+    return await registry.deactivate_skill(skill_name)
 
 
-def validate_skill(skill_name: str) -> dict[str, Any]:
+async def validate_skill(skill_name: str) -> dict[str, Any]:
     """Validate a skill configuration."""
-    return get_skill_registry().validate_skill(skill_name)
+    registry = get_skill_registry()
+    return await registry.validate_skill(skill_name)
+
+
+async def get_skill_dependencies(skill_name: str) -> list[str]:
+    """Get skill dependencies."""
+    registry = get_skill_registry()
+    return await registry.get_skill_dependencies(skill_name)

@@ -52,7 +52,7 @@ class OriaHSConfig:
 
 
 class OriaHSMCPServer:
-    """MCP server wrapping OriaHS semantic search capabilities."""
+    """MCP server wrapping OriaHS semantic search and indexing capabilities."""
 
     def __init__(self, config: OriaHSConfig):
         self.config = config
@@ -90,7 +90,40 @@ class OriaHSMCPServer:
                         },
                         "required": ["query"],
                     },
-                )
+                ),
+                Tool(
+                    name="index_file",
+                    description="Index a single file in the codebase",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "file_path": {
+                                "type": "string",
+                                "description": "Path to the file to index",
+                            },
+                        },
+                        "required": ["file_path"],
+                    },
+                ),
+                Tool(
+                    name="index_directory",
+                    description="Index a directory with optional recursive indexing",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "directory_path": {
+                                "type": "string",
+                                "description": "Path to the directory to index",
+                            },
+                            "recursive": {
+                                "type": "boolean",
+                                "default": False,
+                                "description": "Index subdirectories recursively",
+                            },
+                        },
+                        "required": ["directory_path"],
+                    },
+                ),
             ]
         )
 
@@ -102,6 +135,10 @@ class OriaHSMCPServer:
 
             if tool_name == "hybrid_search":
                 return await self._call_hybrid_search(arguments)
+            elif tool_name == "index_file":
+                return await self._call_index_file(arguments)
+            elif tool_name == "index_directory":
+                return await self._call_index_directory(arguments)
             else:
                 raise ValueError(f"Unknown tool: {tool_name}")
 
@@ -168,6 +205,116 @@ class OriaHSMCPServer:
             raise ValueError(error_msg)
         except Exception as e:
             raise ValueError(f"Search failed: {str(e)}")
+
+    async def _call_index_file(self, arguments: dict[str, Any]) -> CallToolResult:
+        """Execute file indexing through OriaHS."""
+        file_path = arguments.get("file_path", "")
+        
+        if not file_path:
+            raise ValueError("File path is required")
+        
+        try:
+            # Convert to absolute path and validate
+            abs_path = Path(file_path).resolve()
+            if not abs_path.exists():
+                raise ValueError(f"File does not exist: {file_path}")
+            
+            if not abs_path.is_file():
+                raise ValueError(f"Path is not a file: {file_path}")
+            
+            # Prepare indexing request
+            index_request = {
+                "file_path": str(abs_path),
+                "operation": "index",
+            }
+            
+            # Execute indexing
+            response = await self.config._http_client.post(
+                "/index", json=index_request
+            )
+            response.raise_for_status()
+            result = response.json()
+            
+            # Format result for MCP
+            formatted_result = TextContent(
+                type="text",
+                text=json.dumps(
+                    {
+                        "path": str(abs_path),
+                        "status": "success",
+                        "message": result.get("message", "File indexed successfully"),
+                        "indexed_at": result.get("indexed_at"),
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+            
+            return CallToolResult(content=[formatted_result])
+            
+        except httpx.HTTPStatusError as e:
+            error_msg = f"OriaHS API error: {e.response.status_code}"
+            if e.response.text:
+                error_msg += f" - {e.response.text}"
+            raise ValueError(error_msg)
+        except Exception as e:
+            raise ValueError(f"File indexing failed: {str(e)}")
+
+    async def _call_index_directory(self, arguments: dict[str, Any]) -> CallToolResult:
+        """Execute directory indexing through OriaHS."""
+        directory_path = arguments.get("directory_path", "")
+        recursive = arguments.get("recursive", False)
+        
+        if not directory_path:
+            raise ValueError("Directory path is required")
+        
+        try:
+            # Convert to absolute path and validate
+            abs_path = Path(directory_path).resolve()
+            if not abs_path.exists():
+                raise ValueError(f"Directory does not exist: {directory_path}")
+            
+            if not abs_path.is_dir():
+                raise ValueError(f"Path is not a directory: {directory_path}")
+            
+            # Prepare indexing request
+            index_request = {
+                "directory_path": str(abs_path),
+                "recursive": recursive,
+                "operation": "index",
+            }
+            
+            # Execute indexing
+            response = await self.config._http_client.post(
+                "/index", json=index_request
+            )
+            response.raise_for_status()
+            result = response.json()
+            
+            # Format result for MCP
+            formatted_result = TextContent(
+                type="text",
+                text=json.dumps(
+                    {
+                        "directory": str(abs_path),
+                        "status": "success",
+                        "recursive": recursive,
+                        "message": result.get("message", "Directory indexed successfully"),
+                        "indexed_files": result.get("indexed_files", 0),
+                        "indexed_at": result.get("indexed_at"),
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+            
+            return CallToolResult(content=[formatted_result])
+            
+        except httpx.HTTPStatusError as e:
+            error_msg = f"OriaHS API error: {e.response.status_code}"
+            if e.response.text:
+                error_msg += f" - {e.response.text}"
+            raise ValueError(error_msg)
+        except Exception as e:
+            raise ValueError(f"Directory indexing failed: {str(e)}")
 
     async def health_check(self) -> bool:
         """Check if OriaHS backend is healthy."""
