@@ -6,20 +6,34 @@ import { Message, WebSocketManager } from './WebSocketProvider'
 
 interface ChatInterfaceProps {
   websocket?: WebSocketManager
+  currentSessionId?: string
+  onSessionChange?: (sessionId: string) => void
 }
 
-export function ChatInterface({ websocket: propWebSocket }: ChatInterfaceProps) {
+export function ChatInterface({ 
+  websocket: propWebSocket, 
+  currentSessionId = 'default-session',
+  onSessionChange 
+}: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [inputValue, setInputValue] = useState('')
   const [isConnected, setIsConnected] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
-  const [currentSessionId, setCurrentSessionId] = useState<string>('default-session')
+  const [internalSessionId, setInternalSessionId] = useState<string>(currentSessionId)
   
   const websocket = propWebSocket || new WebSocketManager()
 
   useEffect(() => {
+    // Update internal session ID when prop changes
+    if (currentSessionId !== internalSessionId) {
+      setInternalSessionId(currentSessionId)
+      setMessages([]) // Clear messages when switching sessions
+    }
+  }, [currentSessionId, internalSessionId])
+
+  useEffect(() => {
     // Initialize WebSocket connection
-    websocket.connect(currentSessionId)
+    websocket.connect(internalSessionId)
     setIsConnected(true)
 
     // Listen for messages
@@ -36,7 +50,7 @@ export function ChatInterface({ websocket: propWebSocket }: ChatInterfaceProps) 
     return () => {
       websocket.disconnect()
     }
-  }, [websocket, currentSessionId])
+  }, [websocket, internalSessionId])
 
   const handleSendMessage = async () => {
     if (!inputValue.trim() || isLoading) return
@@ -83,7 +97,7 @@ export function ChatInterface({ websocket: propWebSocket }: ChatInterfaceProps) 
 
   const createNewSession = async () => {
     try {
-      const response = await fetch('/api/sessions', {
+      const response = await fetch('/web/api/sessions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -92,7 +106,8 @@ export function ChatInterface({ websocket: propWebSocket }: ChatInterfaceProps) 
       
       if (response.ok) {
         const data = await response.json()
-        setCurrentSessionId(data.id)
+        setInternalSessionId(data.id)
+        onSessionChange?.(data.id)
         setMessages([]) // Clear messages for new session
       }
     } catch (error) {
