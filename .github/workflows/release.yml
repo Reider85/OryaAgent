@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: "Mark as prerelease"
+        default: "true"
+
+permissions:
+  contents: write   # нужно для создания тегов и релизов
+
+jobs:
+  prerelease-on-push:
+    name: Prerelease (push to main)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # нужна история для changelog
+
+      - name: Read version from pyproject.toml
+        id: ver
+        run: |
+          VERSION=$(grep -m1 '^version' pyproject.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          TAG="v${VERSION}-dev.${GITHUB_RUN_NUMBER}+${SHORT_SHA}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Resolved tag: $TAG"
+
+      - name: Create prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: "Pre-release ${{ steps.ver.outputs.tag }}"
+          body: |
+            Automated prerelease from commit ${{ github.sha }}
+
+            Branch: ${{ github.ref_name }}
+            Commit: ${{ github.event.head_commit.message }}
+
+            Full changelog: https://github.com/${{ github.repository }}/compare/...${{ github.event.before }}
+          prerelease: true
+          generate_release_notes: true
+          make_latest: "false"
+
+  release-on-tag:
+    name: Release (tag v*.*.*)
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Build dist
+        run: |
+          uv sync --frozen
+          uv run python -m build
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+          generate_release_notes: true   # auto-changelog из PR/commit titles
+          make_latest: "true"
+          draft: false
+          body: |
+            ## OryaAgent ${{ github.ref_name }}
+
+            ### Highlights
+            (заполни вручную или доверь auto-generated notes ниже)
+
+            ### Installation
+            ```bash
+            uv tool install orya-agent==${{ github.ref_name }}
+            # или
+            pip install orya-agent==${{ github.ref_name }}
+            ```
+
+            ---
