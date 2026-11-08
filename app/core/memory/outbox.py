@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 class MemoryOperationType(Enum):
     """Types of memory operations."""
+
     ADD = "add"
     UPDATE = "update"
     DELETE = "delete"
@@ -31,6 +32,7 @@ class MemoryOperationType(Enum):
 
 class MemoryOperationStatus(Enum):
     """Status of memory operations."""
+
     PENDING = "pending"
     PROCESSING = "processing"
     COMPLETED = "completed"
@@ -50,7 +52,9 @@ class MemoryOperation:
         max_retries: int = 3,
         retry_delay: float = 1.0,
     ):
-        self.operation_id = operation_id or f"op_{int(time.time() * 1000)}_{session_id[:8]}"
+        self.operation_id = (
+            operation_id or f"op_{int(time.time() * 1000)}_{session_id[:8]}"
+        )
         self.operation_type = operation_type
         self.session_id = session_id
         self.data = data
@@ -75,7 +79,9 @@ class MemoryOperation:
             "retry_delay": self.retry_delay,
             "retry_count": self.retry_count,
             "created_at": self.created_at.isoformat(),
-            "processed_at": self.processed_at.isoformat() if self.processed_at else None,
+            "processed_at": self.processed_at.isoformat()
+            if self.processed_at
+            else None,
             "error_message": self.error_message,
             "result": self.result,
         }
@@ -95,7 +101,9 @@ class MemoryOperation:
         operation.retry_count = data.get("retry_count", 0)
         operation.created_at = datetime.fromisoformat(data["created_at"])
         operation.processed_at = (
-            datetime.fromisoformat(data["processed_at"]) if data.get("processed_at") else None
+            datetime.fromisoformat(data["processed_at"])
+            if data.get("processed_at")
+            else None
         )
         operation.error_message = data.get("error_message")
         operation.result = data.get("result")
@@ -152,21 +160,25 @@ class MemoryOutbox:
         except asyncio.QueueEmpty:
             return None
 
-    async def mark_operation_completed(self, operation: MemoryOperation, result: Any = None) -> None:
+    async def mark_operation_completed(
+        self, operation: MemoryOperation, result: Any = None
+    ) -> None:
         """Mark an operation as completed."""
         operation.status = MemoryOperationStatus.COMPLETED
         operation.processed_at = datetime.utcnow()
         operation.result = result
-        
+
         # Log completion
         logger.debug(f"Operation {operation.operation_id} completed")
 
-    async def mark_operation_failed(self, operation: MemoryOperation, error: str) -> None:
+    async def mark_operation_failed(
+        self, operation: MemoryOperation, error: str
+    ) -> None:
         """Mark an operation as failed."""
         operation.status = MemoryOperationStatus.FAILED
         operation.processed_at = datetime.utcnow()
         operation.error_message = error
-        
+
         # Log failure
         logger.error(f"Operation {operation.operation_id} failed: {error}")
 
@@ -182,12 +194,14 @@ class MemoryOutbox:
         operation.status = MemoryOperationStatus.RETRYING
         operation.processed_at = None
         operation.error_message = None
-        
+
         # Add back to queue with delay
         await asyncio.sleep(operation.retry_delay)
         try:
             self._queue.put_nowait(operation)
-            logger.info(f"Retrying operation {operation.operation_id} (attempt {operation.retry_count})")
+            logger.info(
+                f"Retrying operation {operation.operation_id} (attempt {operation.retry_count})"
+            )
             return True
         except asyncio.QueueFull:
             await self.mark_operation_failed(
@@ -195,7 +209,9 @@ class MemoryOutbox:
             )
             return False
 
-    async def drain_queue(self, batch_size: int = 10, max_wait_time: float = 5.0) -> None:
+    async def drain_queue(
+        self, batch_size: int = 10, max_wait_time: float = 5.0
+    ) -> None:
         """Process operations from the queue in batches."""
         if self._processing:
             return
@@ -209,7 +225,10 @@ class MemoryOutbox:
                 start_time = time.time()
 
                 # Collect a batch of operations
-                while len(batch) < batch_size and (time.time() - start_time) < max_wait_time:
+                while (
+                    len(batch) < batch_size
+                    and (time.time() - start_time) < max_wait_time
+                ):
                     operation = await self.get_operation()
                     if operation:
                         batch.append(operation)
@@ -254,7 +273,9 @@ class MemoryOutbox:
                         operation.data.get("new_metadata"),
                     )
                 elif operation.operation_type == MemoryOperationType.DELETE:
-                    result = await self._sqlite_store.forget_memory(operation.data["memory_id"])
+                    result = await self._sqlite_store.forget_memory(
+                        operation.data["memory_id"]
+                    )
                 elif operation.operation_type == MemoryOperationType.SEARCH:
                     result = await self._sqlite_store.search_memories(
                         operation.session_id,
@@ -263,19 +284,25 @@ class MemoryOutbox:
                         operation.data.get("offset", 0),
                     )
                 elif operation.operation_type == MemoryOperationType.EXPORT:
-                    result = await self._sqlite_store.export_memories(operation.session_id)
+                    result = await self._sqlite_store.export_memories(
+                        operation.session_id
+                    )
                 elif operation.operation_type == MemoryOperationType.IMPORT:
                     result = await self._sqlite_store.import_memories(
                         operation.session_id, operation.data["data"]
                     )
                 else:
-                    raise ValueError(f"Unknown operation type: {operation.operation_type}")
+                    raise ValueError(
+                        f"Unknown operation type: {operation.operation_type}"
+                    )
 
                 await self.mark_operation_completed(operation, result)
 
             except Exception as e:
-                logger.error(f"Error processing operation {operation.operation_id}: {e}")
-                
+                logger.error(
+                    f"Error processing operation {operation.operation_id}: {e}"
+                )
+
                 # Retry or mark as failed
                 if not await self.retry_operation(operation):
                     await self.mark_operation_failed(operation, str(e))
@@ -295,13 +322,11 @@ class MemoryOutbox:
         while not self._queue.empty():
             try:
                 operation = self._queue.get_nowait()
-                await self.mark_operation_failed(
-                    operation, "Operation cleared by user"
-                )
+                await self.mark_operation_failed(operation, "Operation cleared by user")
                 cleared_count += 1
             except asyncio.QueueEmpty:
                 break
-        
+
         logger.info(f"Cleared {cleared_count} operations from queue")
         return cleared_count
 
@@ -313,7 +338,7 @@ class MemoryOutbox:
                 await self._drain_task
             except asyncio.CancelledError:
                 pass
-        
+
         self._drain_task = None
         logger.info("Memory outbox drain worker stopped")
 
@@ -344,14 +369,16 @@ async def start_drain_worker(
 ) -> asyncio.Task:
     """Start the memory drain worker as a background task."""
     outbox = await get_memory_outbox()
-    
+
     if outbox._drain_task and not outbox._drain_task.done():
         return outbox._drain_task
 
     async def worker():
         while True:
             try:
-                await outbox.drain_queue(batch_size=batch_size, max_wait_time=max_wait_time)
+                await outbox.drain_queue(
+                    batch_size=batch_size, max_wait_time=max_wait_time
+                )
                 await asyncio.sleep(interval)
             except asyncio.CancelledError:
                 break

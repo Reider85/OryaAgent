@@ -80,7 +80,7 @@ class SQLiteStore:
         async with aiosqlite.connect(self.db_path) as db:
             # Enable WAL mode for better performance
             await db.execute("PRAGMA journal_mode=WAL")
-            
+
             # Create memories table
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS memories (
@@ -118,14 +118,14 @@ class SQLiteStore:
                     VALUES (new.id, new.session_id, new.content, new.metadata, new.rowid);
                 END
             """)
-            
+
             await db.execute("""
                 CREATE TRIGGER IF NOT EXISTS memories_ad 
                 AFTER DELETE ON memories BEGIN
                     DELETE FROM memories_fts WHERE id = old.id;
                 END
             """)
-            
+
             await db.execute("""
                 CREATE TRIGGER IF NOT EXISTS memories_au 
                 AFTER UPDATE ON memories BEGIN
@@ -136,9 +136,15 @@ class SQLiteStore:
             """)
 
             # Create indexes
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_memories_session_id ON memories(session_id)")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_memories_created_at ON memories(created_at)")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_memories_expires_at ON memories(expires_at)")
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_session_id ON memories(session_id)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_created_at ON memories(created_at)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_expires_at ON memories(expires_at)"
+            )
 
             # Create metadata table for additional information
             await db.execute("""
@@ -178,7 +184,7 @@ class SQLiteStore:
 
         memory_id = f"memory_{int(time.time() * 1000)}_{session_id[:8]}"
         expires_at = None
-        
+
         if expires_in_hours:
             expires_at = datetime.utcnow() + timedelta(hours=expires_in_hours)
 
@@ -191,7 +197,14 @@ class SQLiteStore:
                 INSERT INTO memories (id, session_id, content, metadata, expires_at, is_encrypted)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (memory_id, session_id, encrypted_content, metadata_json, expires_at, 1 if self._fernet else 0),
+                (
+                    memory_id,
+                    session_id,
+                    encrypted_content,
+                    metadata_json,
+                    expires_at,
+                    1 if self._fernet else 0,
+                ),
             )
             await db.commit()
 
@@ -213,7 +226,9 @@ class SQLiteStore:
                 return None
 
             content = self._decrypt_data(row[2])
-            metadata = eval(row[3]) if row[3] else {}  # eval is safe here as we control the input
+            metadata = (
+                eval(row[3]) if row[3] else {}
+            )  # eval is safe here as we control the input
 
             return {
                 "id": row[0],
@@ -256,16 +271,18 @@ class SQLiteStore:
                 content = self._decrypt_data(row[2])
                 metadata = eval(row[3]) if row[3] else {}
 
-                results.append({
-                    "id": row[0],
-                    "session_id": row[1],
-                    "content": content,
-                    "metadata": metadata,
-                    "created_at": row[4],
-                    "updated_at": row[5],
-                    "expires_at": row[6],
-                    "relevance_score": row[7],
-                })
+                results.append(
+                    {
+                        "id": row[0],
+                        "session_id": row[1],
+                        "content": content,
+                        "metadata": metadata,
+                        "created_at": row[4],
+                        "updated_at": row[5],
+                        "expires_at": row[6],
+                        "relevance_score": row[7],
+                    }
+                )
 
             return results
 
@@ -332,22 +349,24 @@ class SQLiteStore:
                 content = self._decrypt_data(row[2])
                 metadata = eval(row[3]) if row[3] else {}
 
-                results.append({
-                    "id": row[0],
-                    "session_id": row[1],
-                    "content": content,
-                    "metadata": metadata,
-                    "created_at": row[4],
-                    "updated_at": row[5],
-                    "expires_at": row[6],
-                })
+                results.append(
+                    {
+                        "id": row[0],
+                        "session_id": row[1],
+                        "content": content,
+                        "metadata": metadata,
+                        "created_at": row[4],
+                        "updated_at": row[5],
+                        "expires_at": row[6],
+                    }
+                )
 
             return results
 
     async def export_memories(self, session_id: str) -> Dict[str, Any]:
         """Export all memories for a session."""
         memories = await self.list_memories(session_id, limit=10000)
-        
+
         return {
             "session_id": session_id,
             "exported_at": datetime.utcnow().isoformat(),
@@ -370,7 +389,9 @@ class SQLiteStore:
                 )
                 imported_count += 1
             except Exception as e:
-                logger.warning(f"Failed to import memory {memory.get('id', 'unknown')}: {e}")
+                logger.warning(
+                    f"Failed to import memory {memory.get('id', 'unknown')}: {e}"
+                )
 
         return imported_count
 
@@ -398,19 +419,22 @@ class SQLiteStore:
 
             # Get oldest memory
             cursor = await db.execute(
-                "SELECT MIN(created_at) FROM memories WHERE session_id = ?", (session_id,)
+                "SELECT MIN(created_at) FROM memories WHERE session_id = ?",
+                (session_id,),
             )
             oldest = await cursor.fetchone()
 
             # Get newest memory
             cursor = await db.execute(
-                "SELECT MAX(created_at) FROM memories WHERE session_id = ?", (session_id,)
+                "SELECT MAX(created_at) FROM memories WHERE session_id = ?",
+                (session_id,),
             )
             newest = await cursor.fetchone()
 
             # Get average content length
             cursor = await db.execute(
-                "SELECT AVG(LENGTH(content)) FROM memories WHERE session_id = ?", (session_id,)
+                "SELECT AVG(LENGTH(content)) FROM memories WHERE session_id = ?",
+                (session_id,),
             )
             avg_length = await cursor.fetchone()
 
@@ -457,7 +481,9 @@ class SQLiteStore:
             )
             await db.commit()
 
-    async def update_skill_validation_status(self, skill_name: str, status: str) -> None:
+    async def update_skill_validation_status(
+        self, skill_name: str, status: str
+    ) -> None:
         """Update skill validation status."""
         await self.initialize()
 
@@ -483,7 +509,7 @@ class SQLiteStore:
             cursor = await db.execute(
                 "SELECT key, value FROM memory_metadata WHERE key LIKE 'skill:%' AND NOT key LIKE '%:active' AND NOT key LIKE '%:validation'"
             )
-            
+
             skills = []
             for row in await cursor.fetchall():
                 try:
@@ -506,7 +532,7 @@ class SQLiteStore:
                 AND value LIKE '%dependencies%'
                 """
             )
-            
+
             dependencies = []
             for row in await cursor.fetchall():
                 try:
@@ -535,7 +561,9 @@ async def get_sqlite_store() -> SQLiteStore:
     return _sqlite_store
 
 
-async def initialize_sqlite_store(db_path: str | Path = None, encryption_key: str = None) -> SQLiteStore:
+async def initialize_sqlite_store(
+    db_path: str | Path = None, encryption_key: str = None
+) -> SQLiteStore:
     """Initialize the SQLite store with custom parameters."""
     global _sqlite_store
     _sqlite_store = SQLiteStore(db_path=db_path, encryption_key=encryption_key)

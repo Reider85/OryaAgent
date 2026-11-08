@@ -24,6 +24,7 @@ router = APIRouter(prefix="/ui/api", tags=["nextjs-web-ui"])
 
 class StreamingMessage(BaseModel):
     """Streaming message model."""
+
     type: str
     data: Any
     timestamp: str
@@ -65,7 +66,9 @@ class ConnectionManager:
                 except Exception as e:
                     logger.error(f"Failed to send message to WebSocket: {e}")
 
-    async def stream_to_session(self, session_id: str, stream_data: List[Dict[str, Any]]):
+    async def stream_to_session(
+        self, session_id: str, stream_data: List[Dict[str, Any]]
+    ):
         """Stream data to all connections in a session."""
         if session_id in self.session_streams:
             for data in stream_data:
@@ -98,7 +101,7 @@ class StreamingManager:
         try:
             # Create a new turn for the stream
             turn_id = str(uuid.uuid4())
-            
+
             # Initialize turn with user message
             turn_data = {
                 "id": turn_id,
@@ -118,10 +121,10 @@ class StreamingManager:
                     "stream_id": str(uuid.uuid4()),
                 },
             }
-            
+
             # Save turn
             await self.session_manager.create_turn(turn_data)
-            
+
             # Send stream start message
             start_message = StreamingMessage(
                 type="stream_start",
@@ -135,7 +138,7 @@ class StreamingManager:
                 turn_id=turn_id,
             )
             await connection_manager.send_message(start_message, session_id)
-            
+
             return turn_id
 
         except Exception as e:
@@ -157,12 +160,18 @@ class StreamingManager:
         except Exception as e:
             logger.error(f"Failed to stream token: {e}")
 
-    async def stream_tool_start(self, session_id: str, turn_id: str, tool_name: str, arguments: Dict[str, Any]):
+    async def stream_tool_start(
+        self, session_id: str, turn_id: str, tool_name: str, arguments: Dict[str, Any]
+    ):
         """Stream tool start event."""
         try:
             message = StreamingMessage(
                 type="tool_start",
-                data={"tool_name": tool_name, "arguments": arguments, "turn_id": turn_id},
+                data={
+                    "tool_name": tool_name,
+                    "arguments": arguments,
+                    "turn_id": turn_id,
+                },
                 timestamp=datetime.utcnow().isoformat(),
                 session_id=session_id,
                 turn_id=turn_id,
@@ -172,7 +181,9 @@ class StreamingManager:
         except Exception as e:
             logger.error(f"Failed to stream tool start: {e}")
 
-    async def stream_tool_end(self, session_id: str, turn_id: str, tool_name: str, result: Any):
+    async def stream_tool_end(
+        self, session_id: str, turn_id: str, tool_name: str, result: Any
+    ):
         """Stream tool end event."""
         try:
             message = StreamingMessage(
@@ -241,14 +252,19 @@ class StreamingManager:
         """Get list of active streams."""
         try:
             active_streams = []
-            for session_id, connections in connection_manager.active_connections.items():
+            for (
+                session_id,
+                connections,
+            ) in connection_manager.active_connections.items():
                 stream_info = {
                     "session_id": session_id,
                     "connection_count": len(connections),
-                    "stream_queue_size": len(connection_manager.session_streams.get(session_id, [])),
+                    "stream_queue_size": len(
+                        connection_manager.session_streams.get(session_id, [])
+                    ),
                 }
                 active_streams.append(stream_info)
-            
+
             return active_streams
 
         except Exception as e:
@@ -277,12 +293,14 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
             # Wait for incoming messages
             data = await websocket.receive_text()
             message = json.loads(data)
-            
+
             # Handle different message types
             if message.get("type") == "start_stream":
                 streaming_manager = get_streaming_manager()
-                turn_id = await streaming_manager.start_stream(session_id, message["data"]["message"])
-                
+                turn_id = await streaming_manager.start_stream(
+                    session_id, message["data"]["message"]
+                )
+
                 # Send confirmation
                 response = {
                     "type": "stream_confirmed",
@@ -290,11 +308,11 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                     "timestamp": datetime.utcnow().isoformat(),
                 }
                 await websocket.send_text(json.dumps(response))
-            
+
             elif message.get("type") == "stream_data":
                 # Handle streaming data from client
                 pass
-            
+
     except WebSocketDisconnect:
         connection_manager.disconnect(websocket, session_id)
 
@@ -316,44 +334,34 @@ async def stream_token(session_id: str, turn_id: str, token: Dict[str, str]):
 
 
 @router.post("/stream/{session_id}/{turn_id}/tool/start")
-async def stream_tool_start(
-    session_id: str,
-    turn_id: str,
-    tool_data: Dict[str, Any]
-):
+async def stream_tool_start(session_id: str, turn_id: str, tool_data: Dict[str, Any]):
     """Stream tool start event."""
     streaming_manager = get_streaming_manager()
     await streaming_manager.stream_tool_start(
-        session_id,
-        turn_id,
-        tool_data["tool_name"],
-        tool_data["arguments"]
+        session_id, turn_id, tool_data["tool_name"], tool_data["arguments"]
     )
     return {"status": "success"}
 
 
 @router.post("/stream/{session_id}/{turn_id}/tool/end")
-async def stream_tool_end(
-    session_id: str,
-    turn_id: str,
-    tool_data: Dict[str, Any]
-):
+async def stream_tool_end(session_id: str, turn_id: str, tool_data: Dict[str, Any]):
     """Stream tool end event."""
     streaming_manager = get_streaming_manager()
     await streaming_manager.stream_tool_end(
-        session_id,
-        turn_id,
-        tool_data["tool_name"],
-        tool_data["result"]
+        session_id, turn_id, tool_data["tool_name"], tool_data["result"]
     )
     return {"status": "success"}
 
 
 @router.post("/stream/{session_id}/{turn_id}/interrupt")
-async def stream_interrupt(session_id: str, turn_id: str, interrupt_data: Dict[str, str]):
+async def stream_interrupt(
+    session_id: str, turn_id: str, interrupt_data: Dict[str, str]
+):
     """Stream interrupt event."""
     streaming_manager = get_streaming_manager()
-    await streaming_manager.stream_interrupt(session_id, turn_id, interrupt_data["reason"])
+    await streaming_manager.stream_interrupt(
+        session_id, turn_id, interrupt_data["reason"]
+    )
     return {"status": "success"}
 
 
@@ -369,7 +377,9 @@ async def stream_error(session_id: str, turn_id: str, error_data: Dict[str, str]
 async def stream_complete(session_id: str, turn_id: str, complete_data: Dict[str, str]):
     """Stream complete event."""
     streaming_manager = get_streaming_manager()
-    await streaming_manager.stream_complete(session_id, turn_id, complete_data["response"])
+    await streaming_manager.stream_complete(
+        session_id, turn_id, complete_data["response"]
+    )
     return {"status": "success"}
 
 

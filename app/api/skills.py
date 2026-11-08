@@ -14,6 +14,7 @@ router = APIRouter(prefix="/skills", tags=["skills"])
 
 class SkillInfo(BaseModel):
     """Skill information model."""
+
     name: str
     description: str
     version: str
@@ -28,6 +29,7 @@ class SkillInfo(BaseModel):
 
 class SkillActivationRequest(BaseModel):
     """Skill activation request model."""
+
     skill_name: str
     activate: bool = True
 
@@ -48,32 +50,32 @@ async def list_tags():
 
 @router.get("/search", response_model=List[SkillInfo])
 async def search_skills(
-    query: str,
-    category: Optional[str] = None,
-    tag: Optional[str] = None
+    query: str, category: Optional[str] = None, tag: Optional[str] = None
 ):
     """Search for skills by name, description, or tags."""
     registry = get_skill_registry()
     all_skills = registry.list_skills()
-    
+
     # Filter by category if specified
     if category:
         all_skills = registry.get_skills_by_category(category)
-    
+
     # Filter by tag if specified
     if tag:
         all_skills = registry.get_skills_by_tag(tag)
-    
+
     # Simple text search
     query_lower = query.lower()
     matching_skills = []
-    
+
     for skill in all_skills:
-        if (query_lower in skill.name.lower() or 
-            query_lower in skill.description.lower() or
-            any(query_lower in t.lower() for t in skill.tags)):
+        if (
+            query_lower in skill.name.lower()
+            or query_lower in skill.description.lower()
+            or any(query_lower in t.lower() for t in skill.tags)
+        ):
             matching_skills.append(skill)
-    
+
     return [
         SkillInfo(
             name=skill.name,
@@ -85,7 +87,7 @@ async def search_skills(
             tools=skill.config.get("tools", []),
             hooks=skill.config.get("hooks", []),
             dependencies=skill.config.get("dependencies", []),
-            metadata=skill.config.get("metadata", {})
+            metadata=skill.config.get("metadata", {}),
         )
         for skill in matching_skills
     ]
@@ -101,38 +103,36 @@ async def list_active_skills():
 async def validate_skill(skill_name: str):
     """Validate a skill's configuration and dependencies."""
     registry = get_skill_registry()
-    
+
     skill = registry.get_skill(skill_name)
     if not skill:
         raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
-    
+
     validation_result = registry.validate_skill(skill_name)
     return {
         "skill_name": skill_name,
         "is_valid": validation_result.get("valid", False),
-        "message": validation_result.get("message", "Validation completed")
+        "message": validation_result.get("message", "Validation completed"),
     }
 
 
 @router.get("/", response_model=List[SkillInfo])
 async def list_skills(
-    category: Optional[str] = None,
-    tag: Optional[str] = None,
-    active_only: bool = False
+    category: Optional[str] = None, tag: Optional[str] = None, active_only: bool = False
 ):
     """List all available skills, optionally filtered by category or tag."""
     registry = get_skill_registry()
     skills = registry.list_skills()
-    
+
     if category:
         skills = registry.get_skills_by_category(category)
-    
+
     if tag:
         skills = registry.get_skills_by_tag(tag)
-    
+
     if active_only:
         skills = [skill for skill in skills if skill.is_active]
-    
+
     return [
         SkillInfo(
             name=skill.name,
@@ -144,7 +144,7 @@ async def list_skills(
             tools=skill.config.get("tools", []),
             hooks=skill.config.get("hooks", []),
             dependencies=skill.config.get("dependencies", []),
-            metadata=skill.config.get("metadata", {})
+            metadata=skill.config.get("metadata", {}),
         )
         for skill in skills
     ]
@@ -155,10 +155,10 @@ async def get_skill(skill_name: str):
     """Get detailed information about a specific skill."""
     registry = get_skill_registry()
     skill = registry.get_skill(skill_name)
-    
+
     if not skill:
         raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
-    
+
     return SkillInfo(
         name=skill.name,
         description=skill.description,
@@ -169,7 +169,7 @@ async def get_skill(skill_name: str):
         tools=skill.config.get("tools", []),
         hooks=skill.config.get("hooks", []),
         dependencies=skill.config.get("dependencies", []),
-        metadata=skill.config.get("metadata", {})
+        metadata=skill.config.get("metadata", {}),
     )
 
 
@@ -177,14 +177,20 @@ async def get_skill(skill_name: str):
 async def activate_skill(request: SkillActivationRequest):
     """Activate or deactivate a skill."""
     registry = get_skill_registry()
-    
+
     try:
         if request.activate:
             registry.activate_skill(request.skill_name)
-            return {"message": f"Skill '{request.skill_name}' activated", "skill_name": request.skill_name}
+            return {
+                "message": f"Skill '{request.skill_name}' activated",
+                "skill_name": request.skill_name,
+            }
         else:
             registry.deactivate_skill(request.skill_name)
-            return {"message": f"Skill '{request.skill_name}' deactivated", "skill_name": request.skill_name}
+            return {
+                "message": f"Skill '{request.skill_name}' deactivated",
+                "skill_name": request.skill_name,
+            }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -193,13 +199,13 @@ async def activate_skill(request: SkillActivationRequest):
 async def validate_skill(skill_name: str):
     """Validate a skill's configuration and dependencies."""
     registry = get_skill_registry()
-    
+
     try:
         validation_result = registry.validate_skill(skill_name)
         return {
             "skill_name": skill_name,
             "is_valid": validation_result.get("valid", False),
-            "message": validation_result.get("message", "Validation completed")
+            "message": validation_result.get("message", "Validation completed"),
         }
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

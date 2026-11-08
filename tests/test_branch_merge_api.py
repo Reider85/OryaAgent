@@ -19,7 +19,7 @@ class TestBranchMergeAPI:
     @pytest.fixture
     def mock_branch_manager(self):
         """Create mock branch manager."""
-        with patch('app.api.sessions.get_branch_manager') as mock_manager:
+        with patch("app.api.sessions.get_branch_manager") as mock_manager:
             mock_instance = AsyncMock()
             mock_manager.return_value = mock_instance
             yield mock_instance
@@ -34,18 +34,20 @@ class TestBranchMergeAPI:
                 "parent_session_id": "parent-123",
                 "created_at": "2023-01-01T00:00:00Z",
                 "status": "active",
-                "metadata": {"branch_name": "test-branch"}
+                "metadata": {"branch_name": "test-branch"},
             },
             "target_session": {
                 "id": "target-123",
                 "name": "main-session",
                 "created_at": "2023-01-01T00:00:00Z",
                 "status": "active",
-                "metadata": {}
-            }
+                "metadata": {},
+            },
         }
 
-    def test_merge_branches_success_append(self, client, mock_branch_manager, mock_sessions):
+    def test_merge_branches_success_append(
+        self, client, mock_branch_manager, mock_sessions
+    ):
         """Test successful merge with append strategy."""
         # Setup mocks
         mock_branch_manager.merge_branches.return_value = {
@@ -55,11 +57,21 @@ class TestBranchMergeAPI:
             "merge_strategy": "append",
             "merged_turns": 2,
             "merge_results": [
-                {"turn_id": "turn-1", "turn_number": 1, "messages_count": 1, "tool_calls_count": 0},
-                {"turn_id": "turn-2", "turn_number": 2, "messages_count": 1, "tool_calls_count": 1}
+                {
+                    "turn_id": "turn-1",
+                    "turn_number": 1,
+                    "messages_count": 1,
+                    "tool_calls_count": 0,
+                },
+                {
+                    "turn_id": "turn-2",
+                    "turn_number": 2,
+                    "messages_count": 1,
+                    "tool_calls_count": 1,
+                },
             ],
             "conflicts_resolved": 2,
-            "merge_id": "merge-20231201-123456-abc123"
+            "merge_id": "merge-20231201-123456-abc123",
         }
 
         # Make API request
@@ -68,8 +80,8 @@ class TestBranchMergeAPI:
             json={
                 "source_session_id": "source-123",
                 "merge_strategy": "append",
-                "conflict_resolution": "manual"
-            }
+                "conflict_resolution": "manual",
+            },
         )
 
         # Verify response
@@ -88,7 +100,7 @@ class TestBranchMergeAPI:
             source_session_id="source-123",
             target_session_id="target-123",
             merge_strategy="append",
-            conflict_resolution="manual"
+            conflict_resolution="manual",
         )
 
     def test_merge_branches_success_interleave(self, client, mock_branch_manager):
@@ -100,12 +112,27 @@ class TestBranchMergeAPI:
             "merge_strategy": "interleave",
             "merged_turns": 3,
             "merge_results": [
-                {"turn_id": "turn-1", "turn_number": 1, "messages_count": 1, "tool_calls_count": 0},
-                {"turn_id": "turn-2", "turn_number": 2, "messages_count": 1, "tool_calls_count": 0},
-                {"turn_id": "turn-3", "turn_number": 3, "messages_count": 1, "tool_calls_count": 1}
+                {
+                    "turn_id": "turn-1",
+                    "turn_number": 1,
+                    "messages_count": 1,
+                    "tool_calls_count": 0,
+                },
+                {
+                    "turn_id": "turn-2",
+                    "turn_number": 2,
+                    "messages_count": 1,
+                    "tool_calls_count": 0,
+                },
+                {
+                    "turn_id": "turn-3",
+                    "turn_number": 3,
+                    "messages_count": 1,
+                    "tool_calls_count": 1,
+                },
             ],
             "conflicts_resolved": 3,
-            "merge_id": "merge-20231201-123456-def456"
+            "merge_id": "merge-20231201-123456-def456",
         }
 
         response = client.post(
@@ -113,8 +140,8 @@ class TestBranchMergeAPI:
             json={
                 "source_session_id": "source-123",
                 "merge_strategy": "interleave",
-                "conflict_resolution": "auto"
-            }
+                "conflict_resolution": "auto",
+            },
         )
 
         assert response.status_code == 200
@@ -131,10 +158,15 @@ class TestBranchMergeAPI:
             "merge_strategy": "replace",
             "merged_turns": 1,
             "merge_results": [
-                {"turn_id": "turn-1", "turn_number": 1, "messages_count": 1, "tool_calls_count": 0}
+                {
+                    "turn_id": "turn-1",
+                    "turn_number": 1,
+                    "messages_count": 1,
+                    "tool_calls_count": 0,
+                }
             ],
             "conflicts_resolved": 1,
-            "merge_id": "merge-20231201-123456-ghi789"
+            "merge_id": "merge-20231201-123456-ghi789",
         }
 
         response = client.post(
@@ -142,8 +174,8 @@ class TestBranchMergeAPI:
             json={
                 "source_session_id": "source-123",
                 "merge_strategy": "replace",
-                "conflict_resolution": "source"
-            }
+                "conflict_resolution": "source",
+            },
         )
 
         assert response.status_code == 200
@@ -153,15 +185,17 @@ class TestBranchMergeAPI:
 
     def test_merge_branches_missing_source_session(self, client, mock_branch_manager):
         """Test merge with missing source session."""
-        mock_branch_manager.merge_branches.side_effect = ValueError("Source session not found: missing-123")
+        mock_branch_manager.merge_branches.side_effect = ValueError(
+            "Source session not found: missing-123"
+        )
 
         response = client.post(
             "/sessions/target-123/merge",
             json={
                 "source_session_id": "missing-123",
                 "merge_strategy": "append",
-                "conflict_resolution": "manual"
-            }
+                "conflict_resolution": "manual",
+            },
         )
 
         assert response.status_code == 400
@@ -170,15 +204,17 @@ class TestBranchMergeAPI:
 
     def test_merge_branches_missing_target_session(self, client, mock_branch_manager):
         """Test merge with missing target session."""
-        mock_branch_manager.merge_branches.side_effect = ValueError("Target session not found: missing-123")
+        mock_branch_manager.merge_branches.side_effect = ValueError(
+            "Target session not found: missing-123"
+        )
 
         response = client.post(
             "/sessions/target-123/merge",
             json={
                 "source_session_id": "source-123",
                 "merge_strategy": "append",
-                "conflict_resolution": "manual"
-            }
+                "conflict_resolution": "manual",
+            },
         )
 
         assert response.status_code == 400
@@ -187,15 +223,17 @@ class TestBranchMergeAPI:
 
     def test_merge_branches_invalid_strategy(self, client, mock_branch_manager):
         """Test merge with invalid strategy."""
-        mock_branch_manager.merge_branches.side_effect = ValueError("Unknown merge strategy: invalid_strategy")
+        mock_branch_manager.merge_branches.side_effect = ValueError(
+            "Unknown merge strategy: invalid_strategy"
+        )
 
         response = client.post(
             "/sessions/target-123/merge",
             json={
                 "source_session_id": "source-123",
                 "merge_strategy": "invalid_strategy",
-                "conflict_resolution": "manual"
-            }
+                "conflict_resolution": "manual",
+            },
         )
 
         assert response.status_code == 400
@@ -209,8 +247,8 @@ class TestBranchMergeAPI:
             json={
                 "source_session_id": "source-123",
                 "merge_strategy": "append",
-                "conflict_resolution": "invalid_resolution"
-            }
+                "conflict_resolution": "invalid_resolution",
+            },
         )
 
         assert response.status_code == 400
@@ -219,15 +257,17 @@ class TestBranchMergeAPI:
 
     def test_merge_branches_merge_error(self, client, mock_branch_manager):
         """Test merge with general error."""
-        mock_branch_manager.merge_branches.side_effect = ValueError("Failed to merge branches: conflict detected")
+        mock_branch_manager.merge_branches.side_effect = ValueError(
+            "Failed to merge branches: conflict detected"
+        )
 
         response = client.post(
             "/sessions/target-123/merge",
             json={
                 "source_session_id": "source-123",
                 "merge_strategy": "append",
-                "conflict_resolution": "manual"
-            }
+                "conflict_resolution": "manual",
+            },
         )
 
         assert response.status_code == 400
@@ -244,15 +284,12 @@ class TestBranchMergeAPI:
             "merged_turns": 1,
             "merge_results": [],
             "conflicts_resolved": 0,
-            "merge_id": "merge-20231201-123456-jkl012"
+            "merge_id": "merge-20231201-123456-jkl012",
         }
 
         # Send request without optional fields
         response = client.post(
-            "/sessions/target-123/merge",
-            json={
-                "source_session_id": "source-123"
-            }
+            "/sessions/target-123/merge", json={"source_session_id": "source-123"}
         )
 
         assert response.status_code == 200
@@ -265,7 +302,7 @@ class TestBranchMergeAPI:
             source_session_id="source-123",
             target_session_id="target-123",
             merge_strategy="append",
-            conflict_resolution="manual"
+            conflict_resolution="manual",
         )
 
     def test_merge_branches_invalid_json(self, client):
@@ -273,7 +310,7 @@ class TestBranchMergeAPI:
         response = client.post(
             "/sessions/target-123/merge",
             data="invalid json",
-            headers={"content-type": "application/json"}
+            headers={"content-type": "application/json"},
         )
 
         assert response.status_code == 422
@@ -282,10 +319,7 @@ class TestBranchMergeAPI:
         """Test merge with missing source_session_id."""
         response = client.post(
             "/sessions/target-123/merge",
-            json={
-                "merge_strategy": "append",
-                "conflict_resolution": "manual"
-            }
+            json={"merge_strategy": "append", "conflict_resolution": "manual"},
         )
 
         assert response.status_code == 422
@@ -299,8 +333,8 @@ class TestBranchMergeAPI:
             json={
                 "source_session_id": "",
                 "merge_strategy": "append",
-                "conflict_resolution": "manual"
-            }
+                "conflict_resolution": "manual",
+            },
         )
 
         assert response.status_code == 422
@@ -317,8 +351,7 @@ class TestBranchMergeAPI:
         # This test would depend on your authentication setup
         # For now, just verify the endpoint exists
         response = client.post(
-            "/sessions/target-123/merge",
-            json={"source_session_id": "source-123"}
+            "/sessions/target-123/merge", json={"source_session_id": "source-123"}
         )
         # The actual status code would depend on auth configuration
         # This could be 401, 403, or 200 if auth is disabled for testing
@@ -329,8 +362,7 @@ class TestBranchMergeAPI:
         # This test would depend on your rate limiting setup
         # For now, just verify the endpoint exists
         response = client.post(
-            "/sessions/target-123/merge",
-            json={"source_session_id": "source-123"}
+            "/sessions/target-123/merge", json={"source_session_id": "source-123"}
         )
         # The actual status code would depend on rate limiting configuration
         # This could be 429 if rate limited, or 200 if rate limiting is disabled

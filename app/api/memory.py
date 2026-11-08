@@ -18,6 +18,7 @@ router = APIRouter(prefix="/memory", tags=["memory"])
 
 class MemoryRequest(BaseModel):
     """Request model for adding memories."""
+
     content: str
     metadata: Dict[str, Any] | None = None
     expires_in_hours: int | None = None
@@ -25,6 +26,7 @@ class MemoryRequest(BaseModel):
 
 class MemoryResponse(BaseModel):
     """Response model for memory operations."""
+
     id: str
     session_id: str
     content: str
@@ -36,6 +38,7 @@ class MemoryResponse(BaseModel):
 
 class SearchQuery(BaseModel):
     """Request model for memory search."""
+
     query: str
     limit: int = 10
     offset: int = 0
@@ -43,6 +46,7 @@ class SearchQuery(BaseModel):
 
 class ImportRequest(BaseModel):
     """Request model for memory import."""
+
     data: Dict[str, Any]
 
 
@@ -61,11 +65,13 @@ async def add_memory_endpoint(
             metadata=request.metadata,
             expires_in_hours=request.expires_in_hours,
         )
-        
+
         memory = await store.get_memory(memory_id)
         if not memory:
-            raise HTTPException(status_code=404, detail="Memory not found after creation")
-        
+            raise HTTPException(
+                status_code=404, detail="Memory not found after creation"
+            )
+
         return MemoryResponse(
             id=memory["id"],
             session_id=memory["session_id"],
@@ -75,7 +81,7 @@ async def add_memory_endpoint(
             updated_at=memory["updated_at"],
             expires_at=memory["expires_at"],
         )
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to add memory: {str(e)}")
 
@@ -90,16 +96,18 @@ async def forget_memory_endpoint(
     try:
         store = await get_sqlite_store()
         success = await store.forget_memory(memory_id)
-        
+
         if not success:
             raise HTTPException(status_code=404, detail="Memory not found")
-        
+
         return {"message": "Memory forgotten successfully", "memory_id": memory_id}
-        
+
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to forget memory: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to forget memory: {str(e)}"
+        )
 
 
 @emit_span(name="memory.search")
@@ -117,7 +125,7 @@ async def search_memories_endpoint(
             limit=request.limit,
             offset=request.offset,
         )
-        
+
         return [
             MemoryResponse(
                 id=memory["id"],
@@ -130,9 +138,11 @@ async def search_memories_endpoint(
             )
             for memory in memories
         ]
-        
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to search memories: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to search memories: {str(e)}"
+        )
 
 
 @emit_span(name="memory.list")
@@ -154,7 +164,7 @@ async def list_memories_endpoint(
             order_by=order_by,
             order_dir=order_dir,
         )
-        
+
         return [
             MemoryResponse(
                 id=memory["id"],
@@ -167,9 +177,11 @@ async def list_memories_endpoint(
             )
             for memory in memories
         ]
-        
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list memories: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to list memories: {str(e)}"
+        )
 
 
 @emit_span(name="memory.export")
@@ -181,11 +193,13 @@ async def export_memories_endpoint(
     try:
         store = await get_sqlite_store()
         export_data = await store.export_memories(session_id)
-        
+
         return export_data
-        
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to export memories: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to export memories: {str(e)}"
+        )
 
 
 @emit_span(name="memory.import")
@@ -198,15 +212,17 @@ async def import_memories_endpoint(
     try:
         store = await get_sqlite_store()
         imported_count = await store.import_memories(session_id, request.data)
-        
+
         return {
             "message": f"Successfully imported {imported_count} memories",
             "imported_count": imported_count,
             "session_id": session_id,
         }
-        
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to import memories: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to import memories: {str(e)}"
+        )
 
 
 @emit_span(name="memory.stats")
@@ -218,11 +234,13 @@ async def get_memory_stats_endpoint(
     try:
         store = await get_sqlite_store()
         stats = await store.get_memory_stats(session_id)
-        
+
         return stats
-        
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get memory stats: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get memory stats: {str(e)}"
+        )
 
 
 # Define the routes

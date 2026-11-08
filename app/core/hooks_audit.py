@@ -13,11 +13,11 @@ from app.core.sqlite_store import get_sqlite_store
 def _add_hook_execution(entry: dict[str, Any]) -> None:
     """Add a hook execution entry to the SQLite store."""
     store = get_sqlite_store()
-    
+
     # Convert datetime to ISO format for storage
     if entry.get("timestamp"):
         entry["timestamp"] = entry["timestamp"].isoformat()
-    
+
     # Store the entry
     store.add_hook_execution(entry)
 
@@ -32,12 +32,12 @@ async def _filter_hook_executions(
 ) -> list[dict[str, Any]]:
     """Filter hook execution history based on criteria."""
     store = get_sqlite_store()
-    
+
     # Convert hours to start_date if provided
     start_date = None
     if hours:
         start_date = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
-    
+
     # Get filtered results from SQLite
     results = await store.get_hook_executions(
         session_id=session_id,
@@ -47,7 +47,7 @@ async def _filter_hook_executions(
         success=success,
         start_date=start_date,
     )
-    
+
     return results
 
 
@@ -62,7 +62,7 @@ async def record_hook_execution(
     turn_id: Optional[str] = None,
 ) -> None:
     """Record a hook execution in the audit log.
-    
+
     This function should be called from the hooks framework to record executions.
     """
     entry = {
@@ -79,7 +79,7 @@ async def record_hook_execution(
         "trace_id": current_turn_trace_id(),
         "metadata": {"recorded_at": datetime.utcnow().isoformat()},
     }
-    
+
     await _add_hook_execution(entry)
 
 
@@ -98,7 +98,7 @@ async def get_hook_executions(
     start_date = None
     if hours:
         start_date = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
-    
+
     # Get filtered results from SQLite
     store = get_sqlite_store()
     filtered = await store.get_hook_executions(
@@ -111,23 +111,25 @@ async def get_hook_executions(
         limit=limit,
         offset=offset,
     )
-    
+
     # Convert to serializable format
     entries = []
     for entry in filtered:
-        entries.append({
-            "id": entry.get("id"),
-            "session_id": entry.get("session_id"),
-            "tool_name": entry.get("tool_name"),
-            "hook_name": entry.get("hook_name"),
-            "hook_type": entry.get("hook_type"),
-            "success": entry.get("success"),
-            "message": entry.get("message"),
-            "duration_ms": entry.get("duration_ms"),
-            "timestamp": entry.get("timestamp"),
-            "metadata": entry.get("metadata", {}),
-        })
-    
+        entries.append(
+            {
+                "id": entry.get("id"),
+                "session_id": entry.get("session_id"),
+                "tool_name": entry.get("tool_name"),
+                "hook_name": entry.get("hook_name"),
+                "hook_type": entry.get("hook_type"),
+                "success": entry.get("success"),
+                "message": entry.get("message"),
+                "duration_ms": entry.get("duration_ms"),
+                "timestamp": entry.get("timestamp"),
+                "metadata": entry.get("metadata", {}),
+            }
+        )
+
     return {
         "total": len(filtered),
         "offset": offset,
@@ -140,7 +142,7 @@ async def get_hook_executions(
             "hook_type": hook_type,
             "success": success,
             "hours": hours,
-        }
+        },
     }
 
 
@@ -149,14 +151,14 @@ async def get_hook_statistics(hours: int = 24) -> dict[str, Any]:
     # Get statistics from SQLite store
     store = get_sqlite_store()
     stats = await store.get_hooks_statistics(hours)
-    
+
     # Group by type
     by_type = {"pre": 0, "post": 0}
     for entry in stats["tool_breakdown"]:
         hook_type = entry.get("hook_type", "unknown")
         if hook_type in by_type:
             by_type[hook_type] += entry["total"]
-    
+
     return {
         "total_executions": stats["total_executions"],
         "successful_executions": stats["successful_executions"],
@@ -173,7 +175,7 @@ async def get_hook_execution(execution_id: str) -> Optional[dict[str, Any]]:
     """Get a specific hook execution by ID."""
     store = get_sqlite_store()
     result = await store.get_hook_execution(execution_id)
-    
+
     if result:
         return {
             "id": result.get("id"),
@@ -187,20 +189,20 @@ async def get_hook_execution(execution_id: str) -> Optional[dict[str, Any]]:
             "timestamp": result.get("timestamp"),
             "metadata": result.get("metadata", {}),
         }
-    
+
     return None
 
 
 async def clear_hook_history() -> int:
     """Clear hook execution history."""
     store = get_sqlite_store()
-    
+
     # Get current count before clearing
     current_executions = await store.get_hook_executions()
     count = len(current_executions)
-    
+
     # Clear all entries
     for entry in current_executions:
         await store.delete_hook_execution(entry["id"])
-    
+
     return count

@@ -24,6 +24,7 @@ router = APIRouter(prefix="/ui/api", tags=["nextjs-web-ui"])
 
 class MemoryExportModel(BaseModel):
     """Memory export model."""
+
     timestamp: str
     version: str
     l0_files: Dict[str, str]
@@ -32,6 +33,7 @@ class MemoryExportModel(BaseModel):
 
 class MemoryImportModel(BaseModel):
     """Memory import model."""
+
     source_file: str
     merge_mode: str = "overwrite"  # "overwrite", "merge", "skip_existing"
     validate_only: bool = False
@@ -67,7 +69,9 @@ class MemoryImportExport:
             for file_name in l0_files:
                 file_path = self.md_store.get_memory_file_path(file_name)
                 if file_path.exists():
-                    export_data["l0_files"][file_name] = file_path.read_text(encoding="utf-8")
+                    export_data["l0_files"][file_name] = file_path.read_text(
+                        encoding="utf-8"
+                    )
 
             # Export L1 files
             if include_l1:
@@ -75,14 +79,16 @@ class MemoryImportExport:
                     l1_files = await self.sqlite_store.list_memory_files()
                     for file_info in l1_files:
                         entries = await self.sqlite_store.get_entries(file_info["name"])
-                        export_data["l1_files"].append({
-                            "name": file_info["name"],
-                            "entries": entries,
-                            "metadata": {
-                                "size": file_info["size"],
-                                "last_modified": file_info["last_modified"],
-                            },
-                        })
+                        export_data["l1_files"].append(
+                            {
+                                "name": file_info["name"],
+                                "entries": entries,
+                                "metadata": {
+                                    "size": file_info["size"],
+                                    "last_modified": file_info["last_modified"],
+                                },
+                            }
+                        )
                 except Exception as e:
                     logger.warning(f"Could not export L1 memory: {e}")
 
@@ -90,9 +96,13 @@ class MemoryImportExport:
 
         except Exception as e:
             logger.error(f"Failed to export memory data: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to export memory data: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to export memory data: {str(e)}"
+            )
 
-    async def import_memory_data(self, import_data: MemoryImportModel) -> Dict[str, Any]:
+    async def import_memory_data(
+        self, import_data: MemoryImportModel
+    ) -> Dict[str, Any]:
         """Import memory data from JSON format."""
         try:
             if import_data.validate_only:
@@ -109,7 +119,9 @@ class MemoryImportExport:
 
             # Validate data structure
             if not self._validate_export_structure(data):
-                raise HTTPException(status_code=400, detail="Invalid export data structure")
+                raise HTTPException(
+                    status_code=400, detail="Invalid export data structure"
+                )
 
             results = {
                 "l0_files": {"imported": 0, "skipped": 0, "errors": []},
@@ -120,13 +132,18 @@ class MemoryImportExport:
             # Import L0 files
             for file_name, content in data.get("l0_files", {}).items():
                 try:
-                    if import_data.merge_mode == "skip_existing" and self._l0_file_exists(file_name):
+                    if (
+                        import_data.merge_mode == "skip_existing"
+                        and self._l0_file_exists(file_name)
+                    ):
                         results["l0_files"]["skipped"] += 1
                         continue
 
                     # Validate content size
-                    if len(content.encode('utf-8')) > self._get_l0_max_size(file_name):
-                        results["l0_files"]["errors"].append(f"File {file_name} exceeds maximum size")
+                    if len(content.encode("utf-8")) > self._get_l0_max_size(file_name):
+                        results["l0_files"]["errors"].append(
+                            f"File {file_name} exceeds maximum size"
+                        )
                         continue
 
                     # Import file
@@ -135,7 +152,9 @@ class MemoryImportExport:
                     results["l0_files"]["imported"] += 1
 
                 except Exception as e:
-                    results["l0_files"]["errors"].append(f"Failed to import {file_name}: {str(e)}")
+                    results["l0_files"]["errors"].append(
+                        f"Failed to import {file_name}: {str(e)}"
+                    )
 
             # Import L1 files
             for file_info in data.get("l1_files", []):
@@ -144,7 +163,10 @@ class MemoryImportExport:
                     if not file_name:
                         continue
 
-                    if import_data.merge_mode == "skip_existing" and await self._l1_file_exists(file_name):
+                    if (
+                        import_data.merge_mode == "skip_existing"
+                        and await self._l1_file_exists(file_name)
+                    ):
                         results["l1_files"]["skipped"] += 1
                         continue
 
@@ -154,14 +176,16 @@ class MemoryImportExport:
                         await self.sqlite_store.create_entry(
                             file_name,
                             entry.get("content", ""),
-                            entry.get("metadata", {})
+                            entry.get("metadata", {}),
                         )
                         results["total_entries"] += 1
 
                     results["l1_files"]["imported"] += 1
 
                 except Exception as e:
-                    results["l1_files"]["errors"].append(f"Failed to import L1 file {file_name}: {str(e)}")
+                    results["l1_files"]["errors"].append(
+                        f"Failed to import L1 file {file_name}: {str(e)}"
+                    )
 
             return results
 
@@ -171,15 +195,21 @@ class MemoryImportExport:
             raise
         except Exception as e:
             logger.error(f"Failed to import memory data: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to import memory data: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to import memory data: {str(e)}"
+            )
 
-    async def import_from_file(self, file: UploadFile, merge_mode: str = "overwrite") -> Dict[str, Any]:
+    async def import_from_file(
+        self, file: UploadFile, merge_mode: str = "overwrite"
+    ) -> Dict[str, Any]:
         """Import memory data from uploaded file."""
         try:
             # Read file content
             content = await file.read()
-            if file.filename and not file.filename.endswith('.json'):
-                raise HTTPException(status_code=400, detail="Only JSON files are supported")
+            if file.filename and not file.filename.endswith(".json"):
+                raise HTTPException(
+                    status_code=400, detail="Only JSON files are supported"
+                )
 
             # Parse JSON
             data = json.loads(content)
@@ -200,7 +230,9 @@ class MemoryImportExport:
             raise
         except Exception as e:
             logger.error(f"Failed to import from file: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to import from file: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to import from file: {str(e)}"
+            )
 
     async def export_to_file(self, include_l1: bool = True) -> str:
         """Export memory data to JSON string."""
@@ -210,7 +242,9 @@ class MemoryImportExport:
 
         except Exception as e:
             logger.error(f"Failed to export to file: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to export to file: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to export to file: {str(e)}"
+            )
 
     async def _validate_import_data(self, source_data: str) -> Dict[str, Any]:
         """Validate import data without actually importing."""
@@ -234,8 +268,10 @@ class MemoryImportExport:
 
             # Validate L0 files
             for file_name, content in data.get("l0_files", {}).items():
-                if len(content.encode('utf-8')) > self._get_l0_max_size(file_name):
-                    validation_result["errors"].append(f"File {file_name} exceeds maximum size")
+                if len(content.encode("utf-8")) > self._get_l0_max_size(file_name):
+                    validation_result["errors"].append(
+                        f"File {file_name} exceeds maximum size"
+                    )
 
             # Validate L1 files
             for file_info in data.get("l1_files", []):
@@ -245,7 +281,9 @@ class MemoryImportExport:
                 # Check for required fields
                 for entry in entries:
                     if not entry.get("content"):
-                        validation_result["warnings"].append("Entry found with empty content")
+                        validation_result["warnings"].append(
+                            "Entry found with empty content"
+                        )
 
             if validation_result["errors"]:
                 validation_result["valid"] = False
@@ -260,7 +298,7 @@ class MemoryImportExport:
     def _validate_export_structure(self, data: Dict[str, Any]) -> bool:
         """Validate export data structure."""
         required_keys = {"timestamp", "version", "l0_files", "l1_files"}
-        
+
         if not all(key in data for key in required_keys):
             return False
 
@@ -322,7 +360,7 @@ async def download_export(include_l1: bool = True):
     """Export memory data and return as downloadable file."""
     memory_import_export = get_memory_import_export()
     json_content = await memory_import_export.export_to_file(include_l1)
-    
+
     return {
         "content": json_content,
         "filename": f"memory_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",

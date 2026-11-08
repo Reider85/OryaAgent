@@ -9,27 +9,30 @@ from typing import Any, Dict, List, Optional
 @dataclass
 class CompactSummary:
     """Compact summary for COLD layer."""
+
     content_hash: str
     summary: str
     metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: Optional[float] = None
-    
+
     def __post_init__(self):
         if self.created_at is None:
             import time
+
             self.created_at = time.time()
 
 
 @dataclass
 class DFCConfig:
     """Configuration for DFC layers."""
+
     max_hot_size: int = 8000
     max_warm_size: int = 32000
     heat_cache_size: int = 4000
     compaction_interval: int = 60  # seconds
     compaction_threshold: int = 100  # items in warm layer
     cold_layer_max_size: Optional[int] = None  # None = unlimited
-    
+
     @classmethod
     def from_settings(cls, settings: Any) -> "DFCConfig":
         """Create DFCConfig from settings."""
@@ -40,13 +43,14 @@ class DFCConfig:
 @dataclass
 class Plan:
     """Plan dataclass for Tri-Model Pipeline."""
+
     steps: List[str]
     criteria: List[str]
     prefetch_hints: List[str]
     tier: str  # small|large|tournament
     cacheable_prefix: str = ""
     dynamic_suffix: str = ""
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
@@ -57,7 +61,7 @@ class Plan:
             "cacheable_prefix": self.cacheable_prefix,
             "dynamic_suffix": self.dynamic_suffix,
         }
-    
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Plan":
         """Create from dictionary."""
@@ -74,6 +78,7 @@ class Plan:
 @dataclass
 class DFCStats:
     """Statistics for DFC layers."""
+
     hot_size: int = 0
     warm_size: int = 0
     cold_size: int = 0
@@ -82,7 +87,7 @@ class DFCStats:
     heat_cache_misses: int = 0
     compaction_count: int = 0
     last_compaction: Optional[float] = None
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {

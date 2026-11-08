@@ -209,32 +209,30 @@ class OriaHSMCPServer:
     async def _call_index_file(self, arguments: dict[str, Any]) -> CallToolResult:
         """Execute file indexing through OriaHS."""
         file_path = arguments.get("file_path", "")
-        
+
         if not file_path:
             raise ValueError("File path is required")
-        
+
         try:
             # Convert to absolute path and validate
             abs_path = Path(file_path).resolve()
             if not abs_path.exists():
                 raise ValueError(f"File does not exist: {file_path}")
-            
+
             if not abs_path.is_file():
                 raise ValueError(f"Path is not a file: {file_path}")
-            
+
             # Prepare indexing request
             index_request = {
                 "file_path": str(abs_path),
                 "operation": "index",
             }
-            
+
             # Execute indexing
-            response = await self.config._http_client.post(
-                "/index", json=index_request
-            )
+            response = await self.config._http_client.post("/index", json=index_request)
             response.raise_for_status()
             result = response.json()
-            
+
             # Format result for MCP
             formatted_result = TextContent(
                 type="text",
@@ -248,9 +246,9 @@ class OriaHSMCPServer:
                     ensure_ascii=False,
                 ),
             )
-            
+
             return CallToolResult(content=[formatted_result])
-            
+
         except httpx.HTTPStatusError as e:
             error_msg = f"OriaHS API error: {e.response.status_code}"
             if e.response.text:
@@ -263,33 +261,31 @@ class OriaHSMCPServer:
         """Execute directory indexing through OriaHS."""
         directory_path = arguments.get("directory_path", "")
         recursive = arguments.get("recursive", False)
-        
+
         if not directory_path:
             raise ValueError("Directory path is required")
-        
+
         try:
             # Convert to absolute path and validate
             abs_path = Path(directory_path).resolve()
             if not abs_path.exists():
                 raise ValueError(f"Directory does not exist: {directory_path}")
-            
+
             if not abs_path.is_dir():
                 raise ValueError(f"Path is not a directory: {directory_path}")
-            
+
             # Prepare indexing request
             index_request = {
                 "directory_path": str(abs_path),
                 "recursive": recursive,
                 "operation": "index",
             }
-            
+
             # Execute indexing
-            response = await self.config._http_client.post(
-                "/index", json=index_request
-            )
+            response = await self.config._http_client.post("/index", json=index_request)
             response.raise_for_status()
             result = response.json()
-            
+
             # Format result for MCP
             formatted_result = TextContent(
                 type="text",
@@ -298,16 +294,18 @@ class OriaHSMCPServer:
                         "directory": str(abs_path),
                         "status": "success",
                         "recursive": recursive,
-                        "message": result.get("message", "Directory indexed successfully"),
+                        "message": result.get(
+                            "message", "Directory indexed successfully"
+                        ),
                         "indexed_files": result.get("indexed_files", 0),
                         "indexed_at": result.get("indexed_at"),
                     },
                     ensure_ascii=False,
                 ),
             )
-            
+
             return CallToolResult(content=[formatted_result])
-            
+
         except httpx.HTTPStatusError as e:
             error_msg = f"OriaHS API error: {e.response.status_code}"
             if e.response.text:

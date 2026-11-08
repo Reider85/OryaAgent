@@ -20,6 +20,7 @@ router = APIRouter(prefix="/api", tags=["sqlite-store"])
 
 class HookExecutionFilter(BaseModel):
     """Hook execution filter model."""
+
     session_id: str | None = None
     tool_name: str | None = None
     hook_name: str | None = None
@@ -33,6 +34,7 @@ class HookExecutionFilter(BaseModel):
 
 class SkillActivationRequest(BaseModel):
     """Skill activation request."""
+
     skill_name: str
     activate: bool = True
 
@@ -87,7 +89,9 @@ async def delete_hook_execution(execution_id: str):
 
 @router.delete("/hooks/executions")
 async def clear_old_hook_executions(
-    older_than_days: int = Query(30, ge=1, le=365, description="Delete records older than N days")
+    older_than_days: int = Query(
+        30, ge=1, le=365, description="Delete records older than N days"
+    ),
 ):
     """Clear old hook execution records."""
     store = get_sqlite_store()
@@ -96,7 +100,9 @@ async def clear_old_hook_executions(
 
 
 @router.get("/hooks/statistics")
-async def get_hook_statistics(days: int = Query(7, ge=1, le=365, description="Number of days to analyze")):
+async def get_hook_statistics(
+    days: int = Query(7, ge=1, le=365, description="Number of days to analyze"),
+):
     """Get hook execution statistics."""
     store = get_sqlite_store()
     return await store.get_hooks_statistics(days)
@@ -137,7 +143,11 @@ async def activate_skill(request: SkillActivationRequest):
     success = await store.update_skill_activation(request.skill_name, request.activate)
     if not success:
         raise HTTPException(status_code=404, detail="Skill not found")
-    return {"success": True, "skill_name": request.skill_name, "activated": request.activate}
+    return {
+        "success": True,
+        "skill_name": request.skill_name,
+        "activated": request.activate,
+    }
 
 
 @router.get("/skills/{skill_name}/dependencies")
@@ -156,7 +166,9 @@ async def get_skills_statistics():
 
 
 @router.post("/store/cleanup")
-async def cleanup_store_data(max_days: int = Query(90, ge=1, le=365, description="Keep data newer than N days")):
+async def cleanup_store_data(
+    max_days: int = Query(90, ge=1, le=365, description="Keep data newer than N days"),
+):
     """Clean up old data from the store."""
     store = get_sqlite_store()
     result = await store.cleanup_old_data(max_days)
@@ -167,15 +179,15 @@ async def cleanup_store_data(max_days: int = Query(90, ge=1, le=365, description
 async def get_store_info():
     """Get information about the SQLite store."""
     store = get_sqlite_store()
-    
+
     # Get database file info
     db_path = store.db_path
     db_size = db_path.stat().st_size if db_path.exists() else 0
-    
+
     # Get table counts
     hooks_count = len(await store.get_hook_executions(limit=1))
     skills_count = len(await store.get_skills_metadata(limit=1))
-    
+
     return {
         "database_path": str(db_path),
         "database_size_bytes": db_size,
@@ -185,5 +197,5 @@ async def get_store_info():
             "hooks_audit": "Stores hook execution records",
             "skills_metadata": "Stores skills metadata and activation state",
             "skills_dependencies": "Stores skills dependency relationships",
-        }
+        },
     }

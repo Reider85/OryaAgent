@@ -159,6 +159,7 @@ app.include_router(skills_ui_router)
 # Next.js Web UI (B-11)
 try:
     from app.web.nextjs_ui import router as nextjs_ui_router
+
     app.include_router(nextjs_ui_router, prefix="/web")
     logger.info("Next.js Web UI (B-11) enabled at /web/*")
 except ImportError as e:

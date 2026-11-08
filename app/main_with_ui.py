@@ -166,7 +166,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="orya", description="OryaAgent CLI")
     parser.add_argument("--host", default="127.0.0.1", help="host to bind to")
     parser.add_argument("--port", type=int, default=8000, help="port to bind to")
-    parser.add_argument("--reload", action="store_true", help="auto-reload on code changes")
+    parser.add_argument(
+        "--reload", action="store_true", help="auto-reload on code changes"
+    )
     args = parser.parse_args()
 
     import uvicorn

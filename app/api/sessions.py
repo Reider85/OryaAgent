@@ -181,12 +181,10 @@ class ForkSessionRequest(BaseModel):
     """Request body for ``POST /sessions/{id}/fork``."""
 
     turn_id: str | None = Field(
-        default=None,
-        description="Specific turn to fork from (defaults to latest)"
+        default=None, description="Specific turn to fork from (defaults to latest)"
     )
     branch_name: str | None = Field(
-        default=None,
-        description="Name for the new branch (auto-generated if None)"
+        default=None, description="Name for the new branch (auto-generated if None)"
     )
 
 
@@ -752,20 +750,20 @@ async def fork_session(
     body: ForkSessionRequest | None = None,
 ) -> dict:
     """Create a new branch from any session turn (B-09).
-    
+
     Creates a new session that inherits state from the parent session
     up to the specified turn. Returns the new branch session ID.
     """
     body = body or ForkSessionRequest()
     branch_manager = get_branch_manager()
-    
+
     try:
         branch_session_id = await branch_manager.fork_session(
             session_id=session_id,
             turn_id=body.turn_id,
             branch_name=body.branch_name,
         )
-        
+
         logger.info("session forked: %s -> %s", session_id, branch_session_id)
         return {
             "session_id": session_id,
@@ -783,23 +781,22 @@ async def list_branches(session_id: str) -> BranchListResponse:
     """List all branches for a session (B-09)."""
     branch_manager = get_branch_manager()
     branches = await branch_manager.list_branches(session_id)
-    
+
     branch_responses = []
     for branch in branches:
-        branch_responses.append(BranchInfoResponse(
-            id=branch["id"],
-            name=branch["name"],
-            parent_session_id=branch["parent_session_id"],
-            parent_turn_id=branch["parent_turn_id"],
-            created_at=branch["created_at"].isoformat(),
-            status=branch["status"],
-            metadata=branch["metadata"],
-        ))
-    
-    return BranchListResponse(
-        branches=branch_responses,
-        total=len(branch_responses)
-    )
+        branch_responses.append(
+            BranchInfoResponse(
+                id=branch["id"],
+                name=branch["name"],
+                parent_session_id=branch["parent_session_id"],
+                parent_turn_id=branch["parent_turn_id"],
+                created_at=branch["created_at"].isoformat(),
+                status=branch["status"],
+                metadata=branch["metadata"],
+            )
+        )
+
+    return BranchListResponse(branches=branch_responses, total=len(branch_responses))
 
 
 @router.get("/{session_id}/branches/{branch_id}")
@@ -807,10 +804,10 @@ async def get_branch_info(session_id: str, branch_id: str) -> BranchInfoResponse
     """Get information about a specific branch (B-09)."""
     branch_manager = get_branch_manager()
     branch_info = await branch_manager.get_branch_info(branch_id)
-    
+
     if branch_info is None:
         raise HTTPException(status_code=404, detail=f"Branch {branch_id} not found")
-    
+
     return BranchInfoResponse(
         id=branch_info["id"],
         name=branch_info["name"],
@@ -827,23 +824,29 @@ async def delete_branch(session_id: str, branch_id: str) -> dict:
     """Delete a branch session (B-09)."""
     branch_manager = get_branch_manager()
     success = await branch_manager.delete_branch(branch_id)
-    
+
     if not success:
         raise HTTPException(status_code=404, detail=f"Branch {branch_id} not found")
-    
+
     logger.info("branch deleted: %s", branch_id)
     return {"branch_id": branch_id, "status": "deleted"}
 
 
 class MergeBranchRequest(BaseModel):
     """Request for merging a branch into the current session."""
+
     source_session_id: str = Field(..., description="ID of the branch session to merge")
-    merge_strategy: str = Field("append", description="Merge strategy: 'append', 'interleave', 'replace'")
-    conflict_resolution: str = Field("manual", description="Conflict resolution: 'manual', 'auto', 'source'")
+    merge_strategy: str = Field(
+        "append", description="Merge strategy: 'append', 'interleave', 'replace'"
+    )
+    conflict_resolution: str = Field(
+        "manual", description="Conflict resolution: 'manual', 'auto', 'source'"
+    )
 
 
 class MergeBranchResponse(BaseModel):
     """Response for branch merge operation."""
+
     success: bool
     source_session: str
     target_session: str
@@ -855,39 +858,44 @@ class MergeBranchResponse(BaseModel):
 
 
 @router.post("/{session_id}/merge", response_model=MergeBranchResponse)
-async def merge_branch(session_id: str, body: MergeBranchRequest) -> MergeBranchResponse:
+async def merge_branch(
+    session_id: str, body: MergeBranchRequest
+) -> MergeBranchResponse:
     """Merge a branch into the current session (B-10).
-    
+
     Merges tool-call sequences from a branch session into the current session.
     Supports multiple merge strategies and conflict resolution options.
     """
     from app.core.observability.spans import emit_span
-    
-    @emit_span(name="branch.merge", attributes={
-        "branch.source_session": body.source_session_id,
-        "branch.target_session": session_id,
-        "branch.merge_strategy": body.merge_strategy,
-        "branch.conflict_resolution": body.conflict_resolution
-    })
+
+    @emit_span(
+        name="branch.merge",
+        attributes={
+            "branch.source_session": body.source_session_id,
+            "branch.target_session": session_id,
+            "branch.merge_strategy": body.merge_strategy,
+            "branch.conflict_resolution": body.conflict_resolution,
+        },
+    )
     async def _merge_branch():
         branch_manager = get_branch_manager()
-        
+
         # Validate merge strategy
         valid_strategies = ["append", "interleave", "replace"]
         if body.merge_strategy not in valid_strategies:
             raise HTTPException(
-                status_code=400, 
-                detail=f"Invalid merge strategy. Must be one of: {valid_strategies}"
+                status_code=400,
+                detail=f"Invalid merge strategy. Must be one of: {valid_strategies}",
             )
-        
+
         # Validate conflict resolution
         valid_resolutions = ["manual", "auto", "source"]
         if body.conflict_resolution not in valid_resolutions:
             raise HTTPException(
-                status_code=400, 
-                detail=f"Invalid conflict resolution. Must be one of: {valid_resolutions}"
+                status_code=400,
+                detail=f"Invalid conflict resolution. Must be one of: {valid_resolutions}",
             )
-        
+
         # Perform the merge
         merge_result = await branch_manager.merge_branches(
             source_session_id=body.source_session_id,
@@ -895,20 +903,25 @@ async def merge_branch(session_id: str, body: MergeBranchRequest) -> MergeBranch
             merge_strategy=body.merge_strategy,
             conflict_resolution=body.conflict_resolution,
         )
-        
+
         # Generate merge ID for tracking
-        merge_id = f"merge-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
-        
+        merge_id = (
+            f"merge-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+        )
+
         # Update merge result with tracking ID
         merge_result["merge_id"] = merge_id
-        
+
         logger.info(
             "Branch merged: %s -> %s using strategy '%s' (merge_id: %s)",
-            body.source_session_id, session_id, body.merge_strategy, merge_id
+            body.source_session_id,
+            session_id,
+            body.merge_strategy,
+            merge_id,
         )
-        
+
         return merge_result
-    
+
     try:
         merge_result = await _merge_branch()
         return MergeBranchResponse(
@@ -919,7 +932,7 @@ async def merge_branch(session_id: str, body: MergeBranchRequest) -> MergeBranch
             merged_turns=merge_result["merged_turns"],
             merge_results=merge_result["merge_results"],
             conflicts_resolved=merge_result["conflicts_resolved"],
-            merge_id=merge_result["merge_id"]
+            merge_id=merge_result["merge_id"],
         )
     except Exception as e:
         logger.error(f"Failed to merge branch: {e}")

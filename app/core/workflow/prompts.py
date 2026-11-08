@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 class PlannerPrompt:
     """Prompt template for planner model."""
-    
+
     @staticmethod
     def build_prompt(
         task: str,
@@ -22,12 +22,16 @@ class PlannerPrompt:
         """Build planning prompt."""
         tools_text = ""
         if available_tools:
-            tools_text = "Available Tools:\n" + "\n".join([f"- {tool}" for tool in available_tools])
-        
+            tools_text = "Available Tools:\n" + "\n".join(
+                [f"- {tool}" for tool in available_tools]
+            )
+
         history_text = ""
         if session_history:
-            history_text = "Recent Activity:\n" + "\n".join([f"- {item}" for item in session_history[-3:]])
-        
+            history_text = "Recent Activity:\n" + "\n".join(
+                [f"- {item}" for item in session_history[-3:]]
+            )
+
         return f"""You are an expert planning assistant. Your task is to break down the following task into clear, executable steps.
 
 Task: {task}
@@ -69,7 +73,7 @@ Important: Only return the JSON object, no additional text."""
 
 class TesterPrompt:
     """Prompt template for tester model."""
-    
+
     @staticmethod
     def build_prompt(
         plan: Dict,
@@ -80,22 +84,26 @@ class TesterPrompt:
         """Build testing prompt."""
         plan_text = f"""Plan:
 Steps:
-{chr(10).join([f"{i+1}. {step}" for i, step in enumerate(plan.get('steps', []))])}
+{chr(10).join([f"{i + 1}. {step}" for i, step in enumerate(plan.get("steps", []))])}
 
 Success Criteria:
-{chr(10).join([f"- {criterion}" for criterion in plan.get('criteria', [])])}
+{chr(10).join([f"- {criterion}" for criterion in plan.get("criteria", [])])}
 
 Prefetch Hints:
-{chr(10).join([f"- {hint}" for hint in plan.get('prefetch_hints', [])])}"""
+{chr(10).join([f"- {hint}" for hint in plan.get("prefetch_hints", [])])}"""
 
         execution_text = f"""Execution Results:
-Status: {execution_result.get('status', 'unknown')}
-Message: {execution_result.get('message', '')}
-Tools Used: {', '.join(execution_result.get('tools_used', []))}
-Output: {execution_result.get('output', '')}"""
+Status: {execution_result.get("status", "unknown")}
+Message: {execution_result.get("message", "")}
+Tools Used: {", ".join(execution_result.get("tools_used", []))}
+Output: {execution_result.get("output", "")}"""
 
-        session_text = f"""Session Context:
-{session_context}""" if session_text else ""
+        session_text = (
+            f"""Session Context:
+{session_context}"""
+            if session_text
+            else ""
+        )
 
         test_instruction = ""
         if run_tests:
@@ -138,7 +146,7 @@ Important: Only return the JSON object, no additional text."""
 
 class ReplannerPrompt:
     """Prompt template for replanning."""
-    
+
     @staticmethod
     def build_prompt(
         original_plan: Dict,
@@ -149,22 +157,26 @@ class ReplannerPrompt:
         """Build replanning prompt."""
         original_plan_text = f"""Original Plan:
 Steps:
-{chr(10).join([f"{i+1}. {step}" for i, step in enumerate(original_plan.get('steps', []))])}
+{chr(10).join([f"{i + 1}. {step}" for i, step in enumerate(original_plan.get("steps", []))])}
 
 Criteria:
-{chr(10).join([f"- {criterion}" for criterion in original_plan.get('criteria', [])])}"""
+{chr(10).join([f"- {criterion}" for criterion in original_plan.get("criteria", [])])}"""
 
         verdict_text = f"""Verdict:
-Status: {verdict.get('verdict', 'unknown')}
-Message: {verdict.get('message', '')}
-Failed Criteria: {', '.join(verdict.get('failed_criteria', []))}
-Confidence: {verdict.get('confidence', 0)}"""
+Status: {verdict.get("verdict", "unknown")}
+Message: {verdict.get("message", "")}
+Failed Criteria: {", ".join(verdict.get("failed_criteria", []))}
+Confidence: {verdict.get("confidence", 0)}"""
 
         execution_text = f"""Execution Results:
-{execution_result.get('output', '')}"""
+{execution_result.get("output", "")}"""
 
-        session_text = f"""Session Context:
-{session_context}""" if session_text else ""
+        session_text = (
+            f"""Session Context:
+{session_context}"""
+            if session_text
+            else ""
+        )
 
         return f"""You are an expert planning assistant. The original plan execution failed, and you need to create an improved plan.
 
@@ -207,12 +219,12 @@ Important: Only return the JSON object, no additional text."""
 
 class SystemPromptBuilder:
     """Build system prompts for Tri-Model Pipeline."""
-    
+
     def __init__(self):
         self.planner_prompt = PlannerPrompt()
         self.tester_prompt = TesterPrompt()
         self.replanner_prompt = ReplannerPrompt()
-    
+
     def build_planner_system_prompt(self) -> str:
         """Build system prompt for planner model."""
         return """You are an expert planning assistant for software development tasks. You excel at breaking down complex tasks into manageable steps and providing clear success criteria.

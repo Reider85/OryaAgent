@@ -22,6 +22,7 @@ router = APIRouter(prefix="/ui/api", tags=["nextjs-web-ui"])
 
 class SettingsModel(BaseModel):
     """Settings model."""
+
     llm_provider: str
     llm_model: str
     temperature: float
@@ -32,6 +33,7 @@ class SettingsModel(BaseModel):
 
 class LLMProviderModel(BaseModel):
     """LLM provider model."""
+
     name: str
     display_name: str
     models: List[str]
@@ -51,11 +53,11 @@ class SettingsPanel:
         """Get current settings."""
         try:
             # Get LLM settings
-            llm_config = getattr(self.settings, 'llm', {})
-            
+            llm_config = getattr(self.settings, "llm", {})
+
             # Get permission policy
             policy_config = self.permission_policy.get_policy_config()
-            
+
             # Get active skills
             active_skills = []
             skills = self.skill_registry.list_skills()
@@ -64,23 +66,25 @@ class SettingsPanel:
                     active_skills.append(skill.name)
 
             return SettingsModel(
-                llm_provider=llm_config.get('provider', 'anthropic'),
-                llm_model=llm_config.get('model', 'claude-3-sonnet-20240229'),
-                temperature=llm_config.get('temperature', 0.7),
-                max_tokens=llm_config.get('max_tokens', 4000),
+                llm_provider=llm_config.get("provider", "anthropic"),
+                llm_model=llm_config.get("model", "claude-3-sonnet-20240229"),
+                temperature=llm_config.get("temperature", 0.7),
+                max_tokens=llm_config.get("max_tokens", 4000),
                 permission_policy=policy_config,
                 active_skills=active_skills,
             )
 
         except Exception as e:
             logger.error(f"Failed to get settings: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to get settings: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to get settings: {str(e)}"
+            )
 
     async def update_settings(self, settings: SettingsModel) -> Dict[str, Any]:
         """Update settings."""
         try:
             # Update LLM settings
-            if hasattr(self.settings, 'llm'):
+            if hasattr(self.settings, "llm"):
                 self.settings.llm.provider = settings.llm_provider
                 self.settings.llm.model = settings.llm_model
                 self.settings.llm.temperature = settings.temperature
@@ -101,7 +105,9 @@ class SettingsPanel:
 
         except Exception as e:
             logger.error(f"Failed to update settings: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to update settings: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to update settings: {str(e)}"
+            )
 
     async def get_llm_providers(self) -> List[LLMProviderModel]:
         """Get available LLM providers."""
@@ -146,7 +152,9 @@ class SettingsPanel:
 
         except Exception as e:
             logger.error(f"Failed to get LLM providers: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to get LLM providers: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to get LLM providers: {str(e)}"
+            )
 
     async def get_available_skills(self) -> List[Dict[str, Any]]:
         """Get available skills."""
@@ -168,7 +176,9 @@ class SettingsPanel:
 
         except Exception as e:
             logger.error(f"Failed to get available skills: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to get available skills: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to get available skills: {str(e)}"
+            )
 
     async def get_permission_policy(self) -> Dict[str, Any]:
         """Get current permission policy."""
@@ -177,17 +187,24 @@ class SettingsPanel:
 
         except Exception as e:
             logger.error(f"Failed to get permission policy: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to get permission policy: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to get permission policy: {str(e)}"
+            )
 
     async def update_permission_policy(self, policy: Dict[str, Any]) -> Dict[str, Any]:
         """Update permission policy."""
         try:
             self.permission_policy.update_policy(policy)
-            return {"success": True, "message": "Permission policy updated successfully"}
+            return {
+                "success": True,
+                "message": "Permission policy updated successfully",
+            }
 
         except Exception as e:
             logger.error(f"Failed to update permission policy: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to update permission policy: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to update permission policy: {str(e)}"
+            )
 
     async def validate_settings(self, settings: SettingsModel) -> Dict[str, Any]:
         """Validate settings before applying."""
@@ -205,7 +222,9 @@ class SettingsPanel:
                 errors.append("Max tokens must be between 1 and 100000")
 
             # Validate skills
-            available_skills = [skill.name for skill in self.skill_registry.list_skills()]
+            available_skills = [
+                skill.name for skill in self.skill_registry.list_skills()
+            ]
             for skill_name in settings.active_skills:
                 if skill_name not in available_skills:
                     errors.append(f"Skill not available: {skill_name}")
@@ -217,7 +236,9 @@ class SettingsPanel:
 
         except Exception as e:
             logger.error(f"Failed to validate settings: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to validate settings: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to validate settings: {str(e)}"
+            )
 
 
 # Global instance
@@ -243,12 +264,12 @@ async def get_current_settings():
 async def update_settings(settings: SettingsModel):
     """Update settings."""
     settings_panel = get_settings_panel()
-    
+
     # Validate settings first
     validation = await settings_panel.validate_settings(settings)
     if not validation["valid"]:
         raise HTTPException(status_code=400, detail=validation["errors"])
-    
+
     return await settings_panel.update_settings(settings)
 
 

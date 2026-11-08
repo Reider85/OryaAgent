@@ -97,15 +97,19 @@ class BranchManager:
 
             # Copy session state to the branch with performance optimizations
             await self._copy_session_state_optimized(
-                session_id, branch_session_id, turn_id, 
+                session_id,
+                branch_session_id,
+                turn_id,
                 bulk_copy=bulk_copy,
-                progress_callback=progress_callback
+                progress_callback=progress_callback,
             )
 
             # Copy memory files to the branch
             await self._copy_memory_files_optimized(session_id, branch_session_id)
 
-            logger.info(f"Created branch '{branch_name}' from session {session_id}, turn {turn_id}")
+            logger.info(
+                f"Created branch '{branch_name}' from session {session_id}, turn {turn_id}"
+            )
             return branch_session_id
 
         except Exception as e:
@@ -113,21 +117,23 @@ class BranchManager:
             raise ValueError(f"Failed to create branch: {str(e)}")
 
     async def _copy_session_state_optimized(
-        self, 
-        parent_session_id: str, 
-        branch_session_id: str, 
+        self,
+        parent_session_id: str,
+        branch_session_id: str,
         parent_turn_id: str,
         bulk_copy: bool = True,
-        progress_callback: Optional[callable] = None
+        progress_callback: Optional[callable] = None,
     ) -> None:
         """Copy session state from parent to branch with performance optimizations."""
         try:
             # Get all turns from parent session up to the fork point
-            parent_turns = await self.session_manager.get_session_turns(parent_session_id)
-            
+            parent_turns = await self.session_manager.get_session_turns(
+                parent_session_id
+            )
+
             # Filter turns up to the fork point
             fork_turns = [turn for turn in parent_turns if turn["id"] <= parent_turn_id]
-            
+
             if bulk_copy:
                 # Use bulk insert for better performance
                 await self._bulk_copy_turns(
@@ -149,7 +155,7 @@ class BranchManager:
                         },
                     }
                     await self.session_manager.create_turn(branch_turn)
-                    
+
                     # Update progress if callback provided
                     if progress_callback:
                         progress_callback(len(fork_turns), 1)
@@ -163,12 +169,12 @@ class BranchManager:
         parent_turns: List[Dict],
         branch_session_id: str,
         parent_session_id: str,
-        progress_callback: Optional[callable] = None
+        progress_callback: Optional[callable] = None,
     ) -> None:
         """Bulk copy turns using batch inserts for better performance."""
         if not parent_turns:
             return
-            
+
         # Prepare batch data
         batch_data = []
         for turn in parent_turns:
@@ -184,7 +190,7 @@ class BranchManager:
                 },
             }
             batch_data.append(branch_turn)
-        
+
         # Use batch insert for better performance
         try:
             async with asyncpg.get_pool().acquire() as conn:
@@ -202,21 +208,23 @@ class BranchManager:
                         turn_data["messages"],
                         turn_data["tool_calls"],
                         turn_data["created_at"],
-                        turn_data["metadata"]
+                        turn_data["metadata"],
                     )
-                    
+
                     # Update progress if callback provided
                     if progress_callback and (i + 1) % 10 == 0:  # Update every 10 turns
                         progress_callback(len(batch_data), i + 1)
-                        
+
         except Exception as e:
             logger.error(f"Failed to bulk copy turns: {e}")
             # Fallback to individual inserts
             for turn_data in batch_data:
-                await self.session_manager.create_turn({
-                    **turn_data,
-                    "id": str(uuid.uuid4()),
-                })
+                await self.session_manager.create_turn(
+                    {
+                        **turn_data,
+                        "id": str(uuid.uuid4()),
+                    }
+                )
 
     async def fork_multiple_sessions(
         self,
@@ -236,8 +244,10 @@ class BranchManager:
             List of results with branch_id and any errors
         """
         results = []
-        
-        async def create_single_branch(config: Dict[str, Any], index: int) -> Dict[str, Any]:
+
+        async def create_single_branch(
+            config: Dict[str, Any], index: int
+        ) -> Dict[str, Any]:
             try:
                 branch_id = await self.fork_session(
                     session_id=config["session_id"],
@@ -245,10 +255,10 @@ class BranchManager:
                     branch_name=config.get("branch_name"),
                     bulk_copy=bulk_copy,
                 )
-                
+
                 if progress_callback:
                     progress_callback(len(session_configs), index + 1)
-                
+
                 return {
                     "index": index,
                     "success": True,
@@ -264,24 +274,25 @@ class BranchManager:
                     "session_id": config["session_id"],
                     "branch_name": config.get("branch_name", "auto-generated"),
                 }
-        
+
         # Create branches concurrently
         tasks = [
-            create_single_branch(config, i)
-            for i, config in enumerate(session_configs)
+            create_single_branch(config, i) for i, config in enumerate(session_configs)
         ]
-        
+
         branch_results = await asyncio.gather(*tasks)
         results.extend(branch_results)
-        
+
         return results
 
-    async def _copy_memory_files_optimized(self, parent_session_id: str, branch_session_id: str) -> None:
+    async def _copy_memory_files_optimized(
+        self, parent_session_id: str, branch_session_id: str
+    ) -> None:
         """Copy memory files from parent to branch with optimizations."""
         try:
             # Get memory files from parent session
             parent_memory_dir = self.md_store.get_session_memory_dir(parent_session_id)
-            
+
             if not parent_memory_dir.exists():
                 return
 
@@ -298,8 +309,14 @@ class BranchManager:
 
     async def _bulk_copy_memory_files(self, source_dir: Path, target_dir: Path) -> None:
         """Bulk copy memory files with optimizations."""
-        memory_files = ["PROJECT.md", "LEARNED.md", "PREFERENCES.md", "FACTS.md", "DECISIONS.md"]
-        
+        memory_files = [
+            "PROJECT.md",
+            "LEARNED.md",
+            "PREFERENCES.md",
+            "FACTS.md",
+            "DECISIONS.md",
+        ]
+
         # Prepare file copy operations
         copy_operations = []
         for file_name in memory_files:
@@ -307,10 +324,10 @@ class BranchManager:
             if source_file.exists():
                 target_file = target_dir / file_name
                 copy_operations.append((source_file, target_file))
-        
+
         if not copy_operations:
             return
-        
+
         # Use concurrent file copying for better performance
         async def copy_file(source: Path, target: Path) -> None:
             try:
@@ -319,7 +336,7 @@ class BranchManager:
                 target.write_text(content, encoding="utf-8")
             except Exception as e:
                 logger.warning(f"Failed to copy {source} to {target}: {e}")
-        
+
         # Copy files concurrently
         copy_tasks = [copy_file(source, target) for source, target in copy_operations]
         await asyncio.gather(*copy_tasks, return_exceptions=True)
@@ -331,12 +348,12 @@ class BranchManager:
                 # Get branch count
                 branch_count = await conn.fetchval(
                     "SELECT COUNT(*) FROM session_branches WHERE parent_session_id = $1",
-                    session_id
+                    session_id,
                 )
-                
+
                 # Get average branch creation time (if we had timing data)
                 # This would require additional tracking in the future
-                
+
                 # Get largest branch by turn count
                 largest_branch = await conn.fetchrow(
                     """
@@ -348,15 +365,15 @@ class BranchManager:
                     ORDER BY turn_count DESC
                     LIMIT 1
                     """,
-                    session_id
+                    session_id,
                 )
-                
+
                 return {
                     "branch_count": branch_count,
                     "largest_branch": largest_branch,
                     "performance_notes": "Additional metrics can be added with timing tracking",
                 }
-                
+
         except Exception as e:
             logger.error(f"Failed to get branch performance metrics: {e}")
             return {
@@ -376,7 +393,7 @@ class BranchManager:
             """
             async with asyncpg.get_pool().acquire() as conn:
                 branches = await conn.fetch(query, session_id)
-            
+
             return [dict(branch) for branch in branches]
 
         except Exception as e:
@@ -419,6 +436,7 @@ class BranchManager:
             branch_memory_dir = self.md_store.get_session_memory_dir(branch_session_id)
             if branch_memory_dir.exists():
                 import shutil
+
                 shutil.rmtree(branch_memory_dir)
 
             logger.info(f"Deleted branch {branch_session_id}")
@@ -458,16 +476,21 @@ class BranchManager:
                 raise ValueError(f"Target session not found: {target_session_id}")
 
             # Get turns from both sessions
-            source_turns = await self.session_manager.get_session_turns(source_session_id)
-            target_turns = await self.session_manager.get_session_turns(target_session_id)
+            source_turns = await self.session_manager.get_session_turns(
+                source_session_id
+            )
+            target_turns = await self.session_manager.get_session_turns(
+                target_session_id
+            )
 
             # Find the common ancestor (last common turn)
-            common_turn_id = await self._find_common_ancestor(source_turns, target_turns)
+            common_turn_id = await self._find_common_ancestor(
+                source_turns, target_turns
+            )
 
             # Get new turns from source (after the common ancestor)
             new_source_turns = [
-                turn for turn in source_turns 
-                if turn["id"] > common_turn_id
+                turn for turn in source_turns if turn["id"] > common_turn_id
             ]
 
             # Merge turns based on strategy
@@ -494,12 +517,14 @@ class BranchManager:
                     },
                 }
                 await self.session_manager.create_turn(merged_turn)
-                merge_results.append({
-                    "turn_id": merged_turn["id"],
-                    "turn_number": turn["turn_number"],
-                    "messages_count": len(turn["messages"]),
-                    "tool_calls_count": len(turn["tool_calls"]),
-                })
+                merge_results.append(
+                    {
+                        "turn_id": merged_turn["id"],
+                        "turn_number": turn["turn_number"],
+                        "messages_count": len(turn["messages"]),
+                        "tool_calls_count": len(turn["tool_calls"]),
+                    }
+                )
 
             # Merge memory files
             await self._merge_memory_files(source_session_id, target_session_id)
@@ -521,7 +546,9 @@ class BranchManager:
                 "merge_strategy": merge_strategy,
                 "merged_turns": len(merge_results),
                 "merge_results": merge_results,
-                "conflicts_resolved": len(merge_results),  # Would be actual conflict count in real impl
+                "conflicts_resolved": len(
+                    merge_results
+                ),  # Would be actual conflict count in real impl
             }
 
         except Exception as e:
@@ -565,11 +592,13 @@ class BranchManager:
             return merged
         elif strategy == "replace":
             # Replace target turns with source turns (simplified)
-            return target_turns[:-len(source_turns)] + source_turns
+            return target_turns[: -len(source_turns)] + source_turns
         else:
             raise ValueError(f"Unknown merge strategy: {strategy}")
 
-    async def _merge_memory_files(self, source_session_id: str, target_session_id: str) -> None:
+    async def _merge_memory_files(
+        self, source_session_id: str, target_session_id: str
+    ) -> None:
         """Merge memory files from source to target session."""
         try:
             # Get memory directories
@@ -583,18 +612,24 @@ class BranchManager:
             target_memory_dir.mkdir(parents=True, exist_ok=True)
 
             # Merge memory files
-            memory_files = ["PROJECT.md", "LEARNED.md", "PREFERENCES.md", "FACTS.md", "DECISIONS.md"]
-            
+            memory_files = [
+                "PROJECT.md",
+                "LEARNED.md",
+                "PREFERENCES.md",
+                "FACTS.md",
+                "DECISIONS.md",
+            ]
+
             for file_name in memory_files:
                 source_file = source_memory_dir / file_name
                 target_file = target_memory_dir / file_name
-                
+
                 if source_file.exists():
                     if target_file.exists():
                         # Append content from source to target
                         target_content = target_file.read_text(encoding="utf-8")
                         source_content = source_file.read_text(encoding="utf-8")
-                        
+
                         # Add separator and append
                         merged_content = target_content + "\n\n---\n\n" + source_content
                         target_file.write_text(merged_content, encoding="utf-8")
@@ -607,7 +642,11 @@ class BranchManager:
             raise ValueError(f"Failed to merge memory files: {str(e)}")
 
     async def _update_merge_metadata(
-        self, target_session_id: str, source_session_id: str, strategy: str, results: List[Dict]
+        self,
+        target_session_id: str,
+        source_session_id: str,
+        strategy: str,
+        results: List[Dict],
     ) -> None:
         """Update session metadata after merge."""
         try:
@@ -618,16 +657,20 @@ class BranchManager:
 
             # Update metadata
             merge_metadata = target_session.get("metadata", {})
-            merge_metadata.setdefault("merge_history", []).append({
-                "source_session_id": source_session_id,
-                "merge_strategy": strategy,
-                "merged_at": datetime.utcnow().isoformat(),
-                "merged_turns": len(results),
-                "results": results,
-            })
+            merge_metadata.setdefault("merge_history", []).append(
+                {
+                    "source_session_id": source_session_id,
+                    "merge_strategy": strategy,
+                    "merged_at": datetime.utcnow().isoformat(),
+                    "merged_turns": len(results),
+                    "results": results,
+                }
+            )
 
             # Update session
-            await self.session_manager.update_session_metadata(target_session_id, merge_metadata)
+            await self.session_manager.update_session_metadata(
+                target_session_id, merge_metadata
+            )
 
         except Exception as e:
             logger.error(f"Failed to update merge metadata: {e}")

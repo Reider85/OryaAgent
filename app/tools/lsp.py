@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 class LSPToolException(Exception):
     """Exception for LSP tool errors."""
-    
+
     def __init__(self, message: str, degraded: bool = False):
         super().__init__(message)
         self.degraded = degraded
@@ -24,19 +24,16 @@ class LSPToolException(Exception):
 
 @emit_span("lsp.hover")
 async def lsp_hover(
-    file_path: str,
-    line: int,
-    column: int,
-    workspace: str = "."
+    file_path: str, line: int, column: int, workspace: str = "."
 ) -> Dict[str, Any]:
     """Get hover information for a position in a file.
-    
+
     Args:
         file_path: Path to the file
         line: Line number (0-based)
         column: Column number (0-based)
         workspace: Workspace directory
-        
+
     Returns:
         Dictionary containing hover information with signature, type, and documentation
     """
@@ -44,24 +41,23 @@ async def lsp_hover(
         # Validate file path
         file_path = validate_path(file_path)
         workspace_path = validate_path(workspace)
-        
+
         # Get LSP bus
         lsp_bus = get_lsp_bus()
-        
+
         # Detect language
         language = lsp_bus.detect_language(file_path)
         if not language:
             raise LSPToolException(f"Unsupported file type: {file_path.suffix}")
-        
+
         # Ensure server is running
         server = await lsp_bus.ensure_server(language, workspace_path)
-        
+
         # Get hover information
         result = await server.hover(
-            file_path=file_path,
-            position={"line": line, "character": column}
+            file_path=file_path, position={"line": line, "character": column}
         )
-        
+
         return {
             "success": True,
             "language": language,
@@ -69,7 +65,7 @@ async def lsp_hover(
             "position": {"line": line, "column": column},
             "file_path": str(file_path),
         }
-        
+
     except Exception as e:
         logger.error(f"Error in lsp_hover: {e}")
         raise LSPToolException(f"Hover failed: {str(e)}")
@@ -77,19 +73,16 @@ async def lsp_hover(
 
 @emit_span("lsp.definition")
 async def lsp_definition(
-    file_path: str,
-    line: int,
-    column: int,
-    workspace: str = "."
+    file_path: str, line: int, column: int, workspace: str = "."
 ) -> Dict[str, Any]:
     """Get definition location for a symbol at the given position.
-    
+
     Args:
         file_path: Path to the file
         line: Line number (0-based)
         column: Column number (0-based)
         workspace: Workspace directory
-        
+
     Returns:
         Dictionary containing definition location information
     """
@@ -97,24 +90,23 @@ async def lsp_definition(
         # Validate file path
         file_path = validate_path(file_path)
         workspace_path = validate_path(workspace)
-        
+
         # Get LSP bus
         lsp_bus = get_lsp_bus()
-        
+
         # Detect language
         language = lsp_bus.detect_language(file_path)
         if not language:
             raise LSPToolException(f"Unsupported file type: {file_path.suffix}")
-        
+
         # Ensure server is running
         server = await lsp_bus.ensure_server(language, workspace_path)
-        
+
         # Get definition
         result = await server.definition(
-            file_path=file_path,
-            position={"line": line, "column": column}
+            file_path=file_path, position={"line": line, "column": column}
         )
-        
+
         return {
             "success": True,
             "language": language,
@@ -122,7 +114,7 @@ async def lsp_definition(
             "position": {"line": line, "column": column},
             "file_path": str(file_path),
         }
-        
+
     except Exception as e:
         logger.error(f"Error in lsp_definition: {e}")
         raise LSPToolException(f"Definition lookup failed: {str(e)}")
@@ -134,17 +126,17 @@ async def lsp_references(
     line: int,
     column: int,
     include_declaration: bool = True,
-    workspace: str = "."
+    workspace: str = ".",
 ) -> Dict[str, Any]:
     """Get all references to a symbol at the given position.
-    
+
     Args:
         file_path: Path to the file
         line: Line number (0-based)
         column: Column number (0-based)
         include_declaration: Whether to include the declaration itself
         workspace: Workspace directory
-        
+
     Returns:
         Dictionary containing list of reference locations
     """
@@ -152,25 +144,25 @@ async def lsp_references(
         # Validate file path
         file_path = validate_path(file_path)
         workspace_path = validate_path(workspace)
-        
+
         # Get LSP bus
         lsp_bus = get_lsp_bus()
-        
+
         # Detect language
         language = lsp_bus.detect_language(file_path)
         if not language:
             raise LSPToolException(f"Unsupported file type: {file_path.suffix}")
-        
+
         # Ensure server is running
         server = await lsp_bus.ensure_server(language, workspace_path)
-        
+
         # Get references
         result = await server.references(
             file_path=file_path,
             position={"line": line, "column": column},
-            context={"includeDeclaration": include_declaration}
+            context={"includeDeclaration": include_declaration},
         )
-        
+
         return {
             "success": True,
             "language": language,
@@ -179,7 +171,7 @@ async def lsp_references(
             "include_declaration": include_declaration,
             "file_path": str(file_path),
         }
-        
+
     except Exception as e:
         logger.error(f"Error in lsp_references: {e}")
         raise LSPToolException(f"References lookup failed: {str(e)}")
@@ -187,47 +179,45 @@ async def lsp_references(
 
 @emit_span("lsp_symbol_search")
 async def lsp_symbol_search(
-    query: str,
-    workspace: str = ".",
-    limit: int = 10
+    query: str, workspace: str = ".", limit: int = 10
 ) -> Dict[str, Any]:
     """Search for symbols in the workspace.
-    
+
     Args:
         query: Search query
         workspace: Workspace directory
         limit: Maximum number of results
-        
+
     Returns:
         Dictionary containing list of matching symbols
     """
     try:
         # Validate workspace path
         workspace_path = validate_path(workspace)
-        
+
         # Get LSP bus
         lsp_bus = get_lsp_bus()
-        
+
         # Try each supported language
         all_results = []
-        
+
         for language in lsp_bus.get_supported_languages():
             try:
                 server = await lsp_bus.ensure_server(language, workspace_path)
-                
+
                 # Search symbols
                 results = await server.symbol_search(query, limit)
-                
+
                 # Add language information
                 for result in results:
                     result["language"] = language
-                
+
                 all_results.extend(results)
-                
+
             except Exception as e:
                 logger.warning(f"Symbol search failed for {language}: {e}")
                 continue
-        
+
         return {
             "success": True,
             "query": query,
@@ -235,7 +225,7 @@ async def lsp_symbol_search(
             "total_found": len(all_results),
             "workspace": str(workspace_path),
         }
-        
+
     except Exception as e:
         logger.error(f"Error in lsp_symbol_search: {e}")
         raise LSPToolException(f"Symbol search failed: {str(e)}")
@@ -243,21 +233,17 @@ async def lsp_symbol_search(
 
 @emit_span("lsp_rename")
 async def lsp_rename(
-    file_path: str,
-    line: int,
-    column: int,
-    new_name: str,
-    workspace: str = "."
+    file_path: str, line: int, column: int, new_name: str, workspace: str = "."
 ) -> Dict[str, Any]:
     """Rename a symbol at the given position.
-    
+
     Args:
         file_path: Path to the file
         line: Line number (0-based)
         column: Column number (0-based)
         new_name: New name for the symbol
         workspace: Workspace directory
-        
+
     Returns:
         Dictionary containing rename result with changes
     """
@@ -265,25 +251,25 @@ async def lsp_rename(
         # Validate file path
         file_path = validate_path(file_path)
         workspace_path = validate_path(workspace)
-        
+
         # Get LSP bus
         lsp_bus = get_lsp_bus()
-        
+
         # Detect language
         language = lsp_bus.detect_language(file_path)
         if not language:
             raise LSPToolException(f"Unsupported file type: {file_path.suffix}")
-        
+
         # Ensure server is running
         server = await lsp_bus.ensure_server(language, workspace_path)
-        
+
         # Perform rename
         result = await server.rename(
             file_path=file_path,
             position={"line": line, "column": column},
-            new_name=new_name
+            new_name=new_name,
         )
-        
+
         return {
             "success": True,
             "language": language,
@@ -293,23 +279,20 @@ async def lsp_rename(
             "position": {"line": line, "column": column},
             "file_path": str(file_path),
         }
-        
+
     except Exception as e:
         logger.error(f"Error in lsp_rename: {e}")
         raise LSPToolException(f"Rename failed: {str(e)}")
 
 
 @emit_span("lsp_diagnostics")
-async def lsp_diagnostics(
-    file_path: str,
-    workspace: str = "."
-) -> Dict[str, Any]:
+async def lsp_diagnostics(file_path: str, workspace: str = ".") -> Dict[str, Any]:
     """Get diagnostics for a file.
-    
+
     Args:
         file_path: Path to the file
         workspace: Workspace directory
-        
+
     Returns:
         Dictionary containing list of diagnostics (errors, warnings, etc.)
     """
@@ -317,21 +300,21 @@ async def lsp_diagnostics(
         # Validate file path
         file_path = validate_path(file_path)
         workspace_path = validate_path(workspace)
-        
+
         # Get LSP bus
         lsp_bus = get_lsp_bus()
-        
+
         # Detect language
         language = lsp_bus.detect_language(file_path)
         if not language:
             raise LSPToolException(f"Unsupported file type: {file_path.suffix}")
-        
+
         # Ensure server is running
         server = await lsp_bus.ensure_server(language, workspace_path)
-        
+
         # Get diagnostics
         result = await server.diagnostics(file_path=file_path)
-        
+
         return {
             "success": True,
             "language": language,
@@ -341,7 +324,7 @@ async def lsp_diagnostics(
             "warning_count": len([d for d in result if d.get("severity") == 2]),
             "info_count": len([d for d in result if d.get("severity") == 3]),
         }
-        
+
     except Exception as e:
         logger.error(f"Error in lsp_diagnostics: {e}")
         raise LSPToolException(f"Diagnostics failed: {str(e)}")
@@ -349,19 +332,16 @@ async def lsp_diagnostics(
 
 @emit_span("lsp_code_action")
 async def lsp_code_action(
-    file_path: str,
-    line: int,
-    column: int,
-    workspace: str = "."
+    file_path: str, line: int, column: int, workspace: str = "."
 ) -> Dict[str, Any]:
     """Get available code actions at the given position.
-    
+
     Args:
         file_path: Path to the file
         line: Line number (0-based)
         column: Column number (0-based)
         workspace: Workspace directory
-        
+
     Returns:
         Dictionary containing list of available code actions
     """
@@ -369,27 +349,27 @@ async def lsp_code_action(
         # Validate file path
         file_path = validate_path(file_path)
         workspace_path = validate_path(workspace)
-        
+
         # Get LSP bus
         lsp_bus = get_lsp_bus()
-        
+
         # Detect language
         language = lsp_bus.detect_language(file_path)
         if not language:
             raise LSPToolException(f"Unsupported file type: {file_path.suffix}")
-        
+
         # Ensure server is running
         server = await lsp_bus.ensure_server(language, workspace_path)
-        
+
         # Get code actions
         result = await server.code_action(
             file_path=file_path,
             range={
                 "start": {"line": line, "character": column},
-                "end": {"line": line, "character": column}
-            }
+                "end": {"line": line, "character": column},
+            },
         )
-        
+
         return {
             "success": True,
             "language": language,
@@ -398,7 +378,7 @@ async def lsp_code_action(
             "file_path": str(file_path),
             "action_count": len(result),
         }
-        
+
     except Exception as e:
         logger.error(f"Error in lsp_code_action: {e}")
         raise LSPToolException(f"Code action lookup failed: {str(e)}")
@@ -412,26 +392,17 @@ LSP_TOOLS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "file_path": {
-                    "type": "string",
-                    "description": "Path to the file"
-                },
-                "line": {
-                    "type": "integer",
-                    "description": "Line number (0-based)"
-                },
-                "column": {
-                    "type": "integer", 
-                    "description": "Column number (0-based)"
-                },
+                "file_path": {"type": "string", "description": "Path to the file"},
+                "line": {"type": "integer", "description": "Line number (0-based)"},
+                "column": {"type": "integer", "description": "Column number (0-based)"},
                 "workspace": {
                     "type": "string",
                     "description": "Workspace directory",
-                    "default": "."
-                }
+                    "default": ".",
+                },
             },
-            "required": ["file_path", "line", "column"]
-        }
+            "required": ["file_path", "line", "column"],
+        },
     },
     {
         "name": "lsp_definition",
@@ -439,26 +410,17 @@ LSP_TOOLS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "file_path": {
-                    "type": "string",
-                    "description": "Path to the file"
-                },
-                "line": {
-                    "type": "integer",
-                    "description": "Line number (0-based)"
-                },
-                "column": {
-                    "type": "integer",
-                    "description": "Column number (0-based)"
-                },
+                "file_path": {"type": "string", "description": "Path to the file"},
+                "line": {"type": "integer", "description": "Line number (0-based)"},
+                "column": {"type": "integer", "description": "Column number (0-based)"},
                 "workspace": {
                     "type": "string",
                     "description": "Workspace directory",
-                    "default": "."
-                }
+                    "default": ".",
+                },
             },
-            "required": ["file_path", "line", "column"]
-        }
+            "required": ["file_path", "line", "column"],
+        },
     },
     {
         "name": "lsp_references",
@@ -466,31 +428,22 @@ LSP_TOOLS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "file_path": {
-                    "type": "string",
-                    "description": "Path to the file"
-                },
-                "line": {
-                    "type": "integer",
-                    "description": "Line number (0-based)"
-                },
-                "column": {
-                    "type": "integer",
-                    "description": "Column number (0-based)"
-                },
+                "file_path": {"type": "string", "description": "Path to the file"},
+                "line": {"type": "integer", "description": "Line number (0-based)"},
+                "column": {"type": "integer", "description": "Column number (0-based)"},
                 "include_declaration": {
                     "type": "boolean",
                     "description": "Whether to include the declaration itself",
-                    "default": True
+                    "default": True,
                 },
                 "workspace": {
                     "type": "string",
                     "description": "Workspace directory",
-                    "default": "."
-                }
+                    "default": ".",
+                },
             },
-            "required": ["file_path", "line", "column"]
-        }
+            "required": ["file_path", "line", "column"],
+        },
     },
     {
         "name": "lsp_symbol_search",
@@ -498,23 +451,20 @@ LSP_TOOLS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Search query"
-                },
+                "query": {"type": "string", "description": "Search query"},
                 "workspace": {
                     "type": "string",
                     "description": "Workspace directory",
-                    "default": "."
+                    "default": ".",
                 },
                 "limit": {
                     "type": "integer",
                     "description": "Maximum number of results",
-                    "default": 10
-                }
+                    "default": 10,
+                },
             },
-            "required": ["query"]
-        }
+            "required": ["query"],
+        },
     },
     {
         "name": "lsp_rename",
@@ -522,30 +472,21 @@ LSP_TOOLS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "file_path": {
-                    "type": "string",
-                    "description": "Path to the file"
-                },
-                "line": {
-                    "type": "integer",
-                    "description": "Line number (0-based)"
-                },
-                "column": {
-                    "type": "integer",
-                    "description": "Column number (0-based)"
-                },
+                "file_path": {"type": "string", "description": "Path to the file"},
+                "line": {"type": "integer", "description": "Line number (0-based)"},
+                "column": {"type": "integer", "description": "Column number (0-based)"},
                 "new_name": {
                     "type": "string",
-                    "description": "New name for the symbol"
+                    "description": "New name for the symbol",
                 },
                 "workspace": {
                     "type": "string",
                     "description": "Workspace directory",
-                    "default": "."
-                }
+                    "default": ".",
+                },
             },
-            "required": ["file_path", "line", "column", "new_name"]
-        }
+            "required": ["file_path", "line", "column", "new_name"],
+        },
     },
     {
         "name": "lsp_diagnostics",
@@ -553,18 +494,15 @@ LSP_TOOLS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "file_path": {
-                    "type": "string",
-                    "description": "Path to the file"
-                },
+                "file_path": {"type": "string", "description": "Path to the file"},
                 "workspace": {
                     "type": "string",
                     "description": "Workspace directory",
-                    "default": "."
-                }
+                    "default": ".",
+                },
             },
-            "required": ["file_path"]
-        }
+            "required": ["file_path"],
+        },
     },
     {
         "name": "lsp_code_action",
@@ -572,25 +510,16 @@ LSP_TOOLS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "file_path": {
-                    "type": "string",
-                    "description": "Path to the file"
-                },
-                "line": {
-                    "type": "integer",
-                    "description": "Line number (0-based)"
-                },
-                "column": {
-                    "type": "integer",
-                    "description": "Column number (0-based)"
-                },
+                "file_path": {"type": "string", "description": "Path to the file"},
+                "line": {"type": "integer", "description": "Line number (0-based)"},
+                "column": {"type": "integer", "description": "Column number (0-based)"},
                 "workspace": {
                     "type": "string",
                     "description": "Workspace directory",
-                    "default": "."
-                }
+                    "default": ".",
+                },
             },
-            "required": ["file_path", "line", "column"]
-        }
-    }
+            "required": ["file_path", "line", "column"],
+        },
+    },
 ]

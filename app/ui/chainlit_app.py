@@ -816,7 +816,7 @@ async def on_chat_start() -> None:
     settings = load_settings()
     await _show_sidebar()
     await _show_settings_panel(settings)
-    
+
     # Initialize skills UI
     skills_ui = get_skills_ui()
     await skills_ui.show_skills_browser()
@@ -1182,18 +1182,20 @@ async def on_message(message: cl.Message) -> None:
 async def _handle_skills(text: str) -> None:
     """Handle skills management commands."""
     skills_ui = get_skills_ui()
-    
+
     if text == "/skills":
         # Show skills browser
         await skills_ui.show_skills_browser()
     elif text.startswith("/skills activate "):
-        skill_name = text[len("/skills activate "):].strip()
+        skill_name = text[len("/skills activate ") :].strip()
         await skills_ui._activate_skill(skill_name, cl.Message(content=""))
     elif text.startswith("/skills deactivate "):
-        skill_name = text[len("/skills deactivate "):].strip()
+        skill_name = text[len("/skills deactivate ") :].strip()
         await skills_ui._deactivate_skill(skill_name, cl.Message(content=""))
     elif text.startswith("/skills info "):
-        skill_name = text[len("/skills info "):].strip()
+        skill_name = text[len("/skills info ") :].strip()
         await skills_ui._show_skill_info(skill_name, cl.Message(content=""))
     else:
-        await cl.Message(content="Usage: /skills [activate|deactivate|info] <skill_name>").send()
+        await cl.Message(
+            content="Usage: /skills [activate|deactivate|info] <skill_name>"
+        ).send()

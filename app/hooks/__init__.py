@@ -8,7 +8,7 @@ from . import auto_format, auto_lint, cache_invalidation, examples
 
 __all__ = [
     "auto_format",
-    "auto_lint", 
+    "auto_lint",
     "cache_invalidation",
     "examples",
 ]

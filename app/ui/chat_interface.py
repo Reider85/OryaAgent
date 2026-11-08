@@ -24,6 +24,7 @@ router = APIRouter(prefix="/ui", tags=["nextjs-web-ui"])
 
 class ChatMessage(BaseModel):
     """Chat message model."""
+
     role: str
     content: str
     timestamp: str
@@ -31,6 +32,7 @@ class ChatMessage(BaseModel):
 
 class ChatSession(BaseModel):
     """Chat session model."""
+
     id: str
     name: str
     created_at: str
@@ -81,7 +83,9 @@ class ChatInterface:
 
     async def create_session(self, name: str = None) -> str:
         """Create a new chat session."""
-        session_id = await self.session_manager.create_session({"name": name or "New Chat"})
+        session_id = await self.session_manager.create_session(
+            {"name": name or "New Chat"}
+        )
         return session_id
 
     async def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
@@ -94,12 +98,14 @@ class ChatInterface:
         messages = []
         for turn in turns:
             for message in turn["messages"]:
-                messages.append({
-                    "id": message.get("id"),
-                    "role": message.get("role"),
-                    "content": message.get("content"),
-                    "timestamp": turn.get("created_at"),
-                })
+                messages.append(
+                    {
+                        "id": message.get("id"),
+                        "role": message.get("role"),
+                        "content": message.get("content"),
+                        "timestamp": turn.get("created_at"),
+                    }
+                )
         return messages
 
     async def send_message(self, session_id: str, message: str) -> Dict[str, Any]:
@@ -116,12 +122,17 @@ class ChatInterface:
     async def list_sessions(self) -> List[Dict[str, Any]]:
         """List all sessions."""
         sessions = await self.session_manager.list_sessions()
-        return [{"id": s["id"], "name": s["name"], "created_at": s["created_at"]} for s in sessions]
+        return [
+            {"id": s["id"], "name": s["name"], "created_at": s["created_at"]}
+            for s in sessions
+        ]
 
     async def list_skills(self) -> List[Dict[str, Any]]:
         """List available skills."""
         skills = self.skill_registry.list_skills()
-        return [{"name": skill.name, "description": skill.description} for skill in skills]
+        return [
+            {"name": skill.name, "description": skill.description} for skill in skills
+        ]
 
     async def activate_skill(self, session_id: str, skill_name: str) -> Dict[str, Any]:
         """Activate a skill for a session."""
@@ -131,7 +142,9 @@ class ChatInterface:
         except Exception as e:
             return {"skill": skill_name, "error": str(e)}
 
-    async def create_branch(self, session_id: str, turn_id: str = None, branch_name: str = None) -> str:
+    async def create_branch(
+        self, session_id: str, turn_id: str = None, branch_name: str = None
+    ) -> str:
         """Create a branch from a session."""
         return await self.branch_manager.fork_session(session_id, turn_id, branch_name)
 
@@ -309,11 +322,7 @@ async def activate_skill(session_id: str, skill_name: str):
 
 
 @router.post("/api/chat/{session_id}/branches")
-async def create_branch(
-    session_id: str,
-    turn_id: str = None,
-    branch_name: str = None
-):
+async def create_branch(session_id: str, turn_id: str = None, branch_name: str = None):
     """Create a branch from a session."""
     chat_interface = get_chat_interface()
     branch_id = await chat_interface.create_branch(session_id, turn_id, branch_name)

@@ -239,6 +239,7 @@ Enable debug logging:
 
 ```python
 import logging
+
 logging.basicConfig(level=logging.DEBUG)
 ```
 

@@ -46,7 +46,7 @@ dfc = initialize_dfc(
     redis_client=redis_client,
     ukb_router=ukb_router,
     lsp_bus=lsp_bus,
-    memory=memory_store
+    memory=memory_store,
 )
 
 # Get global instance
@@ -56,10 +56,7 @@ dfc = get_dfc()
 dfc.promote_to_hot("key1", "value1")
 
 # Assemble HOT context
-plan = {
-    "cacheable_prefix": "System prompt...",
-    "prefetch_hints": ["hint1", "hint2"]
-}
+plan = {"cacheable_prefix": "System prompt...", "prefetch_hints": ["hint1", "hint2"]}
 hot_context = dfc.assemble_hot(plan)
 ```
 
@@ -73,7 +70,7 @@ integration = initialize_dfc_integration(
     redis_client=redis_client,
     ukb_router=ukb_router,
     lsp_bus=lsp_bus,
-    memory=memory_store
+    memory=memory_store,
 )
 
 # Promote tool results
@@ -180,9 +177,7 @@ from app.core.system_prompt_builder import SystemPromptBuilder
 
 prompt_builder = SystemPromptBuilder(dfc)
 system_prompt = prompt_builder.build_system_prompt(
-    base_prompt="Your system prompt...",
-    tools=tools,
-    plan=plan
+    base_prompt="Your system prompt...", tools=tools, plan=plan
 )
 ```
 
@@ -232,7 +227,8 @@ Enable debug logging:
 
 ```python
 import logging
-logging.getLogger('app.core.dfc').setLevel(logging.DEBUG)
+
+logging.getLogger("app.core.dfc").setLevel(logging.DEBUG)
 ```
 
 ## Contributing

@@ -29,10 +29,10 @@ async def hooks_list_ui(
     try:
         registry = get_hook_registry()
         executor = get_hook_executor()
-        
+
         # Get all registered hooks
         hooks_info = registry.list_hooks()
-        
+
         # Get hook execution statistics (this would be implemented in a real system)
         # For now, we'll use mock data
         hook_stats = {
@@ -41,7 +41,7 @@ async def hooks_list_ui(
             "failed_executions": 0,
             "recent_executions": [],
         }
-        
+
         return templates.TemplateResponse(
             "hooks/list.html",
             {
@@ -52,10 +52,12 @@ async def hooks_list_ui(
                 "current_user": current_user,
             },
         )
-        
+
     except Exception as e:
         logger.error(f"Error in hooks list UI: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to load hooks list: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to load hooks list: {str(e)}"
+        )
 
 
 @router.get("/execution-log", response_class=HTMLResponse)
@@ -97,7 +99,7 @@ async def hooks_execution_log_ui(
                 "created_at": "2024-01-15T10:25:00Z",
             },
         ]
-        
+
         # Filter executions based on parameters
         filtered_executions = mock_executions
         if session_id:
@@ -116,10 +118,10 @@ async def hooks_execution_log_ui(
             filtered_executions = [
                 e for e in filtered_executions if e["hook_type"] == hook_type
             ]
-        
+
         # Apply pagination
-        paginated_executions = filtered_executions[offset:offset + limit]
-        
+        paginated_executions = filtered_executions[offset : offset + limit]
+
         return templates.TemplateResponse(
             "hooks/execution_log.html",
             {
@@ -135,10 +137,12 @@ async def hooks_execution_log_ui(
                 "current_user": current_user,
             },
         )
-        
+
     except Exception as e:
         logger.error(f"Error in hooks execution log UI: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to load hooks execution log: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to load hooks execution log: {str(e)}"
+        )
 
 
 @router.get("/detail/{hook_name}", response_class=HTMLResponse)
@@ -151,7 +155,7 @@ async def hooks_detail_ui(
     try:
         registry = get_hook_registry()
         executor = get_hook_executor()
-        
+
         # Get hook information (this would be implemented in a real system)
         # For now, we'll use mock data
         hook_info = {
@@ -186,7 +190,7 @@ async def hooks_detail_ui(
                 },
             ],
         }
-        
+
         return templates.TemplateResponse(
             "hooks/detail.html",
             {
@@ -195,10 +199,12 @@ async def hooks_detail_ui(
                 "current_user": current_user,
             },
         )
-        
+
     except Exception as e:
         logger.error(f"Error in hooks detail UI: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to load hooks detail: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to load hooks detail: {str(e)}"
+        )
 
 
 @router.get("/register", response_class=HTMLResponse)
@@ -209,7 +215,7 @@ async def hooks_register_ui(
     """Hooks registration UI page."""
     try:
         registry = get_hook_registry()
-        
+
         # Get available hook types (this would be implemented in a real system)
         # For now, we'll use mock data
         available_hooks = [
@@ -232,10 +238,10 @@ async def hooks_register_ui(
                 "supported_tools": ["write", "edit", "bash"],
             },
         ]
-        
+
         # Get currently registered hooks
         registered_hooks = registry.list_hooks()
-        
+
         return templates.TemplateResponse(
             "hooks/register.html",
             {
@@ -245,10 +251,12 @@ async def hooks_register_ui(
                 "current_user": current_user,
             },
         )
-        
+
     except Exception as e:
         logger.error(f"Error in hooks register UI: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to load hooks register: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to load hooks register: {str(e)}"
+        )
 
 
 @router.post("/register")
@@ -262,24 +270,28 @@ async def hooks_register_post(
         hook_name = form_data.get("hook_name")
         tool_name = form_data.get("tool_name")
         hook_type = form_data.get("hook_type")
-        
+
         if not hook_name or not tool_name or not hook_type:
-            raise HTTPException(status_code=400, detail="Hook name, tool name, and type are required")
-        
+            raise HTTPException(
+                status_code=400, detail="Hook name, tool name, and type are required"
+            )
+
         registry = get_hook_registry()
-        
+
         # In a real implementation, this would register the hook
         # For now, we'll just log it
         logger.info(f"Registering hook {hook_name} for tool {tool_name} as {hook_type}")
-        
+
         # Redirect to hooks list
         return RedirectResponse("/ui/hooks/", status_code=303)
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error registering hook: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to register hook: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to register hook: {str(e)}"
+        )
 
 
 @router.post("/unregister")
@@ -291,24 +303,26 @@ async def hooks_unregister_post(
     try:
         form_data = await request.form()
         tool_name = form_data.get("tool_name")
-        
+
         if not tool_name:
             raise HTTPException(status_code=400, detail="Tool name is required")
-        
+
         registry = get_hook_registry()
-        
+
         # In a real implementation, this would unregister the hooks for the tool
         # For now, we'll just log it
         logger.info(f"Unregistering hooks for tool {tool_name}")
-        
+
         # Redirect to hooks list
         return RedirectResponse("/ui/hooks/", status_code=303)
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error unregistering hooks: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to unregister hooks: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to unregister hooks: {str(e)}"
+        )
 
 
 @router.get("/statistics", response_class=HTMLResponse)
@@ -353,7 +367,7 @@ async def hooks_statistics_ui(
                 },
             ],
         }
-        
+
         return templates.TemplateResponse(
             "hooks/statistics.html",
             {
@@ -362,10 +376,12 @@ async def hooks_statistics_ui(
                 "current_user": current_user,
             },
         )
-        
+
     except Exception as e:
         logger.error(f"Error in hooks statistics UI: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to load hooks statistics: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to load hooks statistics: {str(e)}"
+        )
 
 
 # Helper function to initialize the UI router

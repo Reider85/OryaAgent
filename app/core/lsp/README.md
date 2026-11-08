@@ -68,8 +68,7 @@ server = await lsp_bus.ensure_server("python", Path("/workspace"))
 
 # Use LSP tools
 hover_result = await server.hover(
-    file_path=Path("/workspace/main.py"),
-    position={"line": 10, "character": 5}
+    file_path=Path("/workspace/main.py"), position={"line": 10, "character": 5}
 )
 ```
 
@@ -124,12 +123,10 @@ await handler.handle_initialize()
 tools = await handler.handle_list_tools()
 
 # Call tool
-result = await handler.handle_call_tool("lsp.hover", {
-    "file_path": "main.py",
-    "line": 10,
-    "column": 20,
-    "workspace": "/workspace"
-})
+result = await handler.handle_call_tool(
+    "lsp.hover",
+    {"file_path": "main.py", "line": 10, "column": 20, "workspace": "/workspace"},
+)
 ```
 
 ## Supported Languages
@@ -349,8 +346,9 @@ Enable debug logging:
 
 ```python
 import logging
-logging.getLogger('app.core.lsp').setLevel(logging.DEBUG)
-logging.getLogger('app.mcp.lsp_mcp').setLevel(logging.DEBUG)
+
+logging.getLogger("app.core.lsp").setLevel(logging.DEBUG)
+logging.getLogger("app.mcp.lsp_mcp").setLevel(logging.DEBUG)
 ```
 
 ### Health Checks

@@ -383,20 +383,21 @@ def sanitize_untrusted(
 
 def get_current_user(request) -> str:
     """Get the current user from the request state.
-    
+
     This function extracts the user ID from the request state after authentication.
     The AuthMiddleware stores the user ID in request.state.user_id.
-    
+
     Args:
         request: FastAPI Request object
-        
+
     Returns:
         str: The current user's ID
-        
+
     Raises:
         HTTPException: If no user is found in the request state
     """
-    if not hasattr(request, 'state') or not hasattr(request.state, 'user_id'):
+    if not hasattr(request, "state") or not hasattr(request.state, "user_id"):
         from fastapi import HTTPException
+
         raise HTTPException(status_code=401, detail="Not authenticated")
     return request.state.user_id

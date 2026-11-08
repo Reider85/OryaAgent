@@ -29,10 +29,10 @@ async def skills_list_ui(
     """Skills list UI page."""
     try:
         registry = await get_skill_registry()
-        
+
         # Get all skills
         all_skills = registry.list_skills()
-        
+
         # Filter by category if specified
         if category:
             skills = registry.get_skills_by_category(category)
@@ -41,11 +41,11 @@ async def skills_list_ui(
             skills = registry.get_skills_by_tag(tag)
         else:
             skills = all_skills
-        
+
         # Get available categories and tags
         categories = registry.get_skill_categories()
         tags = registry.get_skill_tags()
-        
+
         return templates.TemplateResponse(
             "skills/list.html",
             {
@@ -59,10 +59,12 @@ async def skills_list_ui(
                 "current_user": current_user,
             },
         )
-        
+
     except Exception as e:
         logger.error(f"Error in skills list UI: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to load skills list: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to load skills list: {str(e)}"
+        )
 
 
 @router.get("/browse", response_class=HTMLResponse)
@@ -76,31 +78,32 @@ async def skills_browse_ui(
     """Skills browse UI page with search functionality."""
     try:
         registry = await get_skill_registry()
-        
+
         # Get all skills
         all_skills = registry.list_skills()
-        
+
         # Filter skills based on search, category, and tag
         filtered_skills = all_skills
-        
+
         if search_query:
             filtered_skills = [
-                skill for skill in filtered_skills
+                skill
+                for skill in filtered_skills
                 if search_query.lower() in skill.name.lower()
                 or search_query.lower() in skill.description.lower()
                 or any(search_query.lower() in tag.lower() for tag in skill.tags)
             ]
-        
+
         if category:
             filtered_skills = registry.get_skills_by_category(category)
-        
+
         if tag:
             filtered_skills = registry.get_skills_by_tag(tag)
-        
+
         # Get available categories and tags
         categories = registry.get_skill_categories()
         tags = registry.get_skill_tags()
-        
+
         return templates.TemplateResponse(
             "skills/browse.html",
             {
@@ -115,10 +118,12 @@ async def skills_browse_ui(
                 "current_user": current_user,
             },
         )
-        
+
     except Exception as e:
         logger.error(f"Error in skills browse UI: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to load skills browse: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to load skills browse: {str(e)}"
+        )
 
 
 @router.get("/detail/{skill_name}", response_class=HTMLResponse)
@@ -131,16 +136,16 @@ async def skills_detail_ui(
     try:
         registry = await get_skill_registry()
         skill = registry.get_skill(skill_name)
-        
+
         if not skill:
             raise HTTPException(status_code=404, detail="Skill not found")
-        
+
         # Get validation status
         validation_result = await registry.validate_skill(skill_name)
-        
+
         # Get dependencies
         dependencies = await registry.get_skill_dependencies(skill_name)
-        
+
         return templates.TemplateResponse(
             "skills/detail.html",
             {
@@ -151,12 +156,14 @@ async def skills_detail_ui(
                 "current_user": current_user,
             },
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error in skills detail UI: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to load skills detail: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to load skills detail: {str(e)}"
+        )
 
 
 @router.post("/activate/{skill_name}")
@@ -168,26 +175,28 @@ async def skills_activate_ui(
     """Activate a skill via UI."""
     try:
         registry = await get_skill_registry()
-        
+
         # Validate skill first
         validation_result = await registry.validate_skill(skill_name)
         if not validation_result.get("valid", False):
             raise HTTPException(
-                status_code=400, 
-                detail=f"Skill validation failed: {validation_result.get('issues', ['Unknown error'])}"
+                status_code=400,
+                detail=f"Skill validation failed: {validation_result.get('issues', ['Unknown error'])}",
             )
-        
+
         # Activate skill
         activated_items = await registry.activate_skill(skill_name)
-        
+
         # Redirect to skills list with success message
         return RedirectResponse("/ui/skills/", status_code=303)
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error activating skill: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to activate skill: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to activate skill: {str(e)}"
+        )
 
 
 @router.post("/deactivate/{skill_name}")
@@ -199,18 +208,20 @@ async def skills_deactivate_ui(
     """Deactivate a skill via UI."""
     try:
         registry = await get_skill_registry()
-        
+
         # Deactivate skill
         deactivated_items = await registry.deactivate_skill(skill_name)
-        
+
         # Redirect to skills list with success message
         return RedirectResponse("/ui/skills/", status_code=303)
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error deactivating skill: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to deactivate skill: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to deactivate skill: {str(e)}"
+        )
 
 
 @router.get("/validation/{skill_name}", response_class=HTMLResponse)
@@ -223,12 +234,12 @@ async def skills_validation_ui(
     try:
         registry = await get_skill_registry()
         skill = registry.get_skill(skill_name)
-        
+
         if not skill:
             raise HTTPException(status_code=404, detail="Skill not found")
-        
+
         validation_result = await registry.validate_skill(skill_name)
-        
+
         return templates.TemplateResponse(
             "skills/validation.html",
             {
@@ -238,12 +249,14 @@ async def skills_validation_ui(
                 "current_user": current_user,
             },
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error in skills validation UI: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to load skills validation: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to load skills validation: {str(e)}"
+        )
 
 
 @router.post("/validate/{skill_name}")
@@ -256,13 +269,15 @@ async def skills_validate_post(
     try:
         registry = await get_skill_registry()
         validation_result = await registry.validate_skill(skill_name)
-        
+
         # Redirect to validation page with result
         return RedirectResponse(f"/ui/skills/validation/{skill_name}", status_code=303)
-        
+
     except Exception as e:
         logger.error(f"Error validating skill: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to validate skill: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to validate skill: {str(e)}"
+        )
 
 
 @router.get("/dependencies/{skill_name}", response_class=HTMLResponse)
@@ -275,13 +290,13 @@ async def skills_dependencies_ui(
     try:
         registry = await get_skill_registry()
         skill = registry.get_skill(skill_name)
-        
+
         if not skill:
             raise HTTPException(status_code=404, detail="Skill not found")
-        
+
         dependencies = await registry.get_skill_dependencies(skill_name)
         resolved_dependencies = registry.resolve_skill_dependencies(skill_name)
-        
+
         return templates.TemplateResponse(
             "skills/dependencies.html",
             {
@@ -292,12 +307,14 @@ async def skills_dependencies_ui(
                 "current_user": current_user,
             },
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error in skills dependencies UI: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to load skills dependencies: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to load skills dependencies: {str(e)}"
+        )
 
 
 @router.get("/export", response_class=HTMLResponse)
@@ -309,7 +326,7 @@ async def skills_export_ui(
     try:
         registry = await get_skill_registry()
         skills = registry.list_skills()
-        
+
         return templates.TemplateResponse(
             "skills/export.html",
             {
@@ -318,10 +335,12 @@ async def skills_export_ui(
                 "current_user": current_user,
             },
         )
-        
+
     except Exception as e:
         logger.error(f"Error in skills export UI: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to load skills export: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to load skills export: {str(e)}"
+        )
 
 
 @router.post("/export")
@@ -332,23 +351,23 @@ async def skills_export_post(
     """Export skills via UI."""
     try:
         registry = await get_skill_registry()
-        
+
         # Export skills to a file
         import tempfile
         import os
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             temp_file = f.name
-        
+
         registry.export_skills(temp_file)
-        
+
         # Read the exported content
-        with open(temp_file, 'r') as f:
+        with open(temp_file, "r") as f:
             exported_content = f.read()
-        
+
         # Clean up temp file
         os.unlink(temp_file)
-        
+
         return templates.TemplateResponse(
             "skills/export_result.html",
             {
@@ -357,10 +376,12 @@ async def skills_export_post(
                 "current_user": current_user,
             },
         )
-        
+
     except Exception as e:
         logger.error(f"Error exporting skills: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to export skills: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to export skills: {str(e)}"
+        )
 
 
 # Helper function to initialize the UI router

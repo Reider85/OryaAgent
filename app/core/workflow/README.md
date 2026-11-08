@@ -129,12 +129,12 @@ test_cases = dataset.generate_test_cases(10)
 from app.core.workflow.state import PipelineConfig
 
 config = PipelineConfig(
-    max_replans=2,              # Maximum replan attempts
-    concurrent_tester=False,     # Sequential testing in BETA
-    max_steps_per_plan=5,       # Maximum steps per plan
-    timeout_per_step=30.0,      # Timeout per step in seconds
-    enable_artifacts=True,      # Enable artifact storage
-    artifact_storage_path="/tmp/artifacts"
+    max_replans=2,  # Maximum replan attempts
+    concurrent_tester=False,  # Sequential testing in BETA
+    max_steps_per_plan=5,  # Maximum steps per plan
+    timeout_per_step=30.0,  # Timeout per step in seconds
+    enable_artifacts=True,  # Enable artifact storage
+    artifact_storage_path="/tmp/artifacts",
 )
 ```
 
@@ -187,7 +187,7 @@ prompt = f"""You are an execution assistant. Execute the plan:
 
 Plan:
 Steps:
-{chr(10).join([f"{i+1}. {step}" for i, step in enumerate(plan.steps)])}
+{chr(10).join([f"{i + 1}. {step}" for i, step in enumerate(plan.steps)])}
 
 Success Criteria:
 {chr(10).join([f"- {criterion}" for criterion in plan.criteria])}
@@ -319,9 +319,7 @@ model = router.select(tier=plan.tier, user_id=user_id)
 # Integration with existing system prompt building
 prompt_builder = SystemPromptBuilder(dfc)
 system_prompt = prompt_builder.build_system_prompt(
-    base_prompt="...",
-    tools=tools,
-    plan=plan
+    base_prompt="...", tools=tools, plan=plan
 )
 ```
 
@@ -348,7 +346,8 @@ Enable debug logging:
 
 ```python
 import logging
-logging.getLogger('app.core.workflow.tri_model').setLevel(logging.DEBUG)
+
+logging.getLogger("app.core.workflow.tri_model").setLevel(logging.DEBUG)
 ```
 
 ## Contributing

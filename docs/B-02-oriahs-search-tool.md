@@ -74,11 +74,9 @@ from app.tools.oriahs_search import oriahs_search
 result = await oriahs_search.ainvoke({"query": "authentication system"})
 
 # Search with custom parameters
-result = await oriahs_search.ainvoke({
-    "query": "user authentication",
-    "top_k": 5,
-    "filters": {"file_type": "python"}
-})
+result = await oriahs_search.ainvoke(
+    {"query": "user authentication", "top_k": 5, "filters": {"file_type": "python"}}
+)
 ```
 
 ### Configuration

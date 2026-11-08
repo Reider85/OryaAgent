@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class Plan:
     """Plan dataclass for Tri-Model Pipeline."""
+
     steps: List[str]
     criteria: List[str]
     prefetch_hints: List[str]
@@ -24,11 +25,11 @@ class Plan:
     dynamic_suffix: str = ""
     session_id: Optional[str] = None
     created_at: Optional[float] = None
-    
+
     def __post_init__(self):
         if self.created_at is None:
             self.created_at = time.time()
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
@@ -41,7 +42,7 @@ class Plan:
             "session_id": self.session_id,
             "created_at": self.created_at,
         }
-    
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Plan":
         """Create from dictionary."""
@@ -60,13 +61,14 @@ class Plan:
 @dataclass
 class Verdict:
     """Test verdict for Tri-Model Pipeline."""
+
     verdict: str  # pass|fail|replan
     message: str = ""
     confidence: float = 1.0
     failed_criteria: List[str] = field(default_factory=list)
     execution_diff: Optional[str] = None
     test_duration_ms: float = 0.0
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
@@ -82,6 +84,7 @@ class Verdict:
 @dataclass
 class TurnResult:
     """Result of a turn in Tri-Model Pipeline."""
+
     plan: Plan
     execution_result: Dict[str, Any]
     verdict: Verdict
@@ -90,7 +93,7 @@ class TurnResult:
     plan_duration_ms: float = 0.0
     execution_duration_ms: float = 0.0
     test_duration_ms: float = 0.0
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
@@ -107,7 +110,7 @@ class TurnResult:
 
 class TriModelPipeline:
     """Tri-Model Pipeline: plan → execute → test."""
-    
+
     def __init__(
         self,
         planner_model: Any,
@@ -123,19 +126,19 @@ class TriModelPipeline:
         self.dfc = dfc
         self.max_replans = max_replans
         self.concurrent_tester = concurrent_tester
-        
+
         # Statistics
         self.total_turns = 0
         self.passed_turns = 0
         self.failed_turns = 0
         self.replan_turns = 0
-    
+
     async def build_graph(self) -> Any:
         """Build LangGraph subgraph for Tri-Model Pipeline."""
         # In a real implementation, this would build a LangGraph subgraph
         # For now, we'll return a mock graph structure
         return MockTriModelGraph(self)
-    
+
     async def execute_turn(
         self,
         session_state: Dict[str, Any],
@@ -146,13 +149,15 @@ class TriModelPipeline:
         """Execute a single turn with Tri-Model Pipeline."""
         start_time = time.time()
         context = context or {}
-        
-        with emit_span("tri_model.execute_turn", {
-            "task": task,
-            "session_id": session_state.get("session_id"),
-            "concurrent_tester": self.concurrent_tester,
-        }) as span:
-            
+
+        with emit_span(
+            "tri_model.execute_turn",
+            {
+                "task": task,
+                "session_id": session_state.get("session_id"),
+                "concurrent_tester": self.concurrent_tester,
+            },
+        ) as span:
             # Step 1: Plan
             plan_result = await self._plan_step(
                 session_state=session_state,
@@ -161,7 +166,7 @@ class TriModelPipeline:
                 context=context,
             )
             plan_duration = time.time() - start_time
-            
+
             # Step 2: Execute
             execution_result = await self._execute_step(
                 plan=plan_result,
@@ -170,7 +175,7 @@ class TriModelPipeline:
                 context=context,
             )
             execution_duration = time.time() - start_time - plan_duration
-            
+
             # Step 3: Test
             if self.concurrent_tester:
                 # In PROD, tester runs concurrently with executor
@@ -194,8 +199,10 @@ class TriModelPipeline:
                     session_state=session_state,
                     context=context,
                 )
-            test_duration = time.time() - start_time - plan_duration - execution_duration
-            
+            test_duration = (
+                time.time() - start_time - plan_duration - execution_duration
+            )
+
             # Determine verdict and handle replanning
             turn_result = TurnResult(
                 plan=plan_result,
@@ -206,9 +213,12 @@ class TriModelPipeline:
                 test_duration_ms=test_duration * 1000,
                 total_duration_ms=(time.time() - start_time) * 1000,
             )
-            
+
             # Handle replanning if needed
-            if verdict.verdict == "fail" and turn_result.replan_count < self.max_replans:
+            if (
+                verdict.verdict == "fail"
+                and turn_result.replan_count < self.max_replans
+            ):
                 turn_result = await self._replan(
                     turn_result=turn_result,
                     session_state=session_state,
@@ -216,7 +226,7 @@ class TriModelPipeline:
                     task=task,
                     context=context,
                 )
-            
+
             # Update statistics
             self.total_turns += 1
             if verdict.verdict == "pass":
@@ -225,13 +235,13 @@ class TriModelPipeline:
                 self.failed_turns += 1
             if turn_result.replan_count > 0:
                 self.replan_turns += 1
-            
+
             span.set_attribute("verdict", verdict.verdict)
             span.set_attribute("replan_count", turn_result.replan_count)
             span.set_attribute("total_duration_ms", turn_result.total_duration_ms)
-            
+
             return turn_result
-    
+
     async def _plan_step(
         self,
         session_state: Dict[str, Any],
@@ -240,11 +250,13 @@ class TriModelPipeline:
         context: Dict[str, Any],
     ) -> Plan:
         """Execute planning step."""
-        with emit_span("tri_model.plan", {
-            "task": task,
-            "session_id": session_state.get("session_id"),
-        }) as span:
-            
+        with emit_span(
+            "tri_model.plan",
+            {
+                "task": task,
+                "session_id": session_state.get("session_id"),
+            },
+        ) as span:
             # Build prompt for planner
             prompt = self._build_planner_prompt(
                 session_state=session_state,
@@ -252,24 +264,24 @@ class TriModelPipeline:
                 task=task,
                 context=context,
             )
-            
+
             # Call planner model
             planning_response = await self.planner_model.generate(prompt)
-            
+
             # Parse plan response
             plan = self._parse_planning_response(planning_response.content)
-            
+
             span.set_attribute("steps_count", len(plan.steps))
             span.set_attribute("criteria_count", len(plan.criteria))
             span.set_attribute("tier", plan.tier)
-            
+
             # Integrate with DFC if available
             if self.dfc:
                 hot_context = self.dfc.assemble_hot(plan.to_dict())
                 plan.dynamic_suffix = hot_context
-            
+
             return plan
-    
+
     async def _execute_step(
         self,
         plan: Plan,
@@ -278,11 +290,13 @@ class TriModelPipeline:
         context: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Execute planning step."""
-        with emit_span("tri_model.execute", {
-            "tier": plan.tier,
-            "session_id": session_state.get("session_id"),
-        }) as span:
-            
+        with emit_span(
+            "tri_model.execute",
+            {
+                "tier": plan.tier,
+                "session_id": session_state.get("session_id"),
+            },
+        ) as span:
             # Build prompt for executor
             prompt = self._build_executor_prompt(
                 plan=plan,
@@ -290,18 +304,18 @@ class TriModelPipeline:
                 tools=tools,
                 context=context,
             )
-            
+
             # Call executor model
             execution_response = await self.executor_model.generate(prompt)
-            
+
             # Parse execution result
             result = self._parse_execution_response(execution_response.content)
-            
+
             span.set_attribute("execution_success", result.get("success", True))
             span.set_attribute("tools_used", len(result.get("tools_used", [])))
-            
+
             return result
-    
+
     async def _test_step(
         self,
         plan: Plan,
@@ -310,10 +324,12 @@ class TriModelPipeline:
         context: Dict[str, Any],
     ) -> Verdict:
         """Execute testing step."""
-        with emit_span("tri_model.test", {
-            "session_id": session_state.get("session_id"),
-        }) as span:
-            
+        with emit_span(
+            "tri_model.test",
+            {
+                "session_id": session_state.get("session_id"),
+            },
+        ) as span:
             # Build prompt for tester
             prompt = self._build_tester_prompt(
                 plan=plan,
@@ -321,19 +337,19 @@ class TriModelPipeline:
                 session_state=session_state,
                 context=context,
             )
-            
+
             # Call tester model
             test_response = await self.tester_model.generate(prompt)
-            
+
             # Parse verdict
             verdict = self._parse_test_response(test_response.content)
-            
+
             span.set_attribute("verdict", verdict.verdict)
             span.set_attribute("confidence", verdict.confidence)
             span.set_attribute("failed_criteria_count", len(verdict.failed_criteria))
-            
+
             return verdict
-    
+
     async def _replan(
         self,
         turn_result: TurnResult,
@@ -343,23 +359,25 @@ class TriModelPipeline:
         context: Dict[str, Any],
     ) -> TurnResult:
         """Handle replanning."""
-        with emit_span("tri_model.replan", {
-            "replan_count": turn_result.replan_count + 1,
-            "session_id": session_state.get("session_id"),
-        }) as span:
-            
+        with emit_span(
+            "tri_model.replan",
+            {
+                "replan_count": turn_result.replan_count + 1,
+                "session_id": session_state.get("session_id"),
+            },
+        ) as span:
             logger.info(f"Replanning turn (attempt {turn_result.replan_count + 1})")
-            
+
             # Update plan with feedback
             updated_plan = self._update_plan_for_replan(
                 original_plan=turn_result.plan,
                 verdict=turn_result.verdict,
                 execution_result=turn_result.execution_result,
             )
-            
+
             # Execute again with updated plan
             turn_result.replan_count += 1
-            
+
             # Re-execute with updated plan
             execution_result = await self._execute_step(
                 plan=updated_plan,
@@ -367,7 +385,7 @@ class TriModelPipeline:
                 tools=tools,
                 context=context,
             )
-            
+
             # Test again
             verdict = await self._test_step(
                 plan=updated_plan,
@@ -375,18 +393,18 @@ class TriModelPipeline:
                 session_state=session_state,
                 context=context,
             )
-            
+
             # Update turn result
             turn_result.plan = updated_plan
             turn_result.execution_result = execution_result
             turn_result.verdict = verdict
             turn_result.total_duration_ms += (time.time() - start_time) * 1000
-            
+
             span.set_attribute("final_verdict", verdict.verdict)
             span.set_attribute("total_replans", turn_result.replan_count)
-            
+
             return turn_result
-    
+
     def _build_planner_prompt(
         self,
         session_state: Dict[str, Any],
@@ -400,9 +418,9 @@ class TriModelPipeline:
 Task: {task}
 
 Session Context:
-- Current directory: {session_state.get('current_dir', '/')}
-- Files in context: {len(session_state.get('files', []))} files
-- Recent activity: {session_state.get('recent_activity', 'none')}
+- Current directory: {session_state.get("current_dir", "/")}
+- Files in context: {len(session_state.get("files", []))} files
+- Recent activity: {session_state.get("recent_activity", "none")}
 
 Available Tools:
 {chr(10).join([f"- {tool.name}: {tool.description}" for tool in tools])}
@@ -433,7 +451,7 @@ Return your plan in JSON format:
 
 Plan:
 Steps:
-{chr(10).join([f"{i+1}. {step}" for i, step in enumerate(plan.steps)])}
+{chr(10).join([f"{i + 1}. {step}" for i, step in enumerate(plan.steps)])}
 
 Success Criteria:
 {chr(10).join([f"- {criterion}" for criterion in plan.criteria])}
@@ -444,8 +462,8 @@ Prefetch Hints:
 Model Tier: {plan.tier}
 
 Context:
-- Current directory: {session_state.get('current_dir', '/')}
-- Files in context: {len(session_state.get('files', []))} files
+- Current directory: {session_state.get("current_dir", "/")}
+- Files in context: {len(session_state.get("files", []))} files
 
 Execute the plan using the available tools and return the results."""
 
@@ -461,7 +479,7 @@ Execute the plan using the available tools and return the results."""
 
 Plan:
 Steps:
-{chr(10).join([f"{i+1}. {step}" for i, step in enumerate(plan.steps)])}
+{chr(10).join([f"{i + 1}. {step}" for i, step in enumerate(plan.steps)])}
 
 Success Criteria:
 {chr(10).join([f"- {criterion}" for criterion in plan.criteria])}
@@ -480,7 +498,7 @@ Return your verdict in JSON format:
     def _parse_planning_response(self, response: str) -> Plan:
         """Parse planning response into Plan object."""
         import json
-        
+
         try:
             data = json.loads(response)
             return Plan.from_dict(data)
@@ -496,7 +514,7 @@ Return your verdict in JSON format:
     def _parse_execution_response(self, response: str) -> Dict[str, Any]:
         """Parse execution response into result dict."""
         import json
-        
+
         try:
             return json.loads(response)
         except json.JSONDecodeError:
@@ -511,7 +529,7 @@ Return your verdict in JSON format:
     def _parse_test_response(self, response: str) -> Verdict:
         """Parse test response into Verdict object."""
         import json
-        
+
         try:
             data = json.loads(response)
             return Verdict(
@@ -538,15 +556,17 @@ Return your verdict in JSON format:
         """Update plan for replanning based on verdict."""
         # Create updated plan with feedback
         updated_steps = original_plan.steps.copy()
-        
+
         # Add feedback to steps
         if verdict.failed_criteria:
-            updated_steps.append(f"Address failed criteria: {', '.join(verdict.failed_criteria)}")
-        
+            updated_steps.append(
+                f"Address failed criteria: {', '.join(verdict.failed_criteria)}"
+            )
+
         # Add any missing steps from execution
         if execution_result.get("missing_steps"):
             updated_steps.extend(execution_result["missing_steps"])
-        
+
         return Plan(
             steps=updated_steps,
             criteria=original_plan.criteria,
@@ -561,7 +581,7 @@ Return your verdict in JSON format:
         total = self.total_turns
         pass_rate = (self.passed_turns / total) if total > 0 else 0
         replan_rate = (self.replan_turns / total) if total > 0 else 0
-        
+
         return {
             "total_turns": total,
             "passed_turns": self.passed_turns,
@@ -576,10 +596,10 @@ Return your verdict in JSON format:
 
 class MockTriModelGraph:
     """Mock LangGraph subgraph for Tri-Model Pipeline."""
-    
+
     def __init__(self, pipeline: TriModelPipeline):
         self.pipeline = pipeline
-    
+
     async def astream_events(self, *args, **kwargs):
         """Mock async stream events."""
         # In a real implementation, this would stream LangGraph events
@@ -588,7 +608,7 @@ class MockTriModelGraph:
         yield {"type": "execution", "data": {}}
         yield {"type": "testing", "data": {}}
         yield {"type": "end", "data": {}}
-    
+
     async def ainvoke(self, *args, **kwargs):
         """Mock async invoke."""
         return await self.pipeline.execute_turn(*args, **kwargs)

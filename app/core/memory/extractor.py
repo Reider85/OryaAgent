@@ -24,7 +24,12 @@ logger = logging.getLogger(__name__)
 class MemoryExtractor:
     """LLM-based memory extractor for fact generation."""
 
-    def __init__(self, model_name: str = "haiku", batch_size: int = 10, extraction_interval: int = 10):
+    def __init__(
+        self,
+        model_name: str = "haiku",
+        batch_size: int = 10,
+        extraction_interval: int = 10,
+    ):
         self.model_name = model_name
         self.batch_size = batch_size
         self.extraction_interval = extraction_interval
@@ -68,7 +73,9 @@ class MemoryExtractor:
         try:
             with MemoryExtractionMetricsContext(session_id) as metrics_context:
                 # Get messages from LEARNED.md
-                messages_file = self._md_store.get_session_memory_dir(session_id) / "LEARNED.md"
+                messages_file = (
+                    self._md_store.get_session_memory_dir(session_id) / "LEARNED.md"
+                )
                 if not messages_file.exists():
                     return []
 
@@ -77,19 +84,21 @@ class MemoryExtractor:
                     return []
 
                 # Get recent messages (last batch_size)
-                messages = messages_content.split("\n")[-self.batch_size:]
-                
+                messages = messages_content.split("\n")[-self.batch_size :]
+
                 # Extract facts using LLM
                 facts = await self._extract_with_llm(session_id, messages)
-                
+
                 # Store facts
                 await self._store_facts(session_id, facts)
-                
+
                 # Update metrics
                 metrics_context.facts_count = len(facts)
                 metrics_context.source_messages = len(messages)
-                
-                logger.info(f"Extracted {len(facts)} facts from {len(messages)} messages for session {session_id}")
+
+                logger.info(
+                    f"Extracted {len(facts)} facts from {len(messages)} messages for session {session_id}"
+                )
                 return facts
 
         except Exception as e:
@@ -98,18 +107,20 @@ class MemoryExtractor:
         finally:
             self._extracting = False
 
-    async def _extract_with_llm(self, session_id: str, messages: List[str]) -> List[Dict[str, Any]]:
+    async def _extract_with_llm(
+        self, session_id: str, messages: List[str]
+    ) -> List[Dict[str, Any]]:
         """Extract facts using LLM."""
         # This is a placeholder implementation
         # In a real implementation, this would call an LLM with a prompt
         # to extract structured facts from the messages
-        
+
         facts = []
-        
+
         for i, message in enumerate(messages):
             if not message.strip():
                 continue
-                
+
             # Simple fact extraction (in real implementation, use LLM)
             fact = {
                 "id": f"fact_{int(time.time() * 1000)}_{i}",
@@ -120,9 +131,9 @@ class MemoryExtractor:
                 "confidence": 0.8,
                 "source_message_index": i,
             }
-            
+
             facts.append(fact)
-        
+
         return facts
 
     async def _store_facts(self, session_id: str, facts: List[Dict[str, Any]]) -> None:
@@ -138,7 +149,9 @@ class MemoryExtractor:
             except Exception as e:
                 logger.error(f"Failed to store fact {fact.get('id', 'unknown')}: {e}")
 
-    async def get_extracted_facts(self, session_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+    async def get_extracted_facts(
+        self, session_id: str, limit: int = 50
+    ) -> List[Dict[str, Any]]:
         """Get extracted facts for a session."""
         if not self._sqlite_store:
             await self.initialize()
@@ -149,7 +162,7 @@ class MemoryExtractor:
             '"extracted_fact"',
             limit=limit,
         )
-        
+
         return facts_data
 
     async def get_extraction_stats(self, session_id: str) -> Dict[str, Any]:
@@ -163,9 +176,9 @@ class MemoryExtractor:
             '"extracted_fact"',
             limit=1000,
         )
-        
+
         total_facts = len(facts_data)
-        
+
         # Get oldest and newest extraction
         if facts_data:
             oldest = min(facts_data, key=lambda x: x["created_at"])
@@ -173,7 +186,7 @@ class MemoryExtractor:
         else:
             oldest = None
             newest = None
-        
+
         return {
             "session_id": session_id,
             "total_facts": total_facts,

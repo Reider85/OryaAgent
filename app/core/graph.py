@@ -749,10 +749,10 @@ def build_graph(
         B-04: All tool executions go through pre and post hooks.
         """
         from app.core.hooks_integration import HooksIntegratedToolNode
-        
+
         # Create hooks-integrated tool node
         hooks_tool_node = HooksIntegratedToolNode(tool_list)
-        
+
         tool_calls = _pending_tool_calls(state)
         started = time.time()
         result = await hooks_tool_node.ainvoke(state, config)

@@ -343,7 +343,7 @@ def emit_mcp_span(
     **attributes: Any,
 ) -> None:
     """Emit span for MCP tool operations (B-02).
-    
+
     Args:
         tool_name: Name of the MCP tool called
         server_url: URL of the MCP server
@@ -376,7 +376,7 @@ def emit_semantic_search_span(
     **attributes: Any,
 ) -> None:
     """Emit span for semantic search operations (B-02).
-    
+
     Args:
         query: Search query
         top_k: Number of results requested

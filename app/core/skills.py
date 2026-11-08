@@ -40,7 +40,7 @@ class Skill:
         """Save skill metadata to SQLite store."""
         if not self._store_metadata:
             return
-            
+
         store = get_sqlite_store()
         skill_data = {
             "name": self.name,
@@ -56,7 +56,7 @@ class Skill:
             "is_active": self.is_active,
             "validation_status": "valid" if self.is_valid else "unknown",
         }
-        
+
         await store.add_skill_metadata(skill_data)
 
     def to_dict(self) -> dict[str, Any]:
@@ -153,11 +153,13 @@ class SkillRegistry:
         """Get skills by tag."""
         return [skill for skill in self._skills.values() if tag in skill.tags]
 
-    async def load_skills_from_directory(self, directory: str | Path | None = None) -> None:
+    async def load_skills_from_directory(
+        self, directory: str | Path | None = None
+    ) -> None:
         """Load all skills from a directory containing YAML files."""
         # First load from store
         await self._load_skills_from_store()
-        
+
         skills_dir = Path(directory) if directory else self._skills_dir
 
         if not skills_dir.exists():
@@ -201,7 +203,7 @@ class SkillRegistry:
 
         # Set the skill as active
         skill.is_active = True
-        
+
         # Update in store
         if skill._store_metadata:
             await self._store.update_skill_activation(skill_name, True)
@@ -245,7 +247,7 @@ class SkillRegistry:
 
         # Set the skill as inactive
         skill.is_active = False
-        
+
         # Update in store
         if skill._store_metadata:
             await self._store.update_skill_activation(skill_name, False)
@@ -292,16 +294,26 @@ class SkillRegistry:
 
         is_valid = len(issues) == 0
         validation_status = "valid" if is_valid else "invalid"
-        
+
         # Update validation status in store
         if skill._store_metadata:
-            await self._store.update_skill_validation_status(skill_name, validation_status)
+            await self._store.update_skill_validation_status(
+                skill_name, validation_status
+            )
             await skill.save_metadata()
 
         if issues:
-            return {"valid": False, "issues": issues, "validation_status": validation_status}
+            return {
+                "valid": False,
+                "issues": issues,
+                "validation_status": validation_status,
+            }
 
-        return {"valid": True, "message": "Skill configuration is valid", "validation_status": validation_status}
+        return {
+            "valid": True,
+            "message": "Skill configuration is valid",
+            "validation_status": validation_status,
+        }
 
     async def get_skill_dependencies(self, skill_name: str) -> list[str]:
         """Get the dependency tree for a skill."""
@@ -341,6 +353,7 @@ class SkillRegistry:
 
         # Run async function
         import asyncio
+
         asyncio.run(visit(skill_name))
         return resolved
 
@@ -392,7 +405,9 @@ async def get_skill_registry() -> SkillRegistry:
     return _skill_registry
 
 
-async def initialize_skill_registry(directory: str | Path | None = None) -> SkillRegistry:
+async def initialize_skill_registry(
+    directory: str | Path | None = None,
+) -> SkillRegistry:
     """Initialize the skill registry with optional custom directory."""
     global _skill_registry
     _skill_registry = SkillRegistry()

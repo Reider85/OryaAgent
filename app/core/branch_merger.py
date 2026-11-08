@@ -58,11 +58,17 @@ class BranchMerger:
                 raise ValueError(f"Branch session not found: {branch_session_id}")
 
             if branch_session["parent_session_id"] != parent_session_id:
-                raise ValueError(f"Branch {branch_session_id} is not a child of {parent_session_id}")
+                raise ValueError(
+                    f"Branch {branch_session_id} is not a child of {parent_session_id}"
+                )
 
             # Get turns from both sessions
-            parent_turns = await self.session_manager.get_session_turns(parent_session_id)
-            branch_turns = await self.session_manager.get_session_turns(branch_session_id)
+            parent_turns = await self.session_manager.get_session_turns(
+                parent_session_id
+            )
+            branch_turns = await self.session_manager.get_session_turns(
+                branch_session_id
+            )
 
             # Find the fork point
             fork_point = await self._find_fork_point(parent_turns, branch_turns)
@@ -97,9 +103,13 @@ class BranchMerger:
             await self._merge_memory_files(parent_session_id, branch_session_id)
 
             # Update metadata
-            await self._update_merge_metadata(parent_session_id, branch_session_id, merge_result)
+            await self._update_merge_metadata(
+                parent_session_id, branch_session_id, merge_result
+            )
 
-            logger.info(f"Merged branch {branch_session_id} into parent {parent_session_id}")
+            logger.info(
+                f"Merged branch {branch_session_id} into parent {parent_session_id}"
+            )
             return merge_result
 
         except Exception as e:
@@ -119,7 +129,11 @@ class BranchMerger:
                     return {
                         "parent_turn_id": parent_turn_id,
                         "parent_turn_number": next(
-                            (t["turn_number"] for t in parent_turns if t["id"] == parent_turn_id),
+                            (
+                                t["turn_number"]
+                                for t in parent_turns
+                                if t["id"] == parent_turn_id
+                            ),
                             None,
                         ),
                     }
@@ -130,15 +144,22 @@ class BranchMerger:
             return None
 
     async def _analyze_differences(
-        self, parent_turns: List[Dict], branch_turns: List[Dict], fork_point: Dict[str, Any]
+        self,
+        parent_turns: List[Dict],
+        branch_turns: List[Dict],
+        fork_point: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Analyze differences between parent and branch after fork point."""
         try:
             parent_fork_index = next(
-                (i for i, t in enumerate(parent_turns) if t["id"] == fork_point["parent_turn_id"]),
+                (
+                    i
+                    for i, t in enumerate(parent_turns)
+                    if t["id"] == fork_point["parent_turn_id"]
+                ),
                 len(parent_turns),
             )
-            
+
             branch_fork_index = 0  # Branch starts from fork point
 
             parent_new_turns = parent_turns[parent_fork_index:]
@@ -157,17 +178,19 @@ class BranchMerger:
                 zip(parent_new_turns, branch_new_turns)
             ):
                 if parent_turn["messages"] != branch_turn["messages"]:
-                    differences["conflicts"].append({
-                        "turn_number": parent_turn["turn_number"],
-                        "parent_messages": parent_turn["messages"],
-                        "branch_messages": branch_turn["messages"],
-                    })
+                    differences["conflicts"].append(
+                        {
+                            "turn_number": parent_turn["turn_number"],
+                            "parent_messages": parent_turn["messages"],
+                            "branch_messages": branch_turn["messages"],
+                        }
+                    )
 
             # Find unique turns
             if len(parent_new_turns) > len(branch_new_turns):
-                differences["unique_parent"] = parent_new_turns[len(branch_new_turns):]
+                differences["unique_parent"] = parent_new_turns[len(branch_new_turns) :]
             elif len(branch_new_turns) > len(parent_new_turns):
-                differences["unique_branch"] = branch_new_turns[len(parent_new_turns):]
+                differences["unique_branch"] = branch_new_turns[len(parent_new_turns) :]
 
             return differences
 
@@ -194,7 +217,9 @@ class BranchMerger:
             }
 
             # Get all branch turns after fork point
-            branch_turns = await self.session_manager.get_session_turns(branch_session_id)
+            branch_turns = await self.session_manager.get_session_turns(
+                branch_session_id
+            )
             branch_fork_index = 0
 
             # Merge turns
@@ -248,8 +273,10 @@ class BranchMerger:
             }
 
             # Get all branch turns
-            branch_turns = await self.session_manager.get_session_turns(branch_session_id)
-            
+            branch_turns = await self.session_manager.get_session_turns(
+                branch_session_id
+            )
+
             # Append branch turns to parent
             for branch_turn in branch_turns:
                 # Create new turn with adjusted turn number
@@ -296,7 +323,9 @@ class BranchMerger:
             logger.error(f"Failed to add turn to session: {e}")
             raise ValueError(f"Failed to add turn to session: {str(e)}")
 
-    async def _merge_memory_files(self, parent_session_id: str, branch_session_id: str) -> None:
+    async def _merge_memory_files(
+        self, parent_session_id: str, branch_session_id: str
+    ) -> None:
         """Merge memory files from branch to parent."""
         try:
             parent_memory_dir = self.md_store.get_session_memory_dir(parent_session_id)
@@ -309,18 +338,30 @@ class BranchMerger:
             parent_memory_dir.mkdir(parents=True, exist_ok=True)
 
             # Merge memory files
-            memory_files = ["PROJECT.md", "LEARNED.md", "PREFERENCES.md", "FACTS.md", "DECISIONS.md"]
-            
+            memory_files = [
+                "PROJECT.md",
+                "LEARNED.md",
+                "PREFERENCES.md",
+                "FACTS.md",
+                "DECISIONS.md",
+            ]
+
             for file_name in memory_files:
                 source_file = branch_memory_dir / file_name
                 if source_file.exists():
                     destination_file = parent_memory_dir / file_name
-                    
+
                     # Append branch content to parent (with separator)
-                    parent_content = destination_file.read_text(encoding="utf-8") if destination_file.exists() else ""
+                    parent_content = (
+                        destination_file.read_text(encoding="utf-8")
+                        if destination_file.exists()
+                        else ""
+                    )
                     branch_content = source_file.read_text(encoding="utf-8")
-                    
-                    merged_content = parent_content + f"\n\n--- Branch Content ---\n{branch_content}"
+
+                    merged_content = (
+                        parent_content + f"\n\n--- Branch Content ---\n{branch_content}"
+                    )
                     destination_file.write_text(merged_content, encoding="utf-8")
 
         except Exception as e:
@@ -328,7 +369,10 @@ class BranchMerger:
             raise ValueError(f"Failed to merge memory files: {str(e)}")
 
     async def _update_merge_metadata(
-        self, parent_session_id: str, branch_session_id: str, merge_result: Dict[str, Any]
+        self,
+        parent_session_id: str,
+        branch_session_id: str,
+        merge_result: Dict[str, Any],
     ) -> None:
         """Update metadata after merge."""
         try:
@@ -367,7 +411,7 @@ class BranchMerger:
             """
             async with asyncpg.get_pool().acquire() as conn:
                 records = await conn.fetch(query, session_id)
-            
+
             return [record["metadata"] for record in records]
 
         except Exception as e:

@@ -20,6 +20,7 @@ router = APIRouter(prefix="/ui/api", tags=["nextjs-web-ui"])
 
 class SessionInfo(BaseModel):
     """Session information model."""
+
     id: str
     name: str
     created_at: str
@@ -30,6 +31,7 @@ class SessionInfo(BaseModel):
 
 class SessionFilter(BaseModel):
     """Session filter model."""
+
     search: Optional[str] = None
     status: Optional[str] = None
     limit: int = 50
@@ -47,21 +49,24 @@ class SessionSidebar:
         try:
             # Get all sessions
             all_sessions = await self.session_manager.list_sessions()
-            
+
             # Apply search filter
             filtered_sessions = all_sessions
             if filter.search:
                 search_term = filter.search.lower()
                 filtered_sessions = [
-                    session for session in all_sessions
+                    session
+                    for session in all_sessions
                     if search_term in session["name"].lower()
-                    or search_term in session.get("metadata", {}).get("description", "").lower()
+                    or search_term
+                    in session.get("metadata", {}).get("description", "").lower()
                 ]
 
             # Apply status filter
             if filter.status:
                 filtered_sessions = [
-                    session for session in filtered_sessions
+                    session
+                    for session in filtered_sessions
                     if session.get("status") == filter.status
                 ]
 
@@ -70,20 +75,26 @@ class SessionSidebar:
 
             # Apply pagination
             total_count = len(filtered_sessions)
-            paginated_sessions = filtered_sessions[filter.offset : filter.offset + filter.limit]
+            paginated_sessions = filtered_sessions[
+                filter.offset : filter.offset + filter.limit
+            ]
 
             # Format session info
             session_infos = []
             for session in paginated_sessions:
-                turn_count = await self.session_manager.get_session_turn_count(session["id"])
-                session_infos.append(SessionInfo(
-                    id=session["id"],
-                    name=session.get("name", "Untitled Session"),
-                    created_at=session.get("created_at", ""),
-                    updated_at=session.get("updated_at", ""),
-                    turn_count=turn_count,
-                    status=session.get("status", "active"),
-                ))
+                turn_count = await self.session_manager.get_session_turn_count(
+                    session["id"]
+                )
+                session_infos.append(
+                    SessionInfo(
+                        id=session["id"],
+                        name=session.get("name", "Untitled Session"),
+                        created_at=session.get("created_at", ""),
+                        updated_at=session.get("updated_at", ""),
+                        turn_count=turn_count,
+                        status=session.get("status", "active"),
+                    )
+                )
 
             return {
                 "sessions": session_infos,
@@ -95,7 +106,9 @@ class SessionSidebar:
 
         except Exception as e:
             logger.error(f"Failed to list sessions: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to list sessions: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to list sessions: {str(e)}"
+            )
 
     async def get_session_info(self, session_id: str) -> SessionInfo:
         """Get detailed information about a session."""
@@ -105,7 +118,7 @@ class SessionSidebar:
                 raise HTTPException(status_code=404, detail="Session not found")
 
             turn_count = await self.session_manager.get_session_turn_count(session_id)
-            
+
             return SessionInfo(
                 id=session["id"],
                 name=session.get("name", "Untitled Session"),
@@ -119,7 +132,9 @@ class SessionSidebar:
             raise
         except Exception as e:
             logger.error(f"Failed to get session info: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to get session info: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to get session info: {str(e)}"
+            )
 
     async def delete_session(self, session_id: str) -> bool:
         """Delete a session."""
@@ -133,7 +148,9 @@ class SessionSidebar:
             raise
         except Exception as e:
             logger.error(f"Failed to delete session: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to delete session: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to delete session: {str(e)}"
+            )
 
     async def update_session_name(self, session_id: str, name: str) -> bool:
         """Update session name."""
@@ -151,23 +168,29 @@ class SessionSidebar:
             raise
         except Exception as e:
             logger.error(f"Failed to update session name: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to update session name: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to update session name: {str(e)}"
+            )
 
     async def get_session_statistics(self) -> Dict[str, Any]:
         """Get session statistics."""
         try:
             sessions = await self.session_manager.list_sessions()
-            
+
             total_sessions = len(sessions)
             active_sessions = len([s for s in sessions if s.get("status") == "active"])
-            completed_sessions = len([s for s in sessions if s.get("status") == "completed"])
-            
+            completed_sessions = len(
+                [s for s in sessions if s.get("status") == "completed"]
+            )
+
             # Calculate average turns per session
             total_turns = 0
             for session in sessions:
-                turn_count = await self.session_manager.get_session_turn_count(session["id"])
+                turn_count = await self.session_manager.get_session_turn_count(
+                    session["id"]
+                )
                 total_turns += turn_count
-            
+
             avg_turns = total_turns / total_sessions if total_sessions > 0 else 0
 
             return {
@@ -180,7 +203,9 @@ class SessionSidebar:
 
         except Exception as e:
             logger.error(f"Failed to get session statistics: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to get session statistics: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to get session statistics: {str(e)}"
+            )
 
 
 # Global instance
@@ -199,7 +224,9 @@ def get_session_sidebar() -> SessionSidebar:
 async def list_sessions(
     search: Optional[str] = Query(None, description="Search term for session names"),
     status: Optional[str] = Query(None, description="Filter by status"),
-    limit: int = Query(50, ge=1, le=100, description="Maximum number of sessions to return"),
+    limit: int = Query(
+        50, ge=1, le=100, description="Maximum number of sessions to return"
+    ),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
 ):
     """List sessions with optional filtering and pagination."""
