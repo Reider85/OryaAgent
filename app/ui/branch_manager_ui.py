@@ -303,6 +303,187 @@ async def branches_create_post(
 @router.get("/merge", response_class=HTMLResponse)
 async def branches_merge_ui(
     request: Request,
+    session_id: str,
+    branch_id: str,
+    current_user: str = Depends(get_current_user),
+):
+    """Branch merge UI page with conflict resolution interface."""
+    try:
+        branch_manager = get_branch_manager()
+        
+        # Get branch information
+        branch_info = await branch_manager.get_branch_info(branch_id)
+        if not branch_info:
+            raise HTTPException(status_code=404, detail=f"Branch {branch_id} not found")
+        
+        # Get available branches for merge source selection
+        available_branches = await branch_manager.list_branches(session_id)
+        
+        # Filter out the current branch and non-active branches
+        available_branches = [
+            branch for branch in available_branches
+            if branch["id"] != branch_id and branch["status"] == "active"
+        ]
+        
+        # Get merge history for context
+        merge_history = await branch_manager.get_merge_history(session_id)
+        
+        return templates.TemplateResponse(
+            "branches/merge.html",
+            {
+                "request": request,
+                "session_id": session_id,
+                "branch_id": branch_id,
+                "branch_info": branch_info,
+                "available_branches": available_branches,
+                "merge_history": merge_history,
+                "current_user": current_user,
+                "merge_strategies": ["append", "interleave", "replace"],
+                "conflict_resolutions": ["manual", "auto", "source"],
+            },
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in branches merge UI: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load branches merge: {str(e)}")
+
+
+@router.post("/merge")
+async def branches_merge_post(
+    request: Request,
+    current_user: str = Depends(get_current_user),
+):
+    """Perform branch merge via UI."""
+    try:
+        form_data = await request.form()
+        session_id = form_data.get("session_id")
+        source_session_id = form_data.get("source_session_id")
+        merge_strategy = form_data.get("merge_strategy", "append")
+        conflict_resolution = form_data.get("conflict_resolution", "manual")
+        
+        if not session_id or not source_session_id:
+            raise HTTPException(status_code=400, detail="Session ID and source session ID are required")
+        
+        branch_manager = get_branch_manager()
+        
+        # Perform the merge
+        merge_result = await branch_manager.merge_branches(
+            source_session_id=source_session_id,
+            target_session_id=session_id,
+            merge_strategy=merge_strategy,
+            conflict_resolution=conflict_resolution,
+        )
+        
+        # Redirect to session view with merge success message
+        from urllib.parse import urlencode
+        params = {
+            "merge_success": "true",
+            "merged_branch": merge_result["source_session"],
+            "merge_strategy": merge_result["merge_strategy"],
+            "merged_turns": merge_result["merged_turns"],
+        }
+        query_string = urlencode(params)
+        return RedirectResponse(f"/sessions/{session_id}?{query_string}", status_code=303)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error merging branch: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to merge branch: {str(e)}")
+
+
+@router.get("/merge/preview")
+async def branches_merge_preview(
+    session_id: str,
+    source_session_id: str,
+    merge_strategy: str = "append",
+    current_user: str = Depends(get_current_user),
+):
+    """Preview merge operation without actually performing it."""
+    try:
+        branch_manager = get_branch_manager()
+        
+        # Get branch information
+        source_branch = await branch_manager.get_branch_info(source_session_id)
+        target_session = await branch_manager.get_session(session_id)
+        
+        if not source_branch:
+            raise HTTPException(status_code=404, detail=f"Source branch not found: {source_session_id}")
+        if not target_session:
+            raise HTTPException(status_code=404, detail=f"Target session not found: {session_id}")
+        
+        # Get turns from both sessions
+        source_turns = await branch_manager.session_manager.get_session_turns(source_session_id)
+        target_turns = await branch_manager.session_manager.get_session_turns(session_id)
+        
+        # Simulate merge to get preview data
+        preview_data = {
+            "source_branch": source_branch["name"],
+            "target_session": target_session["name"],
+            "merge_strategy": merge_strategy,
+            "source_turns_count": len(source_turns),
+            "target_turns_count": len(target_turns),
+            "estimated_merged_turns": len(source_turns) + len(target_turns) if merge_strategy == "append" else max(len(source_turns), len(target_turns)),
+            "potential_conflicts": _detect_potential_conflicts(source_turns, target_turns),
+            "memory_files_to_merge": _get_memory_files_to_merge(source_session_id, session_id),
+        }
+        
+        return preview_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in merge preview: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate merge preview: {str(e)}")
+
+
+def _detect_potential_conflicts(source_turns: List[Dict], target_turns: List[Dict]) -> List[Dict]:
+    """Detect potential conflicts between source and target turns."""
+    conflicts = []
+    
+    # Check for file modifications in both branches
+    source_files = set()
+    target_files = set()
+    
+    for turn in source_turns:
+        for tool_call in turn.get("tool_calls", []):
+            if tool_call.get("name") in ["write", "edit"]:
+                args = tool_call.get("args", {})
+                file_path = args.get("path")
+                if file_path:
+                    source_files.add(file_path)
+    
+    for turn in target_turns:
+        for tool_call in turn.get("tool_calls", []):
+            if tool_call.get("name") in ["write", "edit"]:
+                args = tool_call.get("args", {})
+                file_path = args.get("path")
+                if file_path:
+                    target_files.add(file_path)
+    
+    # Find conflicting files
+    conflicting_files = source_files.intersection(target_files)
+    for file_path in conflicting_files:
+        conflicts.append({
+            "type": "file_modification",
+            "file_path": file_path,
+            "message": f"File '{file_path}' modified in both branches"
+        })
+    
+    return conflicts
+
+
+def _get_memory_files_to_merge(source_session_id: str, target_session_id: str) -> List[str]:
+    """Get list of memory files that would be merged."""
+    memory_files = ["PROJECT.md", "LEARNED.md", "PREFERENCES.md", "FACTS.md", "DECISIONS.md"]
+    return memory_files
+
+
+@router.get("/merge", response_class=HTMLResponse)
+async def branches_merge_ui(
+    request: Request,
     source_session_id: str = None,
     target_session_id: str = None,
     current_user: str = Depends(get_current_user),

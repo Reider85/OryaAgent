@@ -58,7 +58,9 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from collections.abc import AsyncIterator
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -831,3 +833,94 @@ async def delete_branch(session_id: str, branch_id: str) -> dict:
     
     logger.info("branch deleted: %s", branch_id)
     return {"branch_id": branch_id, "status": "deleted"}
+
+
+class MergeBranchRequest(BaseModel):
+    """Request for merging a branch into the current session."""
+    source_session_id: str = Field(..., description="ID of the branch session to merge")
+    merge_strategy: str = Field("append", description="Merge strategy: 'append', 'interleave', 'replace'")
+    conflict_resolution: str = Field("manual", description="Conflict resolution: 'manual', 'auto', 'source'")
+
+
+class MergeBranchResponse(BaseModel):
+    """Response for branch merge operation."""
+    success: bool
+    source_session: str
+    target_session: str
+    merge_strategy: str
+    merged_turns: int
+    merge_results: List[Dict[str, Any]]
+    conflicts_resolved: int
+    merge_id: str
+
+
+@router.post("/{session_id}/merge", response_model=MergeBranchResponse)
+async def merge_branch(session_id: str, body: MergeBranchRequest) -> MergeBranchResponse:
+    """Merge a branch into the current session (B-10).
+    
+    Merges tool-call sequences from a branch session into the current session.
+    Supports multiple merge strategies and conflict resolution options.
+    """
+    from app.core.observability.spans import emit_span
+    
+    @emit_span(name="branch.merge", attributes={
+        "branch.source_session": body.source_session_id,
+        "branch.target_session": session_id,
+        "branch.merge_strategy": body.merge_strategy,
+        "branch.conflict_resolution": body.conflict_resolution
+    })
+    async def _merge_branch():
+        branch_manager = get_branch_manager()
+        
+        # Validate merge strategy
+        valid_strategies = ["append", "interleave", "replace"]
+        if body.merge_strategy not in valid_strategies:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Invalid merge strategy. Must be one of: {valid_strategies}"
+            )
+        
+        # Validate conflict resolution
+        valid_resolutions = ["manual", "auto", "source"]
+        if body.conflict_resolution not in valid_resolutions:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Invalid conflict resolution. Must be one of: {valid_resolutions}"
+            )
+        
+        # Perform the merge
+        merge_result = await branch_manager.merge_branches(
+            source_session_id=body.source_session_id,
+            target_session_id=session_id,
+            merge_strategy=body.merge_strategy,
+            conflict_resolution=body.conflict_resolution,
+        )
+        
+        # Generate merge ID for tracking
+        merge_id = f"merge-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+        
+        # Update merge result with tracking ID
+        merge_result["merge_id"] = merge_id
+        
+        logger.info(
+            "Branch merged: %s -> %s using strategy '%s' (merge_id: %s)",
+            body.source_session_id, session_id, body.merge_strategy, merge_id
+        )
+        
+        return merge_result
+    
+    try:
+        merge_result = await _merge_branch()
+        return MergeBranchResponse(
+            success=merge_result["success"],
+            source_session=merge_result["source_session"],
+            target_session=merge_result["target_session"],
+            merge_strategy=merge_result["merge_strategy"],
+            merged_turns=merge_result["merged_turns"],
+            merge_results=merge_result["merge_results"],
+            conflicts_resolved=merge_result["conflicts_resolved"],
+            merge_id=merge_result["merge_id"]
+        )
+    except Exception as e:
+        logger.error(f"Failed to merge branch: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to merge branch: {str(e)}")
