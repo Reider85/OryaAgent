@@ -149,3 +149,10 @@ data/
 
 # Background process runtime (scripts/start.* + stop.*): logs + PID files
 logs/
+
+# uv (Python package manager)
+.uv/
+
+# Test reports
+junit.xml
+test-results/

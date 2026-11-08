@@ -12,6 +12,7 @@ FastAPI · LangGraph · Chainlit · PostgreSQL · Redis
 [![LangGraph](https://img.shields.io/badge/LangGraph-0.2+-blueviolet.svg)](https://github.com/langchain-ai/langgraph)
 [![Chainlit](https://img.shields.io/badge/Chainlit-2.0+-orange.svg)](https://chainlit.io/)
 [![Code style: Ruff](https://img.shields.io/badge/Code%20style-Ruff-000.svg)](https://docs.astral.sh/ruff/)
+[![CI](https://github.com/Reider85/OryaAgent/workflows/CI/badge.svg)](https://github.com/Reider85/OryaAgent/actions/workflows/ci.yml)
 
 ---
 
