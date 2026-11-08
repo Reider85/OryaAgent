@@ -19,6 +19,7 @@ from app.api.sessions import router as sessions_router
 from app.api.skills import router as skills_router
 from app.api.sqlite_store import router as sqlite_store_router
 from app.api.workspace import router as workspace_router
+from app.web.web_sessions import router as web_sessions_router
 
 # Import UI routers
 from app.ui.branch_manager_ui import router as branch_manager_ui_router
@@ -148,6 +149,7 @@ app.include_router(skills_router)
 app.include_router(workspace_router)
 app.include_router(health_router)
 app.include_router(sqlite_store_router)
+app.include_router(web_sessions_router)
 
 # UI routers
 app.include_router(branch_manager_ui_router)
