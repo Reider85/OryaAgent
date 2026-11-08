@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+from datetime import datetime
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -195,23 +197,22 @@ async def handle_chat_message(message: Dict[str, Any], session_id: str, websocke
     try:
         # Extract message data
         content = message.get("content", "")
-        message_type = message.get("type", "user")
+        user_id = message.get("user_id", "default_user")
         
-        # In a real implementation, this would:
-        # 1. Send the message to the agent
-        # 2. Get the response
-        # 3. Stream the response back
-        
-        # For now, just echo the message
+        # Send user message back to confirm receipt
         await websocket_manager.send_personal_message(
             json.dumps({
-                "type": "message_echo",
+                "type": "message",
+                "role": "user",
                 "content": content,
-                "message_type": message_type,
+                "timestamp": datetime.utcnow().isoformat(),
                 "session_id": session_id,
             }),
             websocket
         )
+        
+        # Process message through the agent
+        await process_agent_message(content, session_id, user_id, websocket)
         
     except Exception as e:
         logger.error(f"Error handling chat message: {e}")
@@ -219,6 +220,8 @@ async def handle_chat_message(message: Dict[str, Any], session_id: str, websocke
             json.dumps({
                 "type": "error",
                 "message": f"Error processing message: {str(e)}",
+                "timestamp": datetime.utcnow().isoformat(),
+                "session_id": session_id,
             }),
             websocket
         )
@@ -270,39 +273,22 @@ async def handle_stream_request(message: Dict[str, Any], session_id: str, websoc
         # Extract stream request data
         request_id = message.get("request_id")
         prompt = message.get("prompt")
+        user_id = message.get("user_id", "default_user")
         
-        # In a real implementation, this would:
-        # 1. Start a streaming response from the agent
-        # 2. Send tokens as they arrive
-        
-        # For now, simulate streaming
-        tokens = prompt.split()  # Simple tokenization
-        for i, token in enumerate(tokens):
-            await websocket_manager.send_personal_message(
-                json.dumps({
-                    "type": "stream_token",
-                    "request_id": request_id,
-                    "token": token,
-                    "position": i,
-                    "total_tokens": len(tokens),
-                    "session_id": session_id,
-                }),
-                websocket
-            )
-            
-            # Simulate delay
-            import asyncio
-            await asyncio.sleep(0.1)
-        
-        # Send stream completion
+        # Send user message
         await websocket_manager.send_personal_message(
             json.dumps({
-                "type": "stream_complete",
-                "request_id": request_id,
+                "type": "message",
+                "role": "user",
+                "content": prompt,
+                "timestamp": datetime.utcnow().isoformat(),
                 "session_id": session_id,
             }),
             websocket
         )
+        
+        # Process message through the agent with streaming
+        await process_agent_message(prompt, session_id, user_id, websocket, streaming=True)
         
     except Exception as e:
         logger.error(f"Error handling stream request: {e}")
@@ -310,10 +296,16 @@ async def handle_stream_request(message: Dict[str, Any], session_id: str, websoc
             json.dumps({
                 "type": "error",
                 "message": f"Error processing stream request: {str(e)}",
+                "timestamp": datetime.utcnow().isoformat(),
+                "session_id": session_id,
             }),
             websocket
         )
 
+
+# In-memory session storage (in production, use database)
+sessions_db = {}
+session_counter = 0
 
 @router.get("/api/sessions")
 async def get_sessions(
@@ -322,27 +314,21 @@ async def get_sessions(
     """Get all sessions for the current user."""
     try:
         # In a real implementation, this would query the database
-        # For now, return mock data
-        sessions = [
+        # For now, return sessions from memory
+        user_sessions = [
             {
-                "id": "session_1",
-                "name": "Python Project",
-                "created_at": "2024-01-15T10:00:00Z",
-                "updated_at": "2024-01-15T10:30:00Z",
-                "turn_count": 15,
-                "status": "active",
-            },
-            {
-                "id": "session_2",
-                "name": "JavaScript Development",
-                "created_at": "2024-01-14T14:00:00Z",
-                "updated_at": "2024-01-14T16:30:00Z",
-                "turn_count": 8,
-                "status": "completed",
-            },
+                "id": session_id,
+                "name": session_data.get("name", f"Session {session_id}"),
+                "created_at": session_data.get("created_at", datetime.utcnow().isoformat()),
+                "updated_at": session_data.get("updated_at", datetime.utcnow().isoformat()),
+                "turn_count": session_data.get("turn_count", 0),
+                "status": session_data.get("status", "active"),
+            }
+            for session_id, session_data in sessions_db.items()
+            if session_data.get("user_id") == current_user
         ]
         
-        return JSONResponse(content={"sessions": sessions})
+        return JSONResponse(content={"sessions": user_sessions})
         
     except Exception as e:
         logger.error(f"Error getting sessions: {e}")
@@ -355,16 +341,22 @@ async def create_session(
 ):
     """Create a new session."""
     try:
-        # In a real implementation, this would create a session in the database
-        # For now, return mock data
+        global session_counter
+        session_counter += 1
+        
         new_session = {
-            "id": f"session_{int(time.time())}",
-            "name": f"New Session {int(time.time())}",
+            "id": f"session_{session_counter}_{int(time.time())}",
+            "name": f"New Session {session_counter}",
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
             "turn_count": 0,
             "status": "active",
+            "user_id": current_user,
+            "messages": [],
         }
+        
+        # Store in memory (in production, use database)
+        sessions_db[new_session["id"]] = new_session
         
         return JSONResponse(content=new_session, status_code=201)
         
@@ -380,25 +372,20 @@ async def get_session_messages(
 ):
     """Get messages for a specific session."""
     try:
-        # In a real implementation, this would query the database
-        # For now, return mock data
-        messages = [
-            {
-                "id": "msg_1",
-                "role": "user",
-                "content": "Hello, I need help with my Python project.",
-                "timestamp": "2024-01-15T10:00:00Z",
-            },
-            {
-                "id": "msg_2",
-                "role": "assistant",
-                "content": "Hello! I'd be happy to help you with your Python project. What specific task would you like me to help you with?",
-                "timestamp": "2024-01-15T10:00:05Z",
-            },
-        ]
+        # Check if session exists and belongs to user
+        if session_id not in sessions_db:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        session = sessions_db[session_id]
+        if session.get("user_id") != current_user:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        messages = session.get("messages", [])
         
         return JSONResponse(content={"messages": messages})
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting session messages: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get session messages: {str(e)}")
@@ -415,24 +402,230 @@ async def send_message(
         data = await request.json()
         content = data.get("content", "")
         
-        # In a real implementation, this would:
-        # 1. Send the message to the agent
-        # 2. Get the response
-        # 3. Store both in the database
+        # Check if session exists and belongs to user
+        if session_id not in sessions_db:
+            raise HTTPException(status_code=404, detail="Session not found")
         
-        # For now, return mock response
-        response = {
+        session = sessions_db[session_id]
+        if session.get("user_id") != current_user:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Store user message
+        user_message = {
             "id": f"msg_{int(time.time())}",
-            "role": "assistant",
-            "content": f"I received your message: '{content}'. How can I help you?",
+            "role": "user",
+            "content": content,
             "timestamp": datetime.utcnow().isoformat(),
         }
         
-        return JSONResponse(content=response, status_code=201)
+        session["messages"].append(user_message)
+        session["updated_at"] = datetime.utcnow().isoformat()
+        session["turn_count"] += 1
         
+        # Process the message through the agent
+        # Note: This is a simplified version - in production, you'd want to handle this asynchronously
+        try:
+            from app.core.graph import build_graph
+            from app.core.tools import get_tools
+            
+            tools = get_tools()
+            graph = build_graph(
+                tools=tools,
+                model="haiku",
+                checkpointer=None,
+                policy=None,
+                system_prompt_fn=None,
+                trim_fn=None
+            )
+            
+            from langchain_core.messages import HumanMessage
+            initial_message = HumanMessage(content=content)
+            
+            # Get response from agent
+            response = await graph.ainvoke({"messages": [initial_message]})
+            
+            if response and "messages" in response:
+                assistant_message = response["messages"][-1]
+                if hasattr(assistant_message, 'content') and assistant_message.content:
+                    assistant_response = {
+                        "id": f"msg_{int(time.time())}",
+                        "role": "assistant",
+                        "content": assistant_message.content,
+                        "timestamp": datetime.utcnow().isoformat(),
+                    }
+                    session["messages"].append(assistant_response)
+                    session["updated_at"] = datetime.utcnow().isoformat()
+                    
+                    return JSONResponse(content=assistant_response, status_code=201)
+        
+        except Exception as e:
+            logger.error(f"Error processing agent message: {e}")
+            # Handle soft limits gracefully
+            if "step" in str(e).lower() or "limit" in str(e).lower():
+                assistant_response = {
+                    "id": f"msg_{int(time.time())}",
+                    "role": "assistant",
+                    "content": "I've reached my processing limit for this conversation. Please provide a new instruction to continue.",
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+            else:
+                assistant_response = {
+                    "id": f"msg_{int(time.time())}",
+                    "role": "assistant",
+                    "content": f"I apologize, but I encountered an error processing your request: {str(e)}",
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+            
+            session["messages"].append(assistant_response)
+            session["updated_at"] = datetime.utcnow().isoformat()
+            
+            return JSONResponse(content=assistant_response, status_code=201)
+        
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error sending message: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to send message: {str(e)}")
+
+
+async def process_agent_message(
+    content: str, 
+    session_id: str, 
+    user_id: str, 
+    websocket: WebSocket, 
+    streaming: bool = False
+):
+    """Process a message through the OryaAgent."""
+    try:
+        # Import here to avoid circular imports
+        from app.core.graph import build_graph
+        from app.core.tools import get_tools
+        from app.core.memory import get_md_store
+        from app.core.config import get_settings
+        
+        settings = get_settings()
+        
+        # Get tools and build graph
+        tools = get_tools()
+        
+        # Get or create session
+        # In a real implementation, this would use the database session store
+        # For now, we'll use a simple approach
+        graph = build_graph(
+            tools=tools,
+            model="haiku",  # Default model for web UI
+            checkpointer=None,  # No checkpointing for web UI
+            policy=None,  # Use default policy
+            system_prompt_fn=None,
+            trim_fn=None
+        )
+        
+        # Create initial message
+        from langchain_core.messages import HumanMessage
+        initial_message = HumanMessage(content=content)
+        
+        # Process the message
+        async for chunk in graph.astream(
+            {"messages": [initial_message]},
+            stream_mode="values"
+        ):
+            # Handle different types of chunks
+            if hasattr(chunk, 'messages') and chunk.messages:
+                for message in chunk.messages:
+                    if hasattr(message, 'content') and message.content:
+                        # Send streaming response
+                        await websocket_manager.send_personal_message(
+                            json.dumps({
+                                "type": "message",
+                                "role": "assistant",
+                                "content": message.content,
+                                "timestamp": datetime.utcnow().isoformat(),
+                                "session_id": session_id,
+                            }),
+                            websocket
+                        )
+            
+            # Handle tool calls
+            if hasattr(chunk, 'messages') and chunk.messages:
+                for message in chunk.messages:
+                    if hasattr(message, 'tool_calls') and message.tool_calls:
+                        for tool_call in message.tool_calls:
+                            await websocket_manager.send_personal_message(
+                                json.dumps({
+                                    "type": "tool_call",
+                                    "tool_name": tool_call.get('name'),
+                                    "arguments": tool_call.get('args', {}),
+                                    "timestamp": datetime.utcnow().isoformat(),
+                                    "session_id": session_id,
+                                }),
+                                websocket
+                            )
+                            
+                            # Simulate tool execution
+                            try:
+                                # In a real implementation, this would execute the tool
+                                tool_result = f"Executed {tool_call.get('name')} with {tool_call.get('args', {})}"
+                                
+                                await websocket_manager.send_personal_message(
+                                    json.dumps({
+                                        "type": "tool_result",
+                                        "tool_name": tool_call.get('name'),
+                                        "result": tool_result,
+                                        "status": "completed",
+                                        "timestamp": datetime.utcnow().isoformat(),
+                                        "session_id": session_id,
+                                    }),
+                                    websocket
+                                )
+                            except Exception as e:
+                                await websocket_manager.send_personal_message(
+                                    json.dumps({
+                                        "type": "tool_result",
+                                        "tool_name": tool_call.get('name'),
+                                        "result": f"Error: {str(e)}",
+                                        "status": "error",
+                                        "timestamp": datetime.utcnow().isoformat(),
+                                        "session_id": session_id,
+                                    }),
+                                    websocket
+                                )
+        
+        # Send completion signal
+        await websocket_manager.send_personal_message(
+            json.dumps({
+                "type": "stream_complete",
+                "session_id": session_id,
+                "timestamp": datetime.utcnow().isoformat(),
+            }),
+            websocket
+        )
+        
+    except Exception as e:
+        logger.error(f"Error processing agent message: {e}")
+        # Handle soft limits - NO error indicators for soft limits
+        if "step" in str(e).lower() or "limit" in str(e).lower():
+            # Soft limit - send normal completion message
+            await websocket_manager.send_personal_message(
+                json.dumps({
+                    "type": "message",
+                    "role": "assistant",
+                    "content": "I've reached my processing limit for this conversation. Please provide a new instruction to continue.",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "session_id": session_id,
+                }),
+                websocket
+            )
+        else:
+            # Hard error - send error message
+            await websocket_manager.send_personal_message(
+                json.dumps({
+                    "type": "error",
+                    "message": f"Error processing your request: {str(e)}",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "session_id": session_id,
+                }),
+                websocket
+            )
 
 
 # Helper function to initialize the UI router

@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OryaAgent - Chat Interface</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .header {
+            background: white;
+            border-bottom: 1px solid #e5e5e5;
+            padding: 16px 24px;
+            margin-bottom: 24px;
+            border-radius: 8px;
+        }
+        
+        .header h1 {
+            margin: 0;
+            color: #1f2937;
+            font-size: 24px;
+        }
+        
+        .connection-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: 16px;
+            font-size: 14px;
+        }
+        
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+        
+        .status-connected {
+            background-color: #10b981;
+        }
+        
+        .status-disconnected {
+            background-color: #ef4444;
+        }
+        
+        .chat-container {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            height: calc(100vh - 200px);
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .messages-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+        }
+        
+        .message {
+            margin-bottom: 16px;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+        }
+        
+        .message.user {
+            flex-direction: row-reverse;
+        }
+        
+        .message-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            color: white;
+        }
+        
+        .user .message-avatar {
+            background-color: #3b82f6;
+        }
+        
+        .assistant .message-avatar {
+            background-color: #6b7280;
+        }
+        
+        .message-content {
+            max-width: 70%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            line-height: 1.5;
+        }
+        
+        .user .message-content {
+            background-color: #3b82f6;
+            color: white;
+        }
+        
+        .assistant .message-content {
+            background-color: #f3f4f6;
+            color: #1f2937;
+        }
+        
+        .message-time {
+            font-size: 12px;
+            color: #6b7280;
+            margin-top: 4px;
+        }
+        
+        .input-container {
+            border-top: 1px solid #e5e5e5;
+            padding: 16px 24px;
+            display: flex;
+            gap: 12px;
+        }
+        
+        .message-input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            resize: none;
+            font-family: inherit;
+            font-size: 14px;
+        }
+        
+        .message-input:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+        
+        .send-button {
+            padding: 12px 24px;
+            background-color: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: background-color 0.2s;
+        }
+        
+        .send-button:hover {
+            background-color: #2563eb;
+        }
+        
+        .send-button:disabled {
+            background-color: #9ca3af;
+            cursor: not-allowed;
+        }
+        
+        .loading {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 16px;
+            background-color: #f3f4f6;
+            border-radius: 12px;
+            margin-bottom: 16px;
+        }
+        
+        .loading-spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid #e5e7eb;
+            border-top: 2px solid #3b82f6;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>OryaAgent Chat Interface</h1>
+            <div class="connection-status">
+                <span class="status-dot" id="status-dot"></span>
+                <span id="status-text">Connecting...</span>
+            </div>
+        </div>
+        
+        <div class="chat-container">
+            <div class="messages-container" id="messages-container">
+                <!-- Messages will be added here dynamically -->
+            </div>
+            
+            <div class="input-container">
+                <textarea 
+                    class="message-input" 
+                    id="message-input" 
+                    placeholder="Type your message..."
+                    rows="2"
+                ></textarea>
+                <button class="send-button" id="send-button">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class OryaAgentChat {
+            constructor() {
+                this.sessionId = this.getSessionId();
+                this.ws = null;
+                this.isConnected = false;
+                this.init();
+            }
+            
+            getSessionId() {
+                const urlParams = new URLSearchParams(window.location.search);
+                return urlParams.get('session_id') || `session_${Date.now()}`;
+            }
+            
+            init() {
+                this.connect();
+                this.setupEventListeners();
+            }
+            
+            connect() {
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const url = `${protocol}//${window.location.host}/ws/${this.sessionId}`;
+                
+                this.ws = new WebSocket(url);
+                
+                this.ws.onopen = () => {
+                    this.isConnected = true;
+                    this.updateConnectionStatus();
+                    console.log('WebSocket connected');
+                };
+                
+                this.ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        this.handleMessage(data);
+                    } catch (error) {
+                        console.error('Error parsing message:', error);
+                    }
+                };
+                
+                this.ws.onclose = () => {
+                    this.isConnected = false;
+                    this.updateConnectionStatus();
+                    console.log('WebSocket disconnected');
+                    // Attempt to reconnect after 3 seconds
+                    setTimeout(() => this.connect(), 3000);
+                };
+                
+                this.ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    this.isConnected = false;
+                    this.updateConnectionStatus();
+                };
+            }
+            
+            updateConnectionStatus() {
+                const statusDot = document.getElementById('status-dot');
+                const statusText = document.getElementById('status-text');
+                
+                if (this.isConnected) {
+                    statusDot.className = 'status-dot status-connected';
+                    statusText.textContent = 'Connected';
+                } else {
+                    statusDot.className = 'status-dot status-disconnected';
+                    statusText.textContent = 'Disconnected';
+                }
+            }
+            
+            setupEventListeners() {
+                const messageInput = document.getElementById('message-input');
+                const sendButton = document.getElementById('send-button');
+                
+                const sendMessage = () => {
+                    const content = messageInput.value.trim();
+                    if (content && this.isConnected) {
+                        this.addMessage('user', content);
+                        messageInput.value = '';
+                        
+                        this.ws.send(JSON.stringify({
+                            type: 'message',
+                            content: content,
+                            session_id: this.sessionId
+                        }));
+                    }
+                };
+                
+                sendButton.addEventListener('click', sendMessage);
+                
+                messageInput.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        sendMessage();
+                    }
+                });
+            }
+            
+            addMessage(role, content, type = 'message') {
+                const messagesContainer = document.getElementById('messages-container');
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${role}`;
+                
+                const avatar = document.createElement('div');
+                avatar.className = 'message-avatar';
+                avatar.textContent = role === 'user' ? 'You' : 'AI';
+                
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'message-content';
+                contentDiv.textContent = content;
+                
+                const timeDiv = document.createElement('div');
+                timeDiv.className = 'message-time';
+                timeDiv.textContent = new Date().toLocaleTimeString();
+                
+                contentDiv.appendChild(timeDiv);
+                messageDiv.appendChild(avatar);
+                messageDiv.appendChild(contentDiv);
+                
+                messagesContainer.appendChild(messageDiv);
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            }
+            
+            handleToolCall(toolName, args) {
+                const messagesContainer = document.getElementById('messages-container');
+                const toolCallDiv = document.createElement('div');
+                toolCallDiv.className = 'message assistant';
+                toolCallDiv.innerHTML = `
+                    <div class="message-avatar">AI</div>
+                    <div class="message-content">
+                        <strong>Calling tool: ${toolName}</strong><br>
+                        <small>Arguments: ${JSON.stringify(args, null, 2)}</small>
+                    </div>
+                `;
+                messagesContainer.appendChild(toolCallDiv);
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            }
+            
+            handleToolResult(toolName, result, status) {
+                const messagesContainer = document.getElementById('messages-container');
+                const toolResultDiv = document.createElement('div');
+                toolResultDiv.className = 'message assistant';
+                toolResultDiv.innerHTML = `
+                    <div class="message-avatar">AI</div>
+                    <div class="message-content">
+                        <strong>Tool Result: ${toolName}</strong><br>
+                        <small>Status: ${status}</small><br>
+                        <pre>${JSON.stringify(result, null, 2)}</pre>
+                    </div>
+                `;
+                messagesContainer.appendChild(toolResultDiv);
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            }
+            
+            handleMessage(data) {
+                const { type, role, content, tool_name, arguments: args, result, status } = data;
+                
+                switch (type) {
+                    case 'connection':
+                        console.log('Connection established:', data);
+                        break;
+                    case 'message':
+                        this.addMessage(role, content);
+                        break;
+                    case 'tool_call':
+                        this.handleToolCall(tool_name, args);
+                        break;
+                    case 'tool_result':
+                        this.handleToolResult(tool_name, result, status);
+                        break;
+                    case 'stream_token':
+                        // Handle streaming tokens
+                        this.addStreamingToken(content);
+                        break;
+                    case 'stream_complete':
+                        // Handle stream completion
+                        this.finishStreaming();
+                        break;
+                    case 'error':
+                        this.addMessage('assistant', `Error: ${content}`, 'error');
+                        break;
+                }
+            }
+            
+            addStreamingToken(token) {
+                // Simple streaming implementation
+                const messagesContainer = document.getElementById('messages-container');
+                let lastMessage = messagesContainer.lastElementChild;
+                
+                if (!lastMessage || !lastMessage.classList.contains('assistant')) {
+                    this.addMessage('assistant', '');
+                    lastMessage = messagesContainer.lastElementChild;
+                }
+                
+                const contentDiv = lastMessage.querySelector('.message-content');
+                const textNode = contentDiv.firstChild;
+                textNode.textContent += token;
+                
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            }
+            
+            finishStreaming() {
+                // Add timestamp to the last message
+                const messagesContainer = document.getElementById('messages-container');
+                const lastMessage = messagesContainer.lastElementChild;
+                
+                if (lastMessage && lastMessage.classList.contains('assistant')) {
+                    const contentDiv = lastMessage.querySelector('.message-content');
+                    const timeDiv = document.createElement('div');
+                    timeDiv.className = 'message-time';
+                    timeDiv.textContent = new Date().toLocaleTimeString();
+                    contentDiv.appendChild(timeDiv);
+                }
+            }
+        }
+        
+        // Initialize the chat when the page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new OryaAgentChat();
+        });
+    </script>
+</body>
+</html>

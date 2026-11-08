@@ -15,7 +15,7 @@ from app.core.config import get_settings
 from app.core.hooks import get_hook_registry
 from app.core.hooks_audit import get_hook_executions, get_hook_statistics, clear_hook_history
 from app.db.checkpoints import get_checkpointer
-from app.utils.auth import get_current_user
+from app.core.security import get_current_user
 
 router = APIRouter(prefix="/hooks", tags=["hooks"])
 
