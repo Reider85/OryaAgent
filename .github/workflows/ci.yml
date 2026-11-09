@@ -26,6 +26,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+          cache-dependency-glob: "uv.lock"
       - run: uv sync --frozen
       - run: uv run ruff check .
       - run: uv run ruff format --check .
@@ -98,6 +99,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+          cache-dependency-glob: "uv.lock"
       - run: uv sync --frozen
       - name: Run migrations
         run: uv run python -m app.db.migrate
