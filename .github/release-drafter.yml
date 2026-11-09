@@ -1,0 +1,76 @@
+name-template: 'v$RESOLVED_VERSION'
+tag-template: 'v$RESOLVED_VERSION'
+
+# Авто-определение версии из conventional commits / labels
+template: |
+  ## What's changed since $PREVIOUS_TAG
+
+  $CHANGES
+
+  ## Contributors
+
+  $CONTRIBUTORS
+
+  ## Installation
+
+  ```bash
+  uv tool install orya-agent==$RESOLVED_VERSION
+  # или
+  pip install orya-agent==$RESOLVED_VERSION
+  ```
+
+  ## Docker
+
+  ```bash
+  docker pull ghcr.io/reider85/oryaagent:$RESOLVED_VERSION
+  ```
+
+categories:
+  - title: 'Breaking'
+    label: 'breaking'
+  - title: 'New features'
+    label: 'enhancement'
+  - title: 'Bug fixes'
+    label: 'bug'
+  - title: 'Security'
+    label: 'security'
+  - title: 'Documentation'
+    label: 'documentation'
+  - title: 'Dependencies'
+    label: 'dependencies'
+  - title: 'CI/CD'
+    label: 'github-actions'
+  - title: 'Internal'
+    label: 'internal'
+
+exclude-labels:
+  - 'duplicate'
+  - 'question'
+  - 'wontfix'
+
+autolabeler:
+  - label: 'bug'
+    body: ['(?i).*bug.*', '(?i).*fix.*']
+    branch: ['fix/.*', 'hotfix/.*']
+    title: ['(?i)^fix.*']
+  - label: 'enhancement'
+    branch: ['feature/.*', 'feat/.*']
+    title: ['(?i)^(feat|feature).*']
+  - label: 'documentation'
+    branch: ['docs/.*']
+    title: ['(?i)^docs.*']
+    files: ['docs/.*', '*.md']
+  - label: 'security'
+    title: ['(?i)(security|cve).*']
+  - label: 'github-actions'
+    files: ['.github/**/*']
+
+# Минорная версия для enhancement, патч для bugfix, мажор для breaking
+version-resolver:
+  major:
+    labels: ['breaking']
+  minor:
+    labels: ['enhancement']
+  patch:
+    labels: ['bug', 'security', 'documentation', 'dependencies', 'github-actions', 'internal']
+  default: patch
