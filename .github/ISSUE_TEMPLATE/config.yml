@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Ask a question
+    url: https://github.com/Reider85/OryaAgent/discussions
+    about: Ask questions and discuss with the community
+  - name: Security report
+    url: https://github.com/Reider85/OryaAgent/security/policy
+    about: Report security vulnerabilities privately

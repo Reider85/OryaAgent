@@ -1,0 +1,9 @@
+# По умолчанию — владелец репо
+*                        @Reider85
+
+# Критичные зоны — запросить ревью у автора
+/app/core/permissions.py @Reider85
+/app/core/security.py    @Reider85
+/app/db/                 @Reider85
+alembic/                 @Reider85
+deploy/                  @Reider85
