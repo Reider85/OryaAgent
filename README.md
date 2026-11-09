@@ -1,18 +1,46 @@
 # OryaAgent
 
-**Senior Python coding agent with UI and long-term memory.**
-
-FastAPI · LangGraph · Chainlit · PostgreSQL · Redis
-
+[![CI](https://github.com/Reider85/OryaAgent/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Reider85/OryaAgent/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Reider85/OryaAgent?include_prereleases&sort=semver)](https://github.com/Reider85/OryaAgent/releases)
+[![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue.svg)](https://www.python.org/)
-[![Version 7.0.0](https://img.shields.io/badge/Version-7.0.0-6c4cc3.svg)](#)
+[![Code style: Ruff](https://img.shields.io/badge/Code%20style-Ruff-000.svg)](https://docs.astral.sh/ruff/)
+[![GitHub stars](https://img.shields.io/github/stars/Reider85/OryaAgent?style=social)](https://github.com/Reider85/OryaAgent/stargazers)
+[![GitHub last commit](https://img.shields.io/github/last-commit/Reider85/OryaAgent)](https://github.com/Reider85/OryaAgent/commits/main)
+[![GitHub commits since latest release](https://img.shields.io/github/commits-since/Reider85/OryaAgent/latest)](https://github.com/Reider85/OryaAgent/releases)
+[![Codecov](https://img.shields.io/codecov/c/github/Reider85/OryaAgent)](https://codecov.io/gh/Reider85/OryaAgent)
+[![GitHub commit activity](https://img.shields.io/github/commit-activity/w/Reider85/OryaAgent)](https://github.com/Reider85/OryaAgent/graphs/commit-activity)
+[![GitHub repo size](https://img.shields.io/github/repo-size/Reider85/OryaAgent)](https://github.com/Reider85/OryaAgent)
 [![Phase: ALPHA](https://img.shields.io/badge/Phase-ALPHA-orange.svg)](#roadmap--phases)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-009688.svg)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-0.2+-blueviolet.svg)](https://github.com/langchain-ai/langgraph)
 [![Chainlit](https://img.shields.io/badge/Chainlit-2.0+-orange.svg)](https://chainlit.io/)
-[![Code style: Ruff](https://img.shields.io/badge/Code%20style-Ruff-000.svg)](https://docs.astral.sh/ruff/)
-[![CI](https://github.com/Reider85/OryaAgent/workflows/CI/badge.svg)](https://github.com/Reider85/OryaAgent/actions/workflows/ci.yml)
+
+**Senior Python coding agent with UI and long-term memory. FastAPI + LangGraph + Chainlit. Self-hosted, 30+ LLM providers, production-grade observability.**
+
+> **TL;DR** — OryaAgent is a self-hosted, production-minded coding agent: a LangGraph
+> state machine with six filesystem/shell tools, an interrupt-driven permission
+> gate, durable long-term memory across six Markdown files, a single declarative
+> LLM seam covering 30+ providers and 45+ model aliases, bearer-JWT auth, per-identity
+> cost-aware routing, OTLP-grade observability (Langfuse + OryaObservability SDK +
+> sampler-proxy + Prometheus + ClickHouse), Alembic migrations, and a one-command
+> Docker Compose stack. MVP (`M-00…M-28` + `MVP-POLISH`) and ALPHA (`A-00…A-20`)
+> are implemented.
+
+## Why OryaAgent?
+
+| Feature | OryaAgent | aider | continue | cline | opencode |
+|---|---|---|---|---|---|
+| Self-hosted, no telemetry | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Long-term memory (MD files) | ✅ 6 files | ❌ | ⚠️ | ❌ | ❌ |
+| UI (Chainlit) | ✅ | ❌ | ✅ (VSCode) | ✅ (VSCode) | ❌ |
+| Permission gate on destructive ops | ✅ | ❌ | ⚠️ | ✅ | ❌ |
+| 30+ LLM providers | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Cost-aware routing | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Tiered model routing | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Connection pooling per provider | ✅ | ❌ | ❌ | ❌ | ❌ |
+
+---
 
 ---
 
