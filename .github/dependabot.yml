@@ -1,0 +1,44 @@
+version: 2
+
+updates:
+  # Python dependencies (uv.lock + pyproject.toml)
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Moscow"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "python"]
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      python-dev:
+        patterns: ["pytest*", "ruff*", "pip-audit*"]
+        update-types: ["minor", "patch"]
+      python-prod:
+        patterns: ["*"]
+        exclude-patterns: ["pytest*", "ruff*", "pip-audit*"]
+        update-types: ["patch"]   # minor/major — отдельными PR
+
+  # GitHub Actions versions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "github-actions"]
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+
+  # Docker base images (deploy/Dockerfile)
+  - package-ecosystem: "docker"
+    directory: "/deploy"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "docker"]
