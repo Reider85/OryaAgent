@@ -866,9 +866,10 @@ async def merge_branch(
     Merges tool-call sequences from a branch session into the current session.
     Supports multiple merge strategies and conflict resolution options.
     """
-    from app.core.observability.spans import emit_span
+    from app.core.observability.spans import timed_span
 
-    @emit_span(
+    @timed_span(
+        span_type="branch.merge",
         name="branch.merge",
         attributes={
             "branch.source_session": body.source_session_id,

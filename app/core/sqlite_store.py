@@ -446,7 +446,7 @@ class SQLiteStore:
             "tool_breakdown": tool_breakdown,
         }
 
-    async def get_skills_statistics(self) -> Dict[str, Any]]:
+    async def get_skills_statistics(self) -> Dict[str, Any]:
         """Get skills metadata statistics."""
         query = "SELECT category, COUNT(*) as count FROM skills_metadata GROUP BY category"
         category_stats = await self._execute_query(query)

@@ -1,37 +1,137 @@
 name: CI
+
 on:
   push:
-    branches: [ main ]
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
   pull_request:
-    branches: [ main ]
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
-      - name: Install dependencies
-        run: uv sync
-      - name: Run lint
-        run: make lint
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
 
-  test:
+  test-matrix:
+    name: Tests (Python ${{ matrix.python-version }})
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --frozen --extra dev
+      - run: uv run python -c "import app"
+      - name: Run unit+e2e+smoke with coverage
+        run: uv run pytest tests/unit tests/e2e tests/smoke --cov=app --cov-report=xml --cov-report=term-missing -x
+        env:
+          CI: "true"
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.12'
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}   # опционально, без токена тоже работает для public
+
+  integration:
+    name: Integration (postgres+redis)
+    needs: lint
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: orya
+          POSTGRES_PASSWORD: orya
+          POSTGRES_DB: orya_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U orya"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://orya:orya@localhost:5432/orya_test
+      REDIS_URL: redis://localhost:6379/0
+      ORYA_ENV: dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Run migrations
+        run: uv run python -m app.db.migrate
+      - name: Run integration tests (без live LLM)
+        run: uv run pytest tests/integration -x --tb=short -k "not live"
+        env:
+          CI: "true"
+          DEEPSEEK_API_KEY: ""   # явно пустой — live-тесты должны скипаться
+
+  audit:
+    name: Security audit (pip-audit)
+    needs: lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
-      - name: Install dependencies
-        run: uv sync
-      - name: Run tests
-        run: make test
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen
+      - name: Audit dependencies
+        run: uv run pip-audit --strict
+        continue-on-error: true   # предупреждаем, но не блокируем
 
   build:
+    name: Build dist
+    needs: [test-matrix, integration]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
-      - name: Install dependencies
-        run: uv sync
-      - name: Build app
-        run: python -m app.main --help
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen
+      - run: uv run python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

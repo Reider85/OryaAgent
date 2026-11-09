@@ -13,9 +13,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from app.core.db import asyncpg
+from app.db import asyncpg
 from app.core.memory.md_store import get_md_store
-from app.core.observability.spans import emit_span
+from app.core.observability.spans import timed_span
 from app.core.session import SessionManager
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ class BranchManager:
         self.session_manager = SessionManager()
         self.md_store = get_md_store()
 
-    @emit_span(name="branch.create", attributes={"operation": "fork_session"})
+    @timed_span(span_type="branch.create", name="branch.create", attributes={"operation": "fork_session"})
     async def fork_session(
         self,
         session_id: str,
@@ -446,7 +446,7 @@ class BranchManager:
             logger.error(f"Failed to delete branch: {e}")
             return False
 
-    @emit_span(name="branch.merge", attributes={"operation": "merge_branches"})
+    @timed_span(span_type="branch.merge", name="branch.merge", attributes={"operation": "merge_branches"})
     async def merge_branches(
         self,
         source_session_id: str,

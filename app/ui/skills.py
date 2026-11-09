@@ -9,7 +9,14 @@ import chainlit as cl
 import httpx
 from chainlit.action import Action
 from chainlit.input_widget import Select, Switch, TextInput
-from chainlit.types import UIMessage
+# UIMessage not available in this chainlit version
+class UIMessage(dict):
+    """UI message for skills."""
+    
+    def __init__(self, content: str = "", **kwargs):
+        super().__init__(**kwargs)
+        self["content"] = content
+        self["author"] = kwargs.get("author", "Assistant")
 
 from app.core.config import get_settings
 from app.core.skills import get_skill_registry

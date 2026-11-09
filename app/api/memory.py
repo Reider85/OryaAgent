@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from app.core.memory.sqlitestore import get_sqlite_store
 from app.core.memory.outbox import get_memory_outbox, MemoryOperationType
 from app.core.security import get_current_user
-from app.core.observability.spans import emit_span
+from app.core.observability.spans import timed_span
 
 router = APIRouter(prefix="/memory", tags=["memory"])
 
@@ -50,7 +50,10 @@ class ImportRequest(BaseModel):
     data: Dict[str, Any]
 
 
-@emit_span(name="memory.add")
+@timed_span(
+    span_type="memory.add",
+    name="memory.add"
+)
 async def add_memory_endpoint(
     request: MemoryRequest,
     session_id: str = Path(..., description="Session ID"),
@@ -86,7 +89,10 @@ async def add_memory_endpoint(
         raise HTTPException(status_code=500, detail=f"Failed to add memory: {str(e)}")
 
 
-@emit_span(name="memory.delete")
+@timed_span(
+    span_type="memory.delete",
+    name="memory.delete"
+)
 async def forget_memory_endpoint(
     memory_id: str = Path(..., description="Memory ID"),
     session_id: str = Path(..., description="Session ID"),
@@ -110,7 +116,10 @@ async def forget_memory_endpoint(
         )
 
 
-@emit_span(name="memory.search")
+@timed_span(
+    span_type="memory.search",
+    name="memory.search"
+)
 async def search_memories_endpoint(
     request: SearchQuery,
     session_id: str = Path(..., description="Session ID"),
@@ -145,7 +154,10 @@ async def search_memories_endpoint(
         )
 
 
-@emit_span(name="memory.list")
+@timed_span(
+    span_type="memory.list",
+    name="memory.list"
+)
 async def list_memories_endpoint(
     session_id: str = Path(..., description="Session ID"),
     limit: int = 50,
@@ -184,7 +196,10 @@ async def list_memories_endpoint(
         )
 
 
-@emit_span(name="memory.export")
+@timed_span(
+    span_type="memory.export",
+    name="memory.export"
+)
 async def export_memories_endpoint(
     session_id: str = Path(..., description="Session ID"),
     current_user: str = Depends(get_current_user),
@@ -202,7 +217,10 @@ async def export_memories_endpoint(
         )
 
 
-@emit_span(name="memory.import")
+@timed_span(
+    span_type="memory.import",
+    name="memory.import"
+)
 async def import_memories_endpoint(
     request: ImportRequest,
     session_id: str = Path(..., description="Session ID"),
@@ -225,7 +243,10 @@ async def import_memories_endpoint(
         )
 
 
-@emit_span(name="memory.stats")
+@timed_span(
+    span_type="memory.stats",
+    name="memory.stats"
+)
 async def get_memory_stats_endpoint(
     session_id: str = Path(..., description="Session ID"),
     current_user: str = Depends(get_current_user),

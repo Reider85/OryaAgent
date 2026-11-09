@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 
 from app.api.sessions import (
     create_new_session,
@@ -59,7 +60,7 @@ class SessionWebSocketManager:
 session_websocket_manager = SessionWebSocketManager()
 
 
-class WebSessionCreate:
+class WebSessionCreate(BaseModel):
     """Request body for POST /web/api/sessions."""
 
     name: str
@@ -67,7 +68,7 @@ class WebSessionCreate:
     workspace: str | None = None
 
 
-class WebSessionFilter:
+class WebSessionFilter(BaseModel):
     """Query parameters for session filtering and search."""
 
     search: str | None = Query(
@@ -80,7 +81,7 @@ class WebSessionFilter:
     offset: int = Query(0, ge=0, description="Offset for pagination")
 
 
-class WebSessionResponse:
+class WebSessionResponse(BaseModel):
     """Response format for session data."""
 
     id: str

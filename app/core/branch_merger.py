@@ -28,7 +28,7 @@ class BranchMerger:
         self.session_manager = SessionManager()
         self.md_store = get_md_store()
 
-    @emit_span(name="branch.merge", attributes={"operation": "merge_branches"})
+    @timed_span(span_type="branch.merge", name="branch.merge", attributes={"operation": "merge_branches"})
     async def merge_branches(
         self,
         parent_session_id: str,
