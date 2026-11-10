@@ -78,6 +78,30 @@ _YAML_FALLBACKS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
         ("context_max_tokens",),
     ),
     "log_level": (("LOG_LEVEL", "ORYA_LOG_LEVEL"), ("log_level",)),
+    "github_actions_enabled": (
+        ("GITHUB_ACTIONS_ENABLED", "ORYA_GITHUB_ACTIONS_ENABLED"),
+        ("github_actions", "enabled"),
+    ),
+    "local_runners_enabled": (
+        ("LOCAL_RUNNERS_ENABLED", "ORYA_LOCAL_RUNNERS_ENABLED"),
+        ("github_actions", "local_runners_enabled"),
+    ),
+    "github_actions_default_minutes": (
+        ("GITHUB_ACTIONS_DEFAULT_MINUTES", "ORYA_GITHUB_ACTIONS_DEFAULT_MINUTES"),
+        ("github_actions", "default_minutes"),
+    ),
+    "github_actions_switch_threshold": (
+        ("GITHUB_ACTIONS_SWITCH_THRESHOLD", "ORYA_GITHUB_ACTIONS_SWITCH_THRESHOLD"),
+        ("github_actions", "switch_threshold"),
+    ),
+    "github_actions_health_interval": (
+        ("GITHUB_ACTIONS_HEALTH_INTERVAL", "ORYA_GITHUB_ACTIONS_HEALTH_INTERVAL"),
+        ("github_actions", "health_interval"),
+    ),
+    "github_actions_workflows": (
+        ("GITHUB_ACTIONS_WORKFLOWS", "ORYA_GITHUB_ACTIONS_WORKFLOWS"),
+        ("github_actions", "workflows"),
+    ),
 }
 
 
@@ -625,6 +649,41 @@ class Settings(BaseSettings):
     nextjs_port: int = Field(
         default=3000,
         validation_alias=AliasChoices("NEXTJS_PORT", "ORYA_NEXTJS_PORT"),
+    )
+    # GitHub Actions hybrid mode
+    github_actions_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("GITHUB_ACTIONS_ENABLED", "ORYA_GITHUB_ACTIONS_ENABLED"),
+        description="Enable GitHub Actions hybrid mode monitoring and runner switching",
+    )
+    local_runners_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("LOCAL_RUNNERS_ENABLED", "ORYA_LOCAL_RUNNERS_ENABLED"),
+        description="Enable local runner infrastructure for hybrid mode",
+    )
+    github_actions_default_minutes: int = Field(
+        default=2000,
+        validation_alias=AliasChoices("GITHUB_ACTIONS_DEFAULT_MINUTES", "ORYA_GITHUB_ACTIONS_DEFAULT_MINUTES"),
+        description="Default free minutes per month for GitHub Actions",
+    )
+    github_actions_switch_threshold: float = Field(
+        default=0.9,
+        ge=0.5,
+        le=1.0,
+        validation_alias=AliasChoices("GITHUB_ACTIONS_SWITCH_THRESHOLD", "ORYA_GITHUB_ACTIONS_SWITCH_THRESHOLD"),
+        description="Threshold for switching to local runners (0.5-1.0)",
+    )
+    github_actions_health_interval: int = Field(
+        default=30,
+        ge=10,
+        le=300,
+        validation_alias=AliasChoices("GITHUB_ACTIONS_HEALTH_INTERVAL", "ORYA_GITHUB_ACTIONS_HEALTH_INTERVAL"),
+        description="Health check interval for local runners in seconds",
+    )
+    github_actions_workflows: list[dict[str, Any]] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("GITHUB_ACTIONS_WORKFLOWS", "ORYA_GITHUB_ACTIONS_WORKFLOWS"),
+        description="List of workflows to monitor with their budgets",
     )
 
     model_config = SettingsConfigDict(

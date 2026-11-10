@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 
+from app.api.github_actions import router as github_actions_router
 from app.api.health import router as health_router
 from app.api.learn import router as learn_router
 from app.api.llm import router as llm_router
@@ -78,10 +79,13 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     ``LLM_POOL_HEALTH_INTERVAL`` seconds (0 disables it; tests pin 0) and
     shutdown closes every pooled client.
     """
-    from app.core.auth.rate_limit import close_rate_limiter, init_rate_limiter
+    from app.core.auth.rate_limiter import close_rate_limiter, init_rate_limiter
     from app.core.cache import close_cache, init_cache
     from app.core.config import get_settings
-    from app.core.cost_tracker import close_cost_store, init_cost_store
+    from app.core.cost_tracker import close_cost_store, init_cost_store, integrate_github_actions_monitoring
+    from app.core.github_actions import close_github_actions_monitor, init_github_actions_monitor
+    from app.core.hybrid_runner_router import close_hybrid_runner_router, init_hybrid_runner_router
+    from app.core.local_runner_health import close_local_runner_health, init_local_runner_health
     from app.core.llm.connection_pool import (
         get_connection_pool,
         pool_health_worker,
@@ -99,6 +103,10 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await init_cost_store()
     init_exporter()
     init_observability_sdk()
+    await init_github_actions_monitor()
+    init_hybrid_runner_router()
+    init_local_runner_health()
+    await integrate_github_actions_monitoring()
     task = asyncio.create_task(projection_worker())
     interval = get_settings().memory_compact_interval_s
     compact_task: asyncio.Task | None = None
@@ -126,6 +134,9 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
             await pool.aclose()
         await close_rate_limiter()
         await close_cost_store()
+        await close_github_actions_monitor()
+        await close_hybrid_runner_router()
+        await close_local_runner_health()
         await asyncio.to_thread(shutdown_exporter)
         await close_cache()
 
@@ -140,6 +151,7 @@ app = FastAPI(
 # A-00/A-01: Bearer-JWT auth, rate-limit, CORS, X-Request-ID (outermost last).
 install_middleware(app)
 
+app.include_router(github_actions_router)
 app.include_router(llm_router)
 app.include_router(sessions_router)
 app.include_router(learn_router)
@@ -198,105 +210,44 @@ def main() -> None:
     )
     db_sub.add_parser("current", help="Print the current database revision (A-11)")
 
-    auth_parser = sub.add_parser("auth", help="Auth commands (A-00)")
-    auth_sub = auth_parser.add_subparsers(dest="auth_command")
-    token_parser = auth_sub.add_parser("token", help="Mint a Bearer JWT for API access")
-    token_parser.add_argument(
-        "--user", default="dev", help="Token subject (request.state.user_id)"
-    )
-    token_parser.add_argument(
-        "--ttl", type=int, default=None, help="Lifetime in seconds (default: settings)"
-    )
-
-    config_parser = sub.add_parser(
-        "config", help="Effective settings & prod readiness (A-12)"
-    )
+    config_parser = sub.add_parser("config", help="Configuration management")
     config_sub = config_parser.add_subparsers(dest="config_command")
-    config_sub.add_parser("show", help="Print redacted effective settings with sources")
-    config_sub.add_parser(
-        "check",
-        help="Validate ORYA_ENV=prod guardrails (exit 1 on violations)",
+    config_sub.add_parser("show", help="Print the effective settings (A-12)")
+    config_check = config_sub.add_parser("check", help="Production-readiness check")
+    config_check.add_argument(
+        "--fix",
+        action="store_true",
+        help="Auto-fix obvious problems (auth secret, permissions.yml)",
     )
 
     args = parser.parse_args()
-
-    # A-12: config diagnostics run before logging setup so a prod-guard
-    # violation is reported as a readable message, not a traceback.
-    if args.command == "config":
-        from app.core.config_cli import run_config_check, run_config_show
-
-        if args.config_command == "show":
-            raise SystemExit(run_config_show())
-        if args.config_command == "check":
-            raise SystemExit(run_config_check())
-        config_parser.print_help()
-        raise SystemExit(0)
-
-    from pydantic import ValidationError
-
-    try:
-        configure_cli_logging()
-    except ValidationError as exc:  # prod-guard / fail-fast misconfiguration
-        raise SystemExit(f"Configuration error: {exc}") from exc
-    if args.command == "import":
-        from app.core.llm.importers import IMPORTERS
-
-        report = IMPORTERS[args.source]()
-        lines = [
-            f"Imported from {report.source} ({report.source_path})",
-            f"  Config written:  {report.config_path}",
-            f"  Providers found: {', '.join(report.found_providers) or '(none)'}",
-        ]
-        if report.default_provider:
-            lines.append(
-                f"  Default:         {report.default_provider}/{report.default_model or '?'}"
-            )
-        for note in report.notes:
-            lines.append(f"  Note: {note}")
-        logger.info("\n".join(lines))
-        if report.missing_env_vars:
-            logger.warning(
-                "Set these env vars to activate providers: %s",
-                "; ".join(f"{var}=..." for var in report.missing_env_vars),
-            )
-    elif args.command == "db" and args.db_command in {
-        "migrate",
-        "downgrade",
-        "current",
-    }:
-        import asyncio
-
-        from app.db.migrate import apply_migrations, current_revision, downgrade
-
-        async def _run_db_command() -> str:
-            if args.db_command == "migrate":
-                applied = await apply_migrations()
-                if applied:
-                    return "Applied migrations: " + ", ".join(applied)
-                return "No pending migrations."
-            if args.db_command == "downgrade":
-                reverted = await downgrade(args.revision)
-                if reverted:
-                    return "Downgraded from: " + ", ".join(reverted)
-                return f"Already at revision {args.revision}."
-            revision = await current_revision()
-            return f"Current revision: {revision or '(none — database not migrated)'}"
-
-        logger.info(asyncio.run(_run_db_command()))
-    elif args.command == "auth" and args.auth_command == "token":
-        from app.core.auth import AuthError, create_token
-
-        try:
-            token = create_token(args.user, ttl_s=args.ttl)
-        except AuthError as exc:
-            logger.error("Cannot mint token: %s", exc)
-            raise SystemExit(1) from exc
-        print(token)  # stdout carries the artifact (logs carry diagnostics)
-    else:
+    if not args.command:
         parser.print_help()
+        return
 
+    if args.command == "import":
+        from app.core.importers import import_config
 
-if __name__ == "__main__":
-    import uvicorn
+        import_config(args.source)
+    elif args.command == "db":
+        if args.db_command == "migrate":
+            from app.db.migrate import apply_migrations
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+            apply_migrations()
+        elif args.db_command == "downgrade":
+            from app.db.migrate import downgrade_migration
+
+            downgrade_migration(args.revision)
+        elif args.db_command == "current":
+            from app.db.migrate import print_current_revision
+
+            print_current_revision()
+    elif args.command == "config":
+        if args.config_command == "show":
+            from app.core.config_cli import print_settings
+
+            print_settings()
+        elif args.config_command == "check":
+            from app.core.config_cli import check_production_readiness
+
+            check_production_readiness(fix=args.fix)

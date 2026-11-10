@@ -6,6 +6,8 @@ from fastapi import APIRouter, HTTPException
 from httpx import AsyncClient, ConnectError, HTTPStatusError, TimeoutException
 
 from app.core.config import get_settings
+from app.core.github_actions import get_github_actions_monitor
+from app.core.local_runner_health import get_system_health_overview
 from app.core.observability.langfuse import get_export_stats
 from app.core.observability.sdk import get_observability
 from app.core.observability.spans import get_span_buffer
@@ -48,6 +50,63 @@ async def health_observability() -> dict[str, Any]:
 async def health_sampler_proxy() -> dict[str, Any]:
     """Check sampler-proxy service health."""
     settings = get_settings()
+
+@router.get("/health/local-runners")
+async def health_local_runners() -> dict[str, Any]:
+    """Check local GitHub Actions runners health."""
+    try:
+        # Get GitHub Actions status
+        github_monitor = get_github_actions_monitor()
+        github_status = {
+            "enabled": get_settings().github_actions_enabled,
+            "local_runners_enabled": get_settings().local_runners_enabled,
+        }
+        
+        # Get local runners health
+        local_health = await get_system_health_overview()
+        
+        return {
+            "github_actions": github_status,
+            "local_runners": local_health,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/health/hybrid-mode")
+async def health_hybrid_mode() -> dict[str, Any]:
+    """Check hybrid mode overall health."""
+    try:
+        from app.core.hybrid_runner_router import get_hybrid_runner_router
+        
+        # Get GitHub Actions status
+        github_monitor = get_github_actions_monitor()
+        
+        # Get runner selections
+        router = get_hybrid_runner_router()
+        selections = await router.get_runner_selections()
+        
+        # Calculate overall health
+        total_workflows = len(selections)
+        local_runners_count = sum(1 for s in selections.values() if s.runner_type.value == "self-hosted")
+        
+        return {
+            "github_actions_enabled": get_settings().github_actions_enabled,
+            "local_runners_enabled": get_settings().local_runners_enabled,
+            "total_workflows": total_workflows,
+            "using_local_runners": local_runners_count,
+            "switch_threshold": get_settings().github_actions_switch_threshold,
+            "runner_selections": {
+                key: {
+                    "workflow": sel.workflow_name,
+                    "repository": sel.repository,
+                    "runner_type": sel.runner_type.value,
+                    "reason": sel.reason,
+                }
+                for key, sel in selections.items()
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
     # Empty URL means not configured
     if not settings.sampler_proxy_url:
