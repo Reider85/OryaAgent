@@ -21,6 +21,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.core.security import get_current_user
 from app.core.observability.spans import emit_span
+from app.ui.tool_visualization import router as tool_visualization_router
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -262,13 +263,33 @@ async def handle_tool_call(
         # Extract tool call data
         tool_name = message.get("tool_name")
         arguments = message.get("arguments", {})
+        tool_call_id = message.get("tool_call_id", f"tool_{int(time.time() * 1000)}")
+
+        # Send tool call start message
+        tool_call_message = {
+            "type": "tool_call",
+            "tool_name": tool_name,
+            "tool_call_id": tool_call_id,
+            "arguments": arguments,
+            "start_time": datetime.utcnow().isoformat(),
+            "status": "running",
+            "session_id": session_id,
+        }
+
+        await websocket_manager.send_personal_message(
+            json.dumps(tool_call_message),
+            websocket,
+        )
 
         # In a real implementation, this would:
         # 1. Execute the tool
         # 2. Get the result
         # 3. Send the result back
-
-        # For now, just simulate a tool call
+        
+        # Simulate tool execution
+        import asyncio
+        await asyncio.sleep(0.1)  # Simulate processing time
+        
         result = {
             "tool_name": tool_name,
             "arguments": arguments,
@@ -276,14 +297,18 @@ async def handle_tool_call(
             "status": "completed",
         }
 
+        # Send tool call result message
+        tool_result_message = {
+            "type": "tool_result",
+            "tool_call_id": tool_call_id,
+            "result": result,
+            "end_time": datetime.utcnow().isoformat(),
+            "duration_ms": 100,  # Simulated duration
+            "session_id": session_id,
+        }
+
         await websocket_manager.send_personal_message(
-            json.dumps(
-                {
-                    "type": "tool_call_result",
-                    "result": result,
-                    "session_id": session_id,
-                }
-            ),
+            json.dumps(tool_result_message),
             websocket,
         )
 
@@ -294,6 +319,7 @@ async def handle_tool_call(
                 {
                     "type": "error",
                     "message": f"Error processing tool call: {str(e)}",
+                    "session_id": session_id,
                 }
             ),
             websocket,
@@ -692,6 +718,9 @@ async def process_agent_message(
                 websocket,
             )
 
+
+# Include tool visualization router
+router.include_router(tool_visualization_router, prefix="/ui")
 
 # Helper function to initialize the UI router
 def setup_nextjs_ui():

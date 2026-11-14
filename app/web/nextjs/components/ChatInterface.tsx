@@ -1,9 +1,10 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Send, Bot, User, Loader2, Settings } from 'lucide-react'
+import { Send, Bot, User, Loader2, Settings, ChevronDown, ChevronUp } from 'lucide-react'
 import { Message, WebSocketManager } from './WebSocketProvider'
 import { SettingsPanel } from '@/app/settings/SettingsPanel'
+import { ToolCallVisualization } from './ToolCallVisualization'
 
 interface ChatInterfaceProps {
   websocket?: WebSocketManager
@@ -22,6 +23,7 @@ export function ChatInterface({
   const [isLoading, setIsLoading] = useState(false)
   const [internalSessionId, setInternalSessionId] = useState<string>(currentSessionId)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  const [showToolCalls, setShowToolCalls] = useState(false)
   
   const websocket = propWebSocket || new WebSocketManager()
 
@@ -142,6 +144,12 @@ export function ChatInterface({
               <Settings className="h-5 w-5" />
             </button>
             <button
+              onClick={() => setShowToolCalls(!showToolCalls)}
+              className="px-3 py-1 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
+            >
+              {showToolCalls ? 'Hide' : 'Show'} Tool Calls
+            </button>
+            <button
               onClick={createNewSession}
               className="px-3 py-1 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
             >
@@ -202,6 +210,26 @@ export function ChatInterface({
           </div>
         )}
       </div>
+
+      {/* Tool Call Visualization Panel */}
+      {showToolCalls && (
+        <div className="border-t border-gray-200 bg-gray-50">
+          <div className="p-4 border-b border-gray-200">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-medium text-gray-900">Tool Call Visualization</h3>
+              <button
+                onClick={() => setShowToolCalls(false)}
+                className="p-1 hover:bg-gray-200 rounded"
+              >
+                <ChevronUp className="h-4 w-4 text-gray-500" />
+              </button>
+            </div>
+          </div>
+          <div className="p-4">
+            <ToolCallVisualization sessionId={internalSessionId} />
+          </div>
+        </div>
+      )}
 
       {/* Input */}
       <div className="bg-white border-t border-gray-200 p-4">
