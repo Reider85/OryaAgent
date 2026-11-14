@@ -6,14 +6,14 @@ import { ChatInterface } from '../components/ChatInterface';
 import { SessionSidebar } from '../components/SessionSidebar';
 import { ToolCallVisualization } from '../components/ToolCallVisualization';
 import { SettingsPanel } from '../components/SettingsPanel';
-import { MessageSquare, Settings, Users, Wrench } from 'lucide-react';
+import { MessageSquare, Settings, Users, Wrench, Database } from 'lucide-react';
 
 interface ChatPageProps {
   session_id: string;
 }
 
 export const ChatPage: React.FC<ChatPageProps> = ({ session_id }) => {
-  const [activeTab, setActiveTab] = useState<'chat' | 'sessions' | 'tools' | 'settings'>('chat');
+  const [activeTab, setActiveTab] = useState<'chat' | 'sessions' | 'tools' | 'settings' | 'memory'>('chat');
   const [currentSessionId, setCurrentSessionId] = useState(session_id);
 
   const handleConnectionChange = (isConnected: boolean) => {
@@ -59,6 +59,9 @@ export const ChatPage: React.FC<ChatPageProps> = ({ session_id }) => {
             <ToolCallVisualization session_id={currentSessionId} />
           </WebSocketProvider>
         );
+      
+      case 'memory':
+        return <div className="p-6"><MemoryPage /></div>;
       
       case 'settings':
         return (
@@ -127,6 +130,18 @@ export const ChatPage: React.FC<ChatPageProps> = ({ session_id }) => {
           >
             <Wrench className="w-5 h-5" />
             <span>Tools</span>
+          </button>
+          
+          <button
+            onClick={() => setActiveTab('memory')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg mb-2 ${
+              activeTab === 'memory'
+                ? 'bg-blue-100 text-blue-700'
+                : 'text-gray-700 hover:bg-gray-100'
+            }`}
+          >
+            <Database className="w-5 h-5" />
+            <span>Memory</span>
           </button>
           
           <button

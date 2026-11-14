@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memory Management - OryaAgent</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 2.5rem;
+            font-weight: 300;
+        }
+        .header p {
+            margin: 10px 0 0 0;
+            opacity: 0.9;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            padding: 30px;
+            background: #f8f9fa;
+        }
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        .stat-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #667eea;
+            margin: 0;
+        }
+        .stat-label {
+            color: #666;
+            margin: 5px 0 0 0;
+            font-size: 0.9rem;
+        }
+        .controls {
+            padding: 30px;
+            border-bottom: 1px solid #e9ecef;
+        }
+        .search-box {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .search-input {
+            flex: 1;
+            padding: 12px;
+            border: 2px solid #e9ecef;
+            border-radius: 6px;
+            font-size: 16px;
+        }
+        .search-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #5a6fd8;
+        }
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+        .btn-danger:hover {
+            background: #c82333;
+        }
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+        .btn-success:hover {
+            background: #218838;
+        }
+        .memories {
+            padding: 30px;
+        }
+        .memory-card {
+            background: white;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            overflow: hidden;
+        }
+        .memory-header {
+            padding: 20px;
+            border-bottom: 1px solid #e9ecef;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .memory-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #333;
+        }
+        .memory-actions {
+            display: flex;
+            gap: 10px;
+        }
+        .memory-content {
+            padding: 20px;
+        }
+        .memory-text {
+            line-height: 1.6;
+            color: #555;
+            margin-bottom: 15px;
+        }
+        .memory-metadata {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .metadata-tag {
+            background: #e9ecef;
+            color: #495057;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+        .memory-footer {
+            padding: 15px 20px;
+            background: #f8f9fa;
+            font-size: 0.9rem;
+            color: #666;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666;
+        }
+        .empty-state h3 {
+            margin: 0 0 10px 0;
+            color: #333;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+        }
+        .modal-content {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            width: 90%;
+            max-width: 600px;
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .modal-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin: 0;
+        }
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: #666;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #333;
+        }
+        .form-textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e9ecef;
+            border-radius: 6px;
+            font-size: 16px;
+            resize: vertical;
+            min-height: 120px;
+        }
+        .form-textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+        }
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Memory Management</h1>
+            <p>Manage your session memories - search, edit, or delete stored information</p>
+        </div>
+
+        <div class="stats" id="stats">
+            <div class="stat-card">
+                <div class="stat-value" id="total-memories">-</div>
+                <div class="stat-label">Total Memories</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="avg-length">-</div>
+                <div class="stat-label">Average Length</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="oldest-memory">-</div>
+                <div class="stat-label">Oldest Memory</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="newest-memory">-</div>
+                <div class="stat-label">Newest Memory</div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <div class="search-box">
+                <input 
+                    type="text" 
+                    id="search-input" 
+                    class="search-input" 
+                    placeholder="Search memories..."
+                >
+                <button class="btn btn-primary" onclick="searchMemories()">Search</button>
+            </div>
+            <div>
+                <button class="btn btn-success" onclick="showAddModal()">Add Memory</button>
+            </div>
+        </div>
+
+        <div class="memories" id="memories-container">
+            <div class="loading">
+                <div class="spinner"></div>
+                <p>Loading memories...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add/Edit Memory Modal -->
+    <div id="memory-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title" id="modal-title">Add New Memory</h2>
+                <button class="close-btn" onclick="closeModal()">&times;</button>
+            </div>
+            <form id="memory-form" onsubmit="saveMemory(event)">
+                <div class="form-group">
+                    <label class="form-label" for="memory-content">Content</label>
+                    <textarea 
+                        id="memory-content" 
+                        class="form-textarea" 
+                        required
+                        placeholder="Enter the memory content..."
+                    ></textarea>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="memory-metadata">Metadata (JSON)</label>
+                    <textarea 
+                        id="memory-metadata" 
+                        class="form-textarea" 
+                        placeholder='{"source": "user", "type": "fact"}'
+                        rows="3"
+                    ></textarea>
+                </div>
+                <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save Memory</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const sessionId = 'session_1234567890'; // This should come from the session
+        let currentEditingId = null;
+
+        // Load initial data
+        document.addEventListener('DOMContentLoaded', function() {
+            loadMemories();
+            loadStats();
+        });
+
+        async function loadMemories(query = '') {
+            const container = document.getElementById('memories-container');
+            container.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading memories...</p></div>';
+
+            try {
+                let url = `/api/memory/list?session_id=${sessionId}&limit=100`;
+                if (query) {
+                    url = `/api/memory/search`;
+                    const response = await fetch(url, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            query: query,
+                            session_id: sessionId,
+                            limit: 100,
+                        }),
+                    });
+                    const data = await response.json();
+                    renderMemories(data.memories);
+                    return;
+                }
+
+                const response = await fetch(url);
+                const data = await response.json();
+                renderMemories(data.memories);
+            } catch (error) {
+                container.innerHTML = `<div class="error">Error loading memories: ${error.message}</div>`;
+            }
+        }
+
+        async function loadStats() {
+            try {
+                const response = await fetch(`/api/memory/stats?session_id=${sessionId}`);
+                const stats = await response.json();
+                
+                document.getElementById('total-memories').textContent = stats.total_memories;
+                document.getElementById('avg-length').textContent = stats.average_content_length + ' chars';
+                
+                if (stats.oldest_memory) {
+                    document.getElementById('oldest-memory').textContent = new Date(stats.oldest_memory).toLocaleDateString();
+                }
+                
+                if (stats.newest_memory) {
+                    document.getElementById('newest-memory').textContent = new Date(stats.newest_memory).toLocaleDateString();
+                }
+            } catch (error) {
+                console.error('Error loading stats:', error);
+            }
+        }
+
+        function renderMemories(memories) {
+            const container = document.getElementById('memories-container');
+            
+            if (memories.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <h3>No memories found</h3>
+                        <p>Start by adding your first memory to this session.</p>
+                        <button class="btn btn-success" onclick="showAddModal()">Add Memory</button>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = memories.map(memory => `
+                <div class="memory-card">
+                    <div class="memory-header">
+                        <div class="memory-title">Memory #${memory.id.slice(-6)}</div>
+                        <div class="memory-actions">
+                            <button class="btn btn-secondary" onclick="editMemory('${memory.id}')">Edit</button>
+                            <button class="btn btn-danger" onclick="deleteMemory('${memory.id}')">Delete</button>
+                        </div>
+                    </div>
+                    <div class="memory-content">
+                        <div class="memory-text">${escapeHtml(memory.content)}</div>
+                        ${Object.keys(memory.metadata).length > 0 ? `
+                            <div class="memory-metadata">
+                                ${Object.entries(memory.metadata).map(([key, value]) => 
+                                    `<span class="metadata-tag">${escapeHtml(key)}: ${escapeHtml(String(value))}</span>`
+                                ).join('')}
+                            </div>
+                        ` : ''}
+                    </div>
+                    <div class="memory-footer">
+                        Created: ${new Date(memory.created_at).toLocaleString()}
+                        ${memory.expires_at ? ` | Expires: ${new Date(memory.expires_at).toLocaleString()}` : ''}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function searchMemories() {
+            const query = document.getElementById('search-input').value.trim();
+            loadMemories(query);
+        }
+
+        function showAddModal() {
+            currentEditingId = null;
+            document.getElementById('modal-title').textContent = 'Add New Memory';
+            document.getElementById('memory-content').value = '';
+            document.getElementById('memory-metadata').value = '{}';
+            document.getElementById('memory-modal').style.display = 'block';
+        }
+
+        function editMemory(id) {
+            currentEditingId = id;
+            document.getElementById('modal-title').textContent = 'Edit Memory';
+            
+            // Find the memory in the current list
+            const memoryCard = document.querySelector(`[onclick="editMemory('${id}')"]`).closest('.memory-card');
+            const content = memoryCard.querySelector('.memory-text').textContent;
+            const metadataTags = memoryCard.querySelectorAll('.metadata-tag');
+            const metadata = {};
+            
+            metadataTags.forEach(tag => {
+                const [key, ...values] = tag.textContent.split(': ');
+                metadata[key.trim()] = values.join(': ').trim();
+            });
+            
+            document.getElementById('memory-content').value = content;
+            document.getElementById('memory-metadata').value = JSON.stringify(metadata, null, 2);
+            document.getElementById('memory-modal').style.display = 'block';
+        }
+
+        async function saveMemory(event) {
+            event.preventDefault();
+            
+            const content = document.getElementById('memory-content').value;
+            let metadata = {};
+            
+            try {
+                metadata = JSON.parse(document.getElementById('memory-metadata').value);
+            } catch (e) {
+                metadata = {};
+            }
+
+            try {
+                if (currentEditingId) {
+                    // For editing, we need to create a new memory and delete the old one
+                    const addResponse = await fetch('/api/memory/remember', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            session_id: sessionId,
+                            content: content,
+                            metadata: metadata,
+                        }),
+                    });
+                    
+                    if (!addResponse.ok) throw new Error('Failed to update memory');
+                    
+                    const deleteResponse = await fetch(`/api/memory/forget/${currentEditingId}?session_id=${sessionId}`, {
+                        method: 'DELETE',
+                    });
+                    
+                    if (!deleteResponse.ok) throw new Error('Failed to delete old memory');
+                } else {
+                    // For adding new memory
+                    const response = await fetch('/api/memory/remember', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            session_id: sessionId,
+                            content: content,
+                            metadata: metadata,
+                        }),
+                    });
+                    
+                    if (!response.ok) throw new Error('Failed to add memory');
+                }
+                
+                closeModal();
+                loadMemories();
+                loadStats();
+                
+                // Show success message
+                const container = document.getElementById('memories-container');
+                container.insertAdjacentHTML('afterbegin', `
+                    <div class="success">
+                        ${currentEditingId ? 'Memory updated successfully!' : 'Memory added successfully!'}
+                    </div>
+                `);
+                
+                setTimeout(() => {
+                    document.querySelector('.success').remove();
+                }, 3000);
+                
+            } catch (error) {
+                const container = document.getElementById('memories-container');
+                container.insertAdjacentHTML('afterbegin', `
+                    <div class="error">
+                        Error: ${error.message}
+                    </div>
+                `);
+                
+                setTimeout(() => {
+                    document.querySelector('.error').remove();
+                }, 5000);
+            }
+        }
+
+        async function deleteMemory(id) {
+            if (!confirm('Are you sure you want to delete this memory?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/memory/forget/${id}?session_id=${sessionId}`, {
+                    method: 'DELETE',
+                });
+                
+                if (!response.ok) throw new Error('Failed to delete memory');
+                
+                loadMemories();
+                loadStats();
+                
+                // Show success message
+                const container = document.getElementById('memories-container');
+                container.insertAdjacentHTML('afterbegin', `
+                    <div class="success">
+                        Memory deleted successfully!
+                    </div>
+                `);
+                
+                setTimeout(() => {
+                    document.querySelector('.success').remove();
+                }, 3000);
+                
+            } catch (error) {
+                const container = document.getElementById('memories-container');
+                container.insertAdjacentHTML('afterbegin', `
+                    <div class="error">
+                        Error: ${error.message}
+                    </div>
+                `);
+                
+                setTimeout(() => {
+                    document.querySelector('.error').remove();
+                }, 5000);
+            }
+        }
+
+        function closeModal() {
+            document.getElementById('memory-modal').style.display = 'none';
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('memory-modal');
+            if (event.target === modal) {
+                closeModal();
+            }
+        }
+
+        // Search on Enter key
+        document.getElementById('search-input').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                searchMemories();
+            }
+        });
+    </script>
+</body>
+</html>

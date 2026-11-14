@@ -21,6 +21,7 @@ from app.api.skills import router as skills_router
 from app.api.sqlite_store import router as sqlite_store_router
 from app.api.workspace import router as workspace_router
 from app.web.web_sessions import router as web_sessions_router
+from app.web.memory_ui import router as memory_ui_router
 
 # Import UI routers
 from app.ui.branch_manager_ui import router as branch_manager_ui_router
@@ -167,6 +168,7 @@ app.include_router(web_sessions_router)
 app.include_router(branch_manager_ui_router)
 app.include_router(hooks_ui_router)
 app.include_router(skills_ui_router)
+app.include_router(memory_ui_router)
 
 # Next.js Web UI (B-11)
 try:
