@@ -33,6 +33,17 @@ jobs:
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "Resolved tag: $TAG"
 
+      - name: Compute compare URL
+        id: cmp
+        run: |
+          BEFORE="${{ github.event.before }}"
+          if [ "${#BEFORE}" -eq 40 ] && [ "${BEFORE//0/}" = "" ]; then
+            URL="https://github.com/${{ github.repository }}/commits/${{ github.sha }}"
+          else
+            URL="https://github.com/${{ github.repository }}/compare/${BEFORE}...${{ github.sha }}"
+          fi
+          echo "url=$URL" >> $GITHUB_OUTPUT
+
       - name: Create prerelease
         uses: softprops/action-gh-release@v2
         with:
@@ -44,7 +55,7 @@ jobs:
             Branch: ${{ github.ref_name }}
             Commit: ${{ github.event.head_commit.message }}
 
-            Full changelog: https://github.com/${{ github.repository }}/compare/...${{ github.event.before }}
+            Full changelog: ${{ steps.cmp.outputs.url }}
           prerelease: true
           generate_release_notes: true
           make_latest: "false"
