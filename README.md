@@ -1071,6 +1071,7 @@ uv run pytest tests/unit/test_llm_providers_yaml.py
 - **Skips are conditional, not marker-based**: Postgres tests probe asyncpg (2 s) and self-skip unless `make db-up`; live-provider tests use `require_env("DEEPSEEK_API_KEY")`; 3 grep tests skip if `rg` is missing.
 - **Config-touching tests MUST sandbox**: `monkeypatch.chdir(tmp_path)`, delete `ORYA_*` env vars, `clear_settings_cache()` (and `clear_registry_cache()` for LLM YAML) before and after. Pattern: `tests/unit/test_config.py::isolated_config`.
 - **Lint gate** (no typechecker exists): `make lint` = `ruff check .` + `ruff format --check .`; fix with `make format`. Order before finishing: **format → lint → test**.
+- **CI runs without `-x`** (`.github/workflows/ci.yml` surfaces all failures per run, capped by `--maxfail=20`); locally you may pass `-x` for fast fail: `uv run pytest -x`.
 
 ---
 

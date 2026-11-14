@@ -57,7 +57,7 @@ jobs:
       - run: uv sync --frozen --extra dev
       - run: uv run python -c "import app"
       - name: Run unit+e2e+smoke with coverage
-        run: uv run pytest tests/unit tests/e2e tests/smoke --cov=app --cov-report=xml --cov-report=term-missing -x
+        run: uv run pytest tests/unit tests/e2e tests/smoke --cov=app --cov-report=xml --cov-report=term-missing --continue-on-collection-errors --maxfail=20
         env:
           CI: "true"
       - name: Upload coverage to Codecov
@@ -110,7 +110,7 @@ jobs:
       - name: Run migrations
         run: uv run python -m app.db.migrate
       - name: Run integration tests (без live LLM)
-        run: uv run pytest tests/integration -x --tb=short -k "not live"
+        run: uv run pytest tests/integration --continue-on-collection-errors --maxfail=20 --tb=short -k "not live"
         env:
           CI: "true"
           DEEPSEEK_API_KEY: ""   # явно пустой — live-тесты должны скипаться
