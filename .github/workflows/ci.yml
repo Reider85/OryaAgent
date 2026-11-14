@@ -30,6 +30,12 @@ jobs:
       - run: uv sync --frozen
       - run: uv run ruff check .
       - run: uv run ruff format --check .
+      - name: Validate docker-compose.yml parses
+        run: |
+          uv run python -c "import yaml,sys; \
+            data=yaml.safe_load(open('docker-compose.yml')); \
+            assert 'services' in data and len(data['services'])>=13, 'compose broken'; \
+            print('OK', list(data['services']))"
 
   test-matrix:
     name: Tests (Python ${{ matrix.python-version }})

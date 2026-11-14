@@ -296,3 +296,26 @@ def test_env_example_updated_for_a17():
 
     for var in new_vars:
         assert var in content
+
+
+def test_compose_yaml_is_parseable():
+    """B-02: Regression test to ensure docker-compose.yml is parseable by yaml.safe_load.
+
+    This test prevents regression of B-01 (YAML indentation issues) by verifying
+    that the compose file can be loaded and contains the expected services structure.
+    """
+    # This should not raise an exception
+    compose_data = _compose()
+
+    # Verify the basic structure exists
+    assert "services" in compose_data
+
+    # Verify we have the expected minimum number of services
+    services = compose_data["services"]
+    assert len(services) >= 13, f"Expected at least 13 services, got {len(services)}"
+
+    # Verify key services are present
+    expected_services = {"postgres", "redis", "api", "chainlit", "oriahs-mcp"}
+    assert expected_services <= set(services), (
+        f"Missing core services: {expected_services - set(services)}"
+    )
