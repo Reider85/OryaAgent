@@ -1,7 +1,7 @@
 # OryaAgent
 
 [![CI](https://github.com/Reider85/OryaAgent/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Reider85/OryaAgent/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/Reider85/OryaAgent?include_prereleases&sort=semver)](https://github.com/Reider85/OryaAgent/releases)
+[![Release](https://img.shields.io/github/v/release/Reider85/OryaAgent?include_prereleases=false&sort=semver)](https://github.com/Reider85/OryaAgent/releases)
 [![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Code style: Ruff](https://img.shields.io/badge/Code%20style-Ruff-000.svg)](https://docs.astral.sh/ruff/)

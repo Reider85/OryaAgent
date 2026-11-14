@@ -3,6 +3,13 @@ name: Release
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+      - ".github/**"        # workflows shouldn't trigger release
+      - "tests/**"          # tests aren't releases
+      - "scripts/**"
     tags: ["v*.*.*"]
   workflow_dispatch:
     inputs:
@@ -44,7 +51,20 @@ jobs:
           fi
           echo "url=$URL" >> $GITHUB_OUTPUT
 
+      - name: Skip if release for this SHA exists
+        id: dedup
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          SHA_TAG=$(gh release list --repo "${{ github.repository }}" --json tagName \
+                    --jq ".[] | select(.tagName|endswith(\"+${SHORT_SHA}\")) | .tagName" | head -1)
+          if [ -n "$SHA_TAG" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Create prerelease
+        if: steps.dedup.outputs.exists != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
