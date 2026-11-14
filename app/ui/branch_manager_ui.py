@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime
-from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -13,7 +11,6 @@ from fastapi.templating import Jinja2Templates
 
 from app.core.branch_manager import get_branch_manager
 from app.core.security import get_current_user
-from app.core.observability.spans import emit_span
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ui/branches", tags=["branch-ui"])
@@ -216,7 +213,7 @@ def _format_relative_time(timestamp: str) -> str:
             return f"{minutes} minutes ago"
         else:
             return "just now"
-    except:
+    except Exception:
         return timestamp
 
 
@@ -231,7 +228,7 @@ def _get_status_class(status: str) -> str:
     return status_classes.get(status, "status-unknown")
 
 
-def _build_branch_tree(branches: List[Dict]) -> List[Dict]:
+def _build_branch_tree(branches: list[dict]) -> list[dict]:
     """Build tree structure for branch visualization."""
     tree = []
 
@@ -494,8 +491,8 @@ async def branches_merge_preview(
 
 
 def _detect_potential_conflicts(
-    source_turns: List[Dict], target_turns: List[Dict]
-) -> List[Dict]:
+    source_turns: list[dict], target_turns: list[dict]
+) -> list[dict]:
     """Detect potential conflicts between source and target turns."""
     conflicts = []
 
@@ -535,7 +532,7 @@ def _detect_potential_conflicts(
 
 def _get_memory_files_to_merge(
     source_session_id: str, target_session_id: str
-) -> List[str]:
+) -> list[str]:
     """Get list of memory files that would be merged."""
     memory_files = [
         "PROJECT.md",
@@ -545,92 +542,6 @@ def _get_memory_files_to_merge(
         "DECISIONS.md",
     ]
     return memory_files
-
-
-@router.get("/merge", response_class=HTMLResponse)
-async def branches_merge_ui(
-    request: Request,
-    source_session_id: str = None,
-    target_session_id: str = None,
-    current_user: str = Depends(get_current_user),
-):
-    """Branches merge UI page."""
-    try:
-        branch_manager = get_branch_manager()
-
-        # Get branch info for source and target
-        source_info = None
-        target_info = None
-
-        if source_session_id:
-            source_info = await branch_manager.get_branch_info(source_session_id)
-
-        if target_session_id:
-            target_info = await branch_manager.get_branch_info(target_session_id)
-
-        # Get merge history for target
-        merge_history = []
-        if target_session_id:
-            merge_history = await branch_manager.get_merge_history(target_session_id)
-
-        return templates.TemplateResponse(
-            "branches/merge.html",
-            {
-                "request": request,
-                "source_session_id": source_session_id,
-                "target_session_id": target_session_id,
-                "source_info": source_info,
-                "target_info": target_info,
-                "merge_history": merge_history,
-                "current_user": current_user,
-            },
-        )
-
-    except Exception as e:
-        logger.error(f"Error in branches merge UI: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to load branches merge: {str(e)}"
-        )
-
-
-@router.post("/merge")
-async def branches_merge_post(
-    request: Request,
-    current_user: str = Depends(get_current_user),
-):
-    """Merge branches via UI."""
-    try:
-        form_data = await request.form()
-        source_session_id = form_data.get("source_session_id")
-        target_session_id = form_data.get("target_session_id")
-        merge_strategy = form_data.get("merge_strategy", "append")
-        conflict_resolution = form_data.get("conflict_resolution", "manual")
-
-        if not source_session_id or not target_session_id:
-            raise HTTPException(
-                status_code=400, detail="Source and target session IDs are required"
-            )
-
-        branch_manager = get_branch_manager()
-        merge_result = await branch_manager.merge_branches(
-            source_session_id=source_session_id,
-            target_session_id=target_session_id,
-            merge_strategy=merge_strategy,
-            conflict_resolution=conflict_resolution,
-        )
-
-        # Redirect to target session with success message
-        return RedirectResponse(
-            f"/ui/branches/?session_id={target_session_id}", status_code=303
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error merging branches: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to merge branches: {str(e)}"
-        )
 
 
 @router.get("/delete/{branch_session_id}", response_class=HTMLResponse)

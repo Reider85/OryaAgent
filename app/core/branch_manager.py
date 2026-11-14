@@ -11,12 +11,12 @@ import logging
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from app.db import asyncpg
 from app.core.memory.md_store import get_md_store
 from app.core.observability.spans import timed_span
 from app.core.session import SessionManager
+from app.db import asyncpg
 
 logger = logging.getLogger(__name__)
 
@@ -28,15 +28,19 @@ class BranchManager:
         self.session_manager = SessionManager()
         self.md_store = get_md_store()
 
-    @timed_span(span_type="branch.create", name="branch.create", attributes={"operation": "fork_session"})
+    @timed_span(
+        span_type="branch.create",
+        name="branch.create",
+        attributes={"operation": "fork_session"},
+    )
     async def fork_session(
         self,
         session_id: str,
-        turn_id: Optional[str] = None,
-        branch_name: Optional[str] = None,
-        parent_turn_id: Optional[str] = None,
+        turn_id: str | None = None,
+        branch_name: str | None = None,
+        parent_turn_id: str | None = None,
         bulk_copy: bool = True,
-        progress_callback: Optional[callable] = None,
+        progress_callback: callable | None = None,
     ) -> str:
         """Create a new branch from any session turn.
 
@@ -122,7 +126,7 @@ class BranchManager:
         branch_session_id: str,
         parent_turn_id: str,
         bulk_copy: bool = True,
-        progress_callback: Optional[callable] = None,
+        progress_callback: callable | None = None,
     ) -> None:
         """Copy session state from parent to branch with performance optimizations."""
         try:
@@ -166,10 +170,10 @@ class BranchManager:
 
     async def _bulk_copy_turns(
         self,
-        parent_turns: List[Dict],
+        parent_turns: list[dict],
         branch_session_id: str,
         parent_session_id: str,
-        progress_callback: Optional[callable] = None,
+        progress_callback: callable | None = None,
     ) -> None:
         """Bulk copy turns using batch inserts for better performance."""
         if not parent_turns:
@@ -191,47 +195,26 @@ class BranchManager:
             }
             batch_data.append(branch_turn)
 
-        # Use batch insert for better performance
-        try:
-            async with asyncpg.get_pool().acquire() as conn:
-                # Use COPY for bulk insert (PostgreSQL specific optimization)
-                for i, turn_data in enumerate(batch_data):
-                    turn_id = str(uuid.uuid4())
-                    await conn.execute(
-                        """
-                        INSERT INTO branch_turns (turn_id, branch_id, turn_number, messages, tool_calls, created_at, metadata)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7)
-                        """,
-                        turn_id,
-                        turn_data["session_id"],
-                        turn_data["turn_number"],
-                        turn_data["messages"],
-                        turn_data["tool_calls"],
-                        turn_data["created_at"],
-                        turn_data["metadata"],
-                    )
+        # Use SessionManager for turn creation
+        for i, turn_data in enumerate(batch_data):
+            await self.session_manager.create_turn(
+                session_id=turn_data["session_id"],
+                turn_number=turn_data["turn_number"],
+                messages=turn_data["messages"],
+                tool_calls=turn_data["tool_calls"],
+                metadata=turn_data["metadata"],
+            )
 
-                    # Update progress if callback provided
-                    if progress_callback and (i + 1) % 10 == 0:  # Update every 10 turns
-                        progress_callback(len(batch_data), i + 1)
-
-        except Exception as e:
-            logger.error(f"Failed to bulk copy turns: {e}")
-            # Fallback to individual inserts
-            for turn_data in batch_data:
-                await self.session_manager.create_turn(
-                    {
-                        **turn_data,
-                        "id": str(uuid.uuid4()),
-                    }
-                )
+            # Update progress if callback provided
+            if progress_callback and (i + 1) % 10 == 0:  # Update every 10 turns
+                progress_callback(i + 1, len(parent_turns))
 
     async def fork_multiple_sessions(
         self,
-        session_configs: List[Dict[str, Any]],
+        session_configs: list[dict[str, Any]],
         bulk_copy: bool = True,
-        progress_callback: Optional[callable] = None,
-    ) -> List[Dict[str, Any]]:
+        progress_callback: callable | None = None,
+    ) -> list[dict[str, Any]]:
         """Create multiple branches from different sessions concurrently.
 
         Args:
@@ -246,8 +229,8 @@ class BranchManager:
         results = []
 
         async def create_single_branch(
-            config: Dict[str, Any], index: int
-        ) -> Dict[str, Any]:
+            config: dict[str, Any], index: int
+        ) -> dict[str, Any]:
             try:
                 branch_id = await self.fork_session(
                     session_id=config["session_id"],
@@ -341,7 +324,7 @@ class BranchManager:
         copy_tasks = [copy_file(source, target) for source, target in copy_operations]
         await asyncio.gather(*copy_tasks, return_exceptions=True)
 
-    async def get_branch_performance_metrics(self, session_id: str) -> Dict[str, Any]:
+    async def get_branch_performance_metrics(self, session_id: str) -> dict[str, Any]:
         """Get performance metrics for branches of a session."""
         try:
             async with asyncpg.get_pool().acquire() as conn:
@@ -382,7 +365,7 @@ class BranchManager:
                 "error": str(e),
             }
 
-    async def list_branches(self, session_id: str) -> List[Dict[str, Any]]:
+    async def list_branches(self, session_id: str) -> list[dict[str, Any]]:
         """List all branches for a session."""
         try:
             query = """
@@ -400,7 +383,7 @@ class BranchManager:
             logger.error(f"Failed to list branches: {e}")
             return []
 
-    async def get_branch_info(self, branch_session_id: str) -> Optional[Dict[str, Any]]:
+    async def get_branch_info(self, branch_session_id: str) -> dict[str, Any] | None:
         """Get information about a branch."""
         try:
             branch = await self.session_manager.get_session(branch_session_id)
@@ -446,14 +429,18 @@ class BranchManager:
             logger.error(f"Failed to delete branch: {e}")
             return False
 
-    @timed_span(span_type="branch.merge", name="branch.merge", attributes={"operation": "merge_branches"})
+    @timed_span(
+        span_type="branch.merge",
+        name="branch.merge",
+        attributes={"operation": "merge_branches"},
+    )
     async def merge_branches(
         self,
         source_session_id: str,
         target_session_id: str,
         merge_strategy: str = "append",
         conflict_resolution: str = "manual",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Merge a branch session into a target session.
 
         Args:
@@ -556,7 +543,7 @@ class BranchManager:
             raise ValueError(f"Failed to merge branches: {str(e)}")
 
     async def _find_common_ancestor(
-        self, source_turns: List[Dict], target_turns: List[Dict]
+        self, source_turns: list[dict], target_turns: list[dict]
     ) -> str:
         """Find the common ancestor turn ID."""
         # This is a simplified implementation - in a real system,
@@ -567,11 +554,11 @@ class BranchManager:
 
     async def _merge_turns(
         self,
-        target_turns: List[Dict],
-        source_turns: List[Dict],
+        target_turns: list[dict],
+        source_turns: list[dict],
         strategy: str,
         conflict_resolution: str,
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """Merge turns from source and target sessions."""
         if strategy == "append":
             # Append source turns to target turns
@@ -592,6 +579,8 @@ class BranchManager:
             return merged
         elif strategy == "replace":
             # Replace target turns with source turns (simplified)
+            if not source_turns:
+                return target_turns  # No source turns to replace with
             return target_turns[: -len(source_turns)] + source_turns
         else:
             raise ValueError(f"Unknown merge strategy: {strategy}")
@@ -646,7 +635,7 @@ class BranchManager:
         target_session_id: str,
         source_session_id: str,
         strategy: str,
-        results: List[Dict],
+        results: list[dict],
     ) -> None:
         """Update session metadata after merge."""
         try:
@@ -675,7 +664,7 @@ class BranchManager:
         except Exception as e:
             logger.error(f"Failed to update merge metadata: {e}")
 
-    async def get_merge_history(self, session_id: str) -> List[Dict]:
+    async def get_merge_history(self, session_id: str) -> list[dict]:
         """Get merge history for a session."""
         try:
             session = await self.session_manager.get_session(session_id)

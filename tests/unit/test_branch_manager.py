@@ -245,7 +245,7 @@ class TestBranchManager:
         parent_turn_id = sample_turns[0]["id"]
 
         # Test copy session state
-        await branch_manager._copy_session_state(
+        await branch_manager._copy_session_state_optimized(
             parent_session_id, branch_session_id, parent_turn_id
         )
 
@@ -257,7 +257,7 @@ class TestBranchManager:
 
     @pytest.mark.asyncio
     async def test_copy_memory_files(
-        self, branch_manager, mock_md_store, sample_memory_dir
+        self, branch_manager, mock_md_store, tmp_path
     ):
         """Test memory file copying functionality."""
         # Setup mocks
@@ -267,25 +267,22 @@ class TestBranchManager:
         branch_session_id = str(uuid.uuid4())
 
         # Mock memory directories
-        mock_md_store.get_session_memory_dir.return_value = sample_memory_dir
+        parent_memory_dir = tmp_path / "parent_memory"
+        branch_memory_dir = tmp_path / "branch_memory"
+        branch_memory_dir.mkdir()
+        mock_get_dir.side_effect = lambda sid: (
+            sample_memory_dir if sid == parent_session_id else branch_memory_dir
+        )
 
-        # Mock branch memory directory
-        with patch.object(mock_md_store, "get_session_memory_dir") as mock_get_dir:
-            branch_memory_dir = Path(tmp_path) / "branch_memory"
-            branch_memory_dir.mkdir()
-            mock_get_dir.side_effect = lambda sid: (
-                sample_memory_dir if sid == parent_session_id else branch_memory_dir
-            )
+        # Test copy memory files
+        await branch_manager._copy_memory_files(
+            parent_session_id, branch_session_id
+        )
 
-            # Test copy memory files
-            await branch_manager._copy_memory_files(
-                parent_session_id, branch_session_id
-            )
-
-            # Verify files were copied
-            for file_name in [
-                "PROJECT.md",
-                "LEARNED.md",
+        # Verify files were copied
+        for file_name in [
+            "PROJECT.md",
+            "LEARNED.md",
                 "PREFERENCES.md",
                 "FACTS.md",
                 "DECISIONS.md",
@@ -320,7 +317,7 @@ class TestBranchManager:
         ]
 
         mock_session_manager.get_session_turns.return_value = []  # Mock DB call
-        with patch("asyncpg.get_pool") as mock_pool:
+        with patch("app.db.asyncpg.get_pool") as mock_pool:
             mock_conn = AsyncMock()
             mock_pool.return_value.acquire.return_value.__aenter__.return_value = (
                 mock_conn
