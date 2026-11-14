@@ -1,30 +1,22 @@
-import type { Metadata } from 'next'
-import { Inter } from 'next/font/google'
-import './globals.css'
-import { SessionSidebar } from '@/components/SessionSidebar'
+import type { Metadata } from 'next';
+import { Inter } from 'next/font/google';
+import './globals.css';
 
-const inter = Inter({ subsets: ['latin'] })
+const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'OryaAgent - Chat Interface',
-  description: 'Modern chat interface for OryaAgent',
-}
+  title: 'OryaAgent B-15 WebSocket Streaming',
+  description: 'Real-time chat interface with WebSocket streaming support',
+};
 
 export default function RootLayout({
   children,
 }: {
-  children: React.ReactNode
+  children: React.ReactNode;
 }) {
   return (
     <html lang="en">
-      <body className={inter.className}>
-        <div className="flex h-screen bg-gray-50">
-          <SessionSidebar />
-          <main className="flex-1">
-            {children}
-          </main>
-        </div>
-      </body>
+      <body className={inter.className}>{children}</body>
     </html>
-  )
+  );
 }

@@ -57,3 +57,57 @@
     @apply bg-background text-foreground;
   }
 }
+
+@layer components {
+  .chat-container {
+    @apply flex flex-col h-full bg-gray-50;
+  }
+  
+  .message-bubble {
+    @apply max-w-[80%] rounded-lg px-4 py-3 shadow-sm;
+  }
+  
+  .message-user {
+    @apply bg-blue-600 text-white;
+  }
+  
+  .message-assistant {
+    @apply bg-gray-100 text-gray-800;
+  }
+  
+  .message-error {
+    @apply bg-red-100 text-red-800;
+  }
+  
+  .message-tool {
+    @apply bg-purple-100 text-purple-800;
+  }
+  
+  .input-area {
+    @apply border-t bg-white;
+  }
+  
+  .sidebar {
+    @apply bg-white border-r;
+  }
+  
+  .status-indicator {
+    @apply w-2 h-2 rounded-full;
+  }
+  
+  .status-connected {
+    @apply bg-green-500;
+  }
+  
+  .status-connecting {
+    @apply bg-yellow-500;
+  }
+  
+  .status-disconnected {
+    @apply bg-gray-500;
+  }
+  
+  .status-error {
+    @apply bg-red-500;
+  }
+}

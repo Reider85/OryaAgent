@@ -1,265 +1,411 @@
-'use client'
+"""Enhanced chat interface with WebSocket streaming for B-15."""
 
-import { useState, useEffect } from 'react'
-import { Send, Bot, User, Loader2, Settings, ChevronDown, ChevronUp } from 'lucide-react'
-import { Message, WebSocketManager } from './WebSocketProvider'
-import { SettingsPanel } from '@/app/settings/SettingsPanel'
-import { ToolCallVisualization } from './ToolCallVisualization'
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { useWebSocket } from './WebSocketContext';
+import { WebSocketMessage, MessageType } from '../types/websocket';
+import { Send, Bot, User, AlertCircle, Loader2 } from 'lucide-react';
 
-interface ChatInterfaceProps {
-  websocket?: WebSocketManager
-  currentSessionId?: string
-  onSessionChange?: (sessionId: string) => void
+interface ChatMessage {
+  id: string;
+  type: MessageType;
+  content: string;
+  timestamp: string;
+  role?: 'user' | 'assistant' | 'system';
+  position?: number;
+  total_tokens?: number;
+  tool_name?: string;
+  tool_result?: any;
+  status?: string;
 }
 
-export function ChatInterface({ 
-  websocket: propWebSocket, 
-  currentSessionId = 'default-session',
-  onSessionChange 
-}: ChatInterfaceProps) {
-  const [messages, setMessages] = useState<Message[]>([])
-  const [inputValue, setInputValue] = useState('')
-  const [isConnected, setIsConnected] = useState(false)
-  const [isLoading, setIsLoading] = useState(false)
-  const [internalSessionId, setInternalSessionId] = useState<string>(currentSessionId)
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false)
-  const [showToolCalls, setShowToolCalls] = useState(false)
+interface ChatInterfaceProps {
+  session_id: string;
+  className?: string;
+}
+
+export const ChatInterface: React.FC<ChatInterfaceProps> = ({
+  session_id,
+  className = '',
+}) => {
+  const { 
+    isConnected, 
+    connectionError, 
+    messages, 
+    sendChatMessage, 
+    sendStreamRequest,
+    connectionStatus 
+  } = useWebSocket();
   
-  const websocket = propWebSocket || new WebSocketManager()
+  const [inputValue, setInputValue] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-scroll to bottom
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, []);
 
   useEffect(() => {
-    // Update internal session ID when prop changes
-    if (currentSessionId !== internalSessionId) {
-      setInternalSessionId(currentSessionId)
-      setMessages([]) // Clear messages when switching sessions
-    }
-  }, [currentSessionId, internalSessionId])
+    scrollToBottom();
+  }, [messages, scrollToBottom]);
 
+  // Handle incoming messages
   useEffect(() => {
-    // Initialize WebSocket connection
-    websocket.connect(internalSessionId)
-    setIsConnected(true)
-
-    // Listen for messages
-    websocket.onMessage((message: Message) => {
-      setMessages(prev => [...prev, message])
-    })
-
-    // Listen for connection status
-    websocket.onConnectionStatus((connected: boolean) => {
-      setIsConnected(connected)
-    })
-
-    // Cleanup on unmount
-    return () => {
-      websocket.disconnect()
-    }
-  }, [websocket, internalSessionId])
-
-  const handleSendMessage = async () => {
-    if (!inputValue.trim() || isLoading) return
-
-    const userMessage: Message = {
-      id: `msg-${Date.now()}`,
-      type: 'user',
-      content: inputValue,
-      timestamp: new Date().toISOString(),
-      role: 'user'
-    }
-
-    setMessages(prev => [...prev, userMessage])
-    setInputValue('')
-    setIsLoading(true)
-
-    try {
-      await websocket.sendMessage({
-        type: 'message',
-        content: inputValue,
-        session_id: currentSessionId
-      })
-    } catch (error) {
-      console.error('Error sending message:', error)
-      // Add error message
-      setMessages(prev => [...prev, {
-        id: `msg-error-${Date.now()}`,
-        type: 'error',
-        content: 'Failed to send message. Please try again.',
-        timestamp: new Date().toISOString(),
-        role: 'system'
-      }])
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSendMessage()
-    }
-  }
-
-  const createNewSession = async () => {
-    try {
-      const response = await fetch('/web/api/sessions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      })
-      
-      if (response.ok) {
-        const data = await response.json()
-        setInternalSessionId(data.id)
-        onSessionChange?.(data.id)
-        setMessages([]) // Clear messages for new session
+    const lastMessage = messages[messages.length - 1];
+    
+    if (lastMessage) {
+      switch (lastMessage.type) {
+        case MessageType.USER:
+          // User message - no special handling needed
+          break;
+          
+        case MessageType.ASSISTANT:
+          // Assistant message - could add typing indicators
+          setIsTyping(false);
+          break;
+          
+        case MessageType.STREAM_TOKEN:
+          // Streaming token - update the last assistant message
+          setIsTyping(true);
+          break;
+          
+        case MessageType.STREAM_COMPLETE:
+          // Stream completed
+          setIsTyping(false);
+          break;
+          
+        case MessageType.TOOL_CALL:
+          // Tool call started
+          setIsTyping(true);
+          break;
+          
+        case MessageType.TOOL_RESULT:
+          // Tool result received
+          setIsTyping(false);
+          break;
+          
+        case MessageType.ERROR:
+          // Error message
+          setIsTyping(false);
+          break;
       }
-    } catch (error) {
-      console.error('Error creating session:', error)
     }
-  }
+  }, [messages]);
+
+  // Handle form submission
+  const handleSubmit = useCallback((e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!inputValue.trim() || !isConnected) return;
+    
+    const message = inputValue.trim();
+    setInputValue('');
+    
+    // Send the message
+    sendChatMessage(message);
+    
+    // Set typing indicator
+    setIsTyping(true);
+  }, [inputValue, isConnected, sendChatMessage]);
+
+  // Handle streaming request
+  const handleStreamRequest = useCallback(() => {
+    if (!inputValue.trim() || !isConnected) return;
+    
+    const prompt = inputValue.trim();
+    setInputValue('');
+    
+    // Send stream request
+    sendStreamRequest(prompt);
+    
+    // Set typing indicator
+    setIsTyping(true);
+  }, [inputValue, isConnected, sendStreamRequest]);
+
+  // Format timestamp
+  const formatTimestamp = (timestamp: string) => {
+    const date = new Date(timestamp);
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
+  // Render message based on type
+  const renderMessage = (message: ChatMessage) => {
+    const isUser = message.type === MessageType.USER;
+    const isAssistant = message.type === MessageType.ASSISTANT;
+    const isError = message.type === MessageType.ERROR;
+    const isToolCall = message.type === MessageType.TOOL_CALL;
+    const isToolResult = message.type === MessageType.TOOL_RESULT;
+    const isStreamToken = message.type === MessageType.STREAM_TOKEN;
+
+    return (
+      <div
+        key={message.id}
+        className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-4`}
+      >
+        <div
+          className={`max-w-[80%] rounded-lg px-4 py-3 ${
+            isUser
+              ? 'bg-blue-600 text-white'
+              : isError
+              ? 'bg-red-100 text-red-800'
+              : isToolCall
+              ? 'bg-purple-100 text-purple-800'
+              : isToolResult
+              ? 'bg-green-100 text-green-800'
+              : 'bg-gray-100 text-gray-800'
+          }`}
+        >
+          {/* Message header */}
+          <div className="flex items-center gap-2 mb-2">
+            {isUser ? (
+              <User className="w-4 h-4" />
+            ) : isError ? (
+              <AlertCircle className="w-4 h-4" />
+            ) : (
+              <Bot className="w-4 h-4" />
+            )}
+            <span className="text-xs font-medium opacity-75">
+              {isUser ? 'You' : isError ? 'Error' : 'Assistant'}
+            </span>
+            <span className="text-xs opacity-50">
+              {formatTimestamp(message.timestamp)}
+            </span>
+          </div>
+
+          {/* Message content */}
+          {isToolCall ? (
+            <div className="text-sm">
+              <div className="font-medium mb-1">
+                Executing: {message.tool_name}
+              </div>
+              <div className="text-xs opacity-75">
+                {JSON.stringify(message.tool_args, null, 2)}
+              </div>
+            </div>
+          ) : isToolResult ? (
+            <div className="text-sm">
+              <div className="font-medium mb-1">
+                {message.tool_name} Result:
+              </div>
+              <div className="text-xs opacity-75">
+                {typeof message.tool_result === 'string'
+                  ? message.tool_result
+                  : JSON.stringify(message.tool_result, null, 2)}
+              </div>
+              {message.status === 'error' && (
+                <div className="text-red-600 text-xs mt-1">
+                  Error: {message.error_message}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="text-sm whitespace-pre-wrap">
+              {message.content}
+            </div>
+          )}
+
+          {/* Stream progress */}
+          {message.position && message.total_tokens && (
+            <div className="mt-2">
+              <div className="w-full bg-gray-200 rounded-full h-1">
+                <div
+                  className="bg-blue-600 h-1 rounded-full transition-all duration-300"
+                  style={{
+                    width: `${(message.position / message.total_tokens) * 100}%`,
+                  }}
+                />
+              </div>
+              <div className="text-xs opacity-50 mt-1">
+                {message.position}/{message.total_tokens} tokens
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   return (
-    <div className="flex flex-col h-screen">
-      {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-4 py-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <Bot className="h-6 w-6 text-blue-600" />
-            <h1 className="text-xl font-semibold text-gray-900">OryaAgent</h1>
-            <div className="flex items-center space-x-2">
-              <div className={`h-2 w-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
-              <span className="text-sm text-gray-500">
-                {isConnected ? 'Connected' : 'Disconnected'}
-              </span>
-            </div>
+    <div className={`flex flex-col h-full ${className}`}>
+      {/* Connection status */}
+      <div className="flex items-center gap-2 p-3 border-b">
+        <div
+          className={`w-2 h-2 rounded-full ${
+            connectionStatus === 'connected'
+              ? 'bg-green-500'
+              : connectionStatus === 'connecting'
+              ? 'bg-yellow-500'
+              : connectionStatus === 'error'
+              ? 'bg-red-500'
+              : 'bg-gray-500'
+          }`}
+        />
+        <span className="text-sm">
+          {connectionStatus === 'connected' && 'Connected'}
+          {connectionStatus === 'connecting' && 'Connecting...'}
+          {connectionStatus === 'disconnected' && 'Disconnected'}
+          {connectionStatus === 'error' && 'Connection Error'}
+        </span>
+        
+        {connectionError && (
+          <div className="flex items-center gap-1 text-red-600 text-sm">
+            <AlertCircle className="w-4 h-4" />
+            <span>{connectionError}</span>
           </div>
-          <div className="flex items-center space-x-2">
-            <span className="text-sm text-gray-500">Session: {currentSessionId}</span>
-            <button
-              onClick={() => setIsSettingsOpen(true)}
-              className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
-              title="Settings"
-            >
-              <Settings className="h-5 w-5" />
-            </button>
-            <button
-              onClick={() => setShowToolCalls(!showToolCalls)}
-              className="px-3 py-1 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
-            >
-              {showToolCalls ? 'Hide' : 'Show'} Tool Calls
-            </button>
-            <button
-              onClick={createNewSession}
-              className="px-3 py-1 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
-            >
-              New Session
-            </button>
-          </div>
-        </div>
+        )}
       </div>
 
-      {/* Messages */}
+      {/* Messages area */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.length === 0 ? (
-          <div className="flex items-center justify-center h-full">
-            <div className="text-center text-gray-500">
-              <Bot className="h-12 w-12 mx-auto mb-4 text-gray-400" />
-              <h3 className="text-lg font-medium mb-2">Welcome to OryaAgent</h3>
-              <p className="text-sm">Start a conversation by typing a message below.</p>
-            </div>
-          </div>
-        ) : (
-          messages.map((message) => (
-            <div
-              key={message.id}
-              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
-              <div
-                className={`max-w-3xl rounded-lg px-4 py-3 ${
-                  message.role === 'user'
-                    ? 'bg-blue-600 text-white'
-                    : message.type === 'error'
-                    ? 'bg-red-100 text-red-900'
-                    : 'bg-gray-100 text-gray-900'
-                }`}
-              >
-                <div className="flex items-start space-x-2">
-                  {message.role === 'assistant' && <Bot className="h-5 w-5 mt-0.5 flex-shrink-0" />}
-                  {message.role === 'user' && <User className="h-5 w-5 mt-0.5 flex-shrink-0" />}
-                  <div className="flex-1">
-                    <div className="text-sm font-medium mb-1">
-                      {message.role === 'user' ? 'You' : 'OryaAgent'}
-                    </div>
-                    <div className="text-sm whitespace-pre-wrap">{message.content}</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))
-        )}
+        {messages.map((message) => (
+          <ChatMessageComponent key={message.id} message={message} />
+        ))}
         
-        {isLoading && (
+        {/* Typing indicator */}
+        {isTyping && (
           <div className="flex justify-start">
             <div className="bg-gray-100 rounded-lg px-4 py-3">
-              <div className="flex items-center space-x-2">
-                <Loader2 className="h-5 w-5 animate-spin text-gray-500" />
-                <span className="text-sm text-gray-500">OryaAgent is thinking...</span>
+              <div className="flex items-center gap-2">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span className="text-sm text-gray-600">Assistant is typing...</span>
               </div>
             </div>
           </div>
         )}
+        
+        <div ref={messagesEndRef} />
       </div>
 
-      {/* Tool Call Visualization Panel */}
-      {showToolCalls && (
-        <div className="border-t border-gray-200 bg-gray-50">
-          <div className="p-4 border-b border-gray-200">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-medium text-gray-900">Tool Call Visualization</h3>
-              <button
-                onClick={() => setShowToolCalls(false)}
-                className="p-1 hover:bg-gray-200 rounded"
-              >
-                <ChevronUp className="h-4 w-4 text-gray-500" />
-              </button>
-            </div>
-          </div>
-          <div className="p-4">
-            <ToolCallVisualization sessionId={internalSessionId} />
-          </div>
-        </div>
-      )}
-
-      {/* Input */}
-      <div className="bg-white border-t border-gray-200 p-4">
-        <div className="flex items-end space-x-2">
-          <div className="flex-1">
-            <textarea
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onKeyPress={handleKeyPress}
-              placeholder="Type your message..."
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
-              rows={2}
-              disabled={isLoading}
-            />
-          </div>
+      {/* Input area */}
+      <div className="border-t p-4">
+        <form onSubmit={handleSubmit} className="flex gap-2">
+          <textarea
+            ref={inputRef}
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            placeholder="Type your message..."
+            className="flex-1 resize-none border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            rows={2}
+            disabled={!isConnected || connectionStatus === 'error'}
+          />
           <button
-            onClick={handleSendMessage}
-            disabled={!inputValue.trim() || isLoading}
-            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+            type="submit"
+            disabled={!isConnected || !inputValue.trim() || connectionStatus === 'error'}
+            className="bg-blue-600 text-white rounded-lg px-4 py-2 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center gap-2"
           >
-            <Send className="h-5 w-5" />
+            <Send className="w-4 h-4" />
+            <span>Send</span>
+          </button>
+        </form>
+        
+        {/* Streaming mode toggle */}
+        <div className="mt-2 flex items-center gap-4">
+          <button
+            onClick={handleStreamRequest}
+            disabled={!isConnected || !inputValue.trim() || connectionStatus === 'error'}
+            className="text-sm text-blue-600 hover:text-blue-800 disabled:text-gray-400 disabled:cursor-not-allowed"
+          >
+            Stream Response
           </button>
         </div>
       </div>
-
-      {/* Settings Panel */}
-      <SettingsPanel
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-      />
     </div>
-  )
-}
+  );
+};
+
+// Separate message component for better performance
+const ChatMessageComponent: React.FC<{ message: WebSocketMessage }> = ({ message }) => {
+  const isUser = message.type === MessageType.USER;
+  const isAssistant = message.type === MessageType.ASSISTANT;
+  const isError = message.type === MessageType.ERROR;
+  const isToolCall = message.type === MessageType.TOOL_CALL;
+  const isToolResult = message.type === MessageType.TOOL_RESULT;
+  const isStreamToken = message.type === MessageType.STREAM_TOKEN;
+
+  return (
+    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-4`}>
+      <div
+        className={`max-w-[80%] rounded-lg px-4 py-3 ${
+          isUser
+            ? 'bg-blue-600 text-white'
+            : isError
+            ? 'bg-red-100 text-red-800'
+            : isToolCall
+            ? 'bg-purple-100 text-purple-800'
+            : isToolResult
+            ? 'bg-green-100 text-green-800'
+            : 'bg-gray-100 text-gray-800'
+        }`}
+      >
+        {/* Message header */}
+        <div className="flex items-center gap-2 mb-2">
+          {isUser ? (
+            <User className="w-4 h-4" />
+          ) : isError ? (
+            <AlertCircle className="w-4 h-4" />
+          ) : (
+            <Bot className="w-4 h-4" />
+          )}
+          <span className="text-xs font-medium opacity-75">
+            {isUser ? 'You' : isError ? 'Error' : 'Assistant'}
+          </span>
+          <span className="text-xs opacity-50">
+            {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </span>
+        </div>
+
+        {/* Message content */}
+        {isToolCall ? (
+          <div className="text-sm">
+            <div className="font-medium mb-1">
+              Executing: {message.tool_name}
+            </div>
+            <div className="text-xs opacity-75">
+              {JSON.stringify(message.tool_args || {}, null, 2)}
+            </div>
+          </div>
+        ) : isToolResult ? (
+          <div className="text-sm">
+            <div className="font-medium mb-1">
+              {message.tool_name} Result:
+            </div>
+            <div className="text-xs opacity-75">
+              {typeof message.result === 'string'
+                ? message.result
+                : JSON.stringify(message.result, null, 2)}
+            </div>
+            {message.status === 'error' && (
+              <div className="text-red-600 text-xs mt-1">
+                Error: {message.error_message}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="text-sm whitespace-pre-wrap">
+            {message.content}
+          </div>
+        )}
+
+        {/* Stream progress */}
+        {message.position && message.total_tokens && (
+          <div className="mt-2">
+            <div className="w-full bg-gray-200 rounded-full h-1">
+              <div
+                className="bg-blue-600 h-1 rounded-full transition-all duration-300"
+                style={{
+                  width: `${(message.position / message.total_tokens) * 100}%`,
+                }}
+              />
+            </div>
+            <div className="text-xs opacity-50 mt-1">
+              {message.position}/{message.total_tokens} tokens
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default ChatInterface;

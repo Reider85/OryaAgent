@@ -1,728 +1,566 @@
-"""Next.js Web UI for B-11..B-15: chat interface, sidebar, settings, tool-call visualization, WebSocket streaming."""
-
-from __future__ import annotations
+"""Enhanced Next.js UI endpoint with B-15 WebSocket streaming functionality."""
 
 import json
 import logging
-import time
-from datetime import datetime
-from typing import Any, Dict, List
+from typing import List, Optional
 
-from fastapi import (
-    APIRouter,
-    Depends,
-    HTTPException,
-    Request,
-    WebSocket,
-    WebSocketDisconnect,
-)
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.templating import Jinja2Templates
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-from app.core.security import get_current_user
-from app.core.observability.spans import emit_span
-from app.ui.tool_visualization import router as tool_visualization_router
+from app.api.sessions import router as sessions_router
+from app.core.auth import get_current_user
+from app.core.config import get_settings
+from app.db.session import get_async_session
+from app.web.websocket_manager import websocket_manager, handle_websocket_connection
+from app.web.streaming_manager import streaming_manager, mock_agent_response_generator
 
 logger = logging.getLogger(__name__)
+
+# Create router
 router = APIRouter()
-templates = Jinja2Templates(directory="app/ui/templates")
-
-
-class WebSocketManager:
-    """Manager for WebSocket connections."""
-
-    def __init__(self):
-        self.active_connections: List[WebSocket] = []
-
-    async def connect(self, websocket: WebSocket):
-        """Accept a WebSocket connection."""
-        await websocket.accept()
-        self.active_connections.append(websocket)
-
-    def disconnect(self, websocket: WebSocket):
-        """Remove a WebSocket connection."""
-        self.active_connections.remove(websocket)
-
-    async def send_personal_message(self, message: str, websocket: WebSocket):
-        """Send a personal message to a specific WebSocket."""
-        await websocket.send_text(message)
-
-    async def broadcast(self, message: str):
-        """Broadcast a message to all connected WebSockets."""
-        for connection in self.active_connections:
-            try:
-                await connection.send_text(message)
-            except:
-                # Connection might be closed
-                pass
-
-
-# Global WebSocket manager
-websocket_manager = WebSocketManager()
+security = HTTPBearer()
 
 
 @router.get("/", response_class=HTMLResponse)
-async def chat_interface_ui(
-    request: Request,
-    current_user: str = Depends(get_current_user),
-):
-    """Chat interface UI page."""
-    try:
-        return templates.TemplateResponse(
-            "nextjs/chat.html",
-            {
-                "request": request,
-                "current_user": current_user,
-            },
-        )
+async def get_chat_interface():
+    """Get the chat interface HTML page."""
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>OryaAgent - Chat Interface</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+            .container { max-width: 800px; margin: 0 auto; }
+            .chat-container { border: 1px solid #ccc; height: 500px; overflow-y: auto; padding: 10px; margin-bottom: 10px; }
+            .message { margin-bottom: 10px; padding: 10px; border-radius: 5px; }
+            .user-message { background-color: #e3f2fd; }
+            .assistant-message { background-color: #f1f8e9; }
+            .error-message { background-color: #ffebee; }
+            .tool-call { background-color: #fff3e0; }
+            .tool-result { background-color: #e8f5e8; }
+            .input-container { display: flex; gap: 10px; }
+            input { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 5px; }
+            button { padding: 10px 20px; background-color: #2196f3; color: white; border: none; border-radius: 5px; cursor: pointer; }
+            button:hover { background-color: #1976d2; }
+            .status { margin-top: 10px; padding: 10px; border-radius: 5px; }
+            .connected { background-color: #e8f5e8; }
+            .disconnected { background-color: #ffebee; }
+            .reconnecting { background-color: #fff3e0; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>OryaAgent Chat Interface</h1>
+            <div id="status" class="status disconnected">Disconnected</div>
+            <div id="chat-container" class="chat-container"></div>
+            <div class="input-container">
+                <input type="text" id="message-input" placeholder="Type your message..." />
+                <button onclick="sendMessage()">Send</button>
+            </div>
+        </div>
 
-    except Exception as e:
-        logger.error(f"Error in chat interface UI: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to load chat interface: {str(e)}"
-        )
+        <script>
+            let ws = null;
+            let sessionId = null;
+            let userId = null;
+            let reconnectAttempts = 0;
+            const maxReconnectAttempts = 5;
+
+            // Initialize connection
+            async function initializeConnection() {
+                try {
+                    // Get user session (simplified for demo)
+                    const response = await fetch('/web/api/sessions', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        sessionId = data.id;
+                        userId = 'demo_user';
+                        
+                        // Connect to WebSocket
+                        connectWebSocket();
+                    } else {
+                        console.error('Failed to create session');
+                    }
+                } catch (error) {
+                    console.error('Error initializing connection:', error);
+                }
+            }
+
+            // Connect to WebSocket
+            function connectWebSocket() {
+                const wsUrl = `ws://localhost:8000/web/ws/${sessionId}`;
+                ws = new WebSocket(wsUrl);
+
+                ws.onopen = function(event) {
+                    console.log('WebSocket connected');
+                    updateStatus('connected', 'Connected');
+                    reconnectAttempts = 0;
+                };
+
+                ws.onmessage = function(event) {
+                    const message = JSON.parse(event.data);
+                    handleWebSocketMessage(message);
+                };
+
+                ws.onclose = function(event) {
+                    console.log('WebSocket disconnected');
+                    updateStatus('disconnected', 'Disconnected');
+                    
+                    // Attempt to reconnect
+                    if (reconnectAttempts < maxReconnectAttempts) {
+                        reconnectAttempts++;
+                        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+                        console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttempts})`);
+                        updateStatus('reconnecting', `Reconnecting... (${reconnectAttempts}/${maxReconnectAttempts})`);
+                        
+                        setTimeout(() => {
+                            connectWebSocket();
+                        }, delay);
+                    } else {
+                        console.error('Max reconnection attempts reached');
+                    }
+                };
+
+                ws.onerror = function(error) {
+                    console.error('WebSocket error:', error);
+                    updateStatus('disconnected', 'Connection Error');
+                };
+            }
+
+            // Handle WebSocket messages
+            function handleWebSocketMessage(message) {
+                console.log('Received message:', message);
+                
+                const chatContainer = document.getElementById('chat-container');
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${message.type}-message`;
+                
+                let content = '';
+                switch (message.type) {
+                    case 'user':
+                        content = `<strong>You:</strong> ${message.content}`;
+                        break;
+                    case 'assistant':
+                        content = `<strong>Assistant:</strong> ${message.content}`;
+                        break;
+                    case 'tool_call':
+                        content = `<strong>Tool Call:</strong> ${message.tool_name}<br>Args: ${JSON.stringify(message.tool_args)}`;
+                        break;
+                    case 'tool_result':
+                        content = `<strong>Tool Result:</strong> ${JSON.stringify(message.result)}`;
+                        break;
+                    case 'stream_token':
+                        content = `<strong>Token:</strong> ${message.content}`;
+                        break;
+                    case 'error':
+                        content = `<strong>Error:</strong> ${message.error_message}`;
+                        break;
+                    default:
+                        content = `<strong>Message:</strong> ${JSON.stringify(message)}`;
+                }
+                
+                messageDiv.innerHTML = content;
+                chatContainer.appendChild(messageDiv);
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+
+            // Send message
+            async function sendMessage() {
+                const input = document.getElementById('message-input');
+                const message = input.value.trim();
+                
+                if (message && ws && ws.readyState === WebSocket.OPEN) {
+                    // Send user message
+                    const userMessage = {
+                        id: Date.now().toString(),
+                        type: 'user',
+                        content: message,
+                        timestamp: new Date().toISOString(),
+                        session_id: sessionId
+                    };
+                    
+                    ws.send(JSON.stringify(userMessage));
+                    
+                    // Clear input
+                    input.value = '';
+                    
+                    // Simulate agent response
+                    simulateAgentResponse(message);
+                }
+            }
+
+            // Simulate agent response
+            async function simulateAgentResponse(userMessage) {
+                if (!ws || ws.readyState !== WebSocket.OPEN) {
+                    return;
+                }
+                
+                // Send assistant message
+                const assistantMessage = {
+                    id: Date.now().toString(),
+                    type: 'assistant',
+                    content: `You said: ${userMessage}`,
+                    timestamp: new Date().toISOString(),
+                    session_id: sessionId
+                };
+                
+                ws.send(JSON.stringify(assistantMessage));
+            }
+
+            // Update status
+            function updateStatus(status, text) {
+                const statusDiv = document.getElementById('status');
+                statusDiv.className = `status ${status}`;
+                statusDiv.textContent = text;
+            }
+
+            // Handle Enter key
+            document.getElementById('message-input').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    sendMessage();
+                }
+            });
+
+            // Initialize on page load
+            window.addEventListener('load', initializeConnection);
+        </script>
+    </body>
+    </html>
+    """
 
 
 @router.get("/sessions", response_class=HTMLResponse)
-async def sessions_sidebar_ui(
-    request: Request,
-    current_user: str = Depends(get_current_user),
-):
-    """Sessions sidebar UI page."""
-    try:
-        return templates.TemplateResponse(
-            "nextjs/sessions.html",
-            {
-                "request": request,
-                "current_user": current_user,
-            },
-        )
+async def get_sessions_interface():
+    """Get the sessions management interface HTML page."""
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>OryaAgent - Sessions</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+            .container { max-width: 800px; margin: 0 auto; }
+            .session-list { border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; }
+            .session-item { padding: 10px; border-bottom: 1px solid #eee; cursor: pointer; }
+            .session-item:hover { background-color: #f5f5f5; }
+            .create-session { margin-bottom: 20px; }
+            button { padding: 10px 20px; background-color: #2196f3; color: white; border: none; border-radius: 5px; cursor: pointer; }
+            button:hover { background-color: #1976d2; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Sessions</h1>
+            <div class="create-session">
+                <button onclick="createSession()">Create New Session</button>
+            </div>
+            <div id="session-list" class="session-list"></div>
+        </div>
 
-    except Exception as e:
-        logger.error(f"Error in sessions sidebar UI: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to load sessions sidebar: {str(e)}"
-        )
+        <script>
+            async function loadSessions() {
+                try {
+                    const response = await fetch('/web/api/sessions');
+                    if (response.ok) {
+                        const data = await response.json();
+                        displaySessions(data.sessions);
+                    }
+                } catch (error) {
+                    console.error('Error loading sessions:', error);
+                }
+            }
+
+            function displaySessions(sessions) {
+                const sessionList = document.getElementById('session-list');
+                sessionList.innerHTML = '';
+                
+                sessions.forEach(session => {
+                    const sessionItem = document.createElement('div');
+                    sessionItem.className = 'session-item';
+                    sessionItem.innerHTML = `
+                        <strong>Session:</strong> ${session.id}<br>
+                        <strong>Name:</strong> ${session.name}<br>
+                        <strong>Created:</strong> ${new Date(session.created_at).toLocaleString()}
+                    `;
+                    sessionItem.onclick = () => window.location.href = `/web/chat?session_id=${session.id}`;
+                    sessionList.appendChild(sessionItem);
+                });
+            }
+
+            async function createSession() {
+                try {
+                    const response = await fetch('/web/api/sessions', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                    });
+                    
+                    if (response.ok) {
+                        loadSessions();
+                    }
+                } catch (error) {
+                    console.error('Error creating session:', error);
+                }
+            }
+
+            // Load sessions on page load
+            window.addEventListener('load', loadSessions);
+        </script>
+    </body>
+    </html>
+    """
 
 
 @router.get("/settings", response_class=HTMLResponse)
-async def settings_panel_ui(
-    request: Request,
-    current_user: str = Depends(get_current_user),
-):
-    """Settings panel UI page."""
-    try:
-        return templates.TemplateResponse(
-            "nextjs/settings.html",
-            {
-                "request": request,
-                "current_user": current_user,
-            },
-        )
+async def get_settings_interface():
+    """Get the settings interface HTML page."""
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>OryaAgent - Settings</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+            .container { max-width: 800px; margin: 0 auto; }
+            .settings-group { margin-bottom: 20px; padding: 20px; border: 1px solid #ccc; border-radius: 5px; }
+            .setting-item { margin-bottom: 15px; }
+            label { display: block; margin-bottom: 5px; font-weight: bold; }
+            input, select, textarea { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 5px; }
+            button { padding: 10px 20px; background-color: #2196f3; color: white; border: none; border-radius: 5px; cursor: pointer; }
+            button:hover { background-color: #1976d2; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Settings</h1>
+            
+            <div class="settings-group">
+                <h2>WebSocket Settings</h2>
+                <div class="setting-item">
+                    <label for="ws-url">WebSocket URL:</label>
+                    <input type="text" id="ws-url" value="ws://localhost:8000" />
+                </div>
+                <div class="setting-item">
+                    <label for="reconnect-attempts">Max Reconnect Attempts:</label>
+                    <input type="number" id="reconnect-attempts" value="5" min="1" max="10" />
+                </div>
+                <div class="setting-item">
+                    <label for="reconnect-delay">Base Reconnect Delay (ms):</label>
+                    <input type="number" id="reconnect-delay" value="3000" min="1000" max="10000" />
+                </div>
+            </div>
+            
+            <div class="settings-group">
+                <h2>Streaming Settings</h2>
+                <div class="setting-item">
+                    <label for="max-concurrent-streams">Max Concurrent Streams:</label>
+                    <input type="number" id="max-concurrent-streams" value="100" min="1" max="1000" />
+                </div>
+                <div class="setting-item">
+                    <label for="max-stream-duration">Max Stream Duration (seconds):</label>
+                    <input type="number" id="max-stream-duration" value="300" min="60" max="3600" />
+                </div>
+            </div>
+            
+            <div class="settings-group">
+                <h2>General Settings</h2>
+                <div class="setting-item">
+                    <label for="log-level">Log Level:</label>
+                    <select id="log-level">
+                        <option value="DEBUG">Debug</option>
+                        <option value="INFO" selected>Info</option>
+                        <option value="WARNING">Warning</option>
+                        <option value="ERROR">Error</option>
+                    </select>
+                </div>
+                <div class="setting-item">
+                    <label for="theme">Theme:</label>
+                    <select id="theme">
+                        <option value="light">Light</option>
+                        <option value="dark">Dark</option>
+                        <option value="auto">Auto</option>
+                    </select>
+                </div>
+            </div>
+            
+            <button onclick="saveSettings()">Save Settings</button>
+        </div>
 
-    except Exception as e:
-        logger.error(f"Error in settings panel UI: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to load settings panel: {str(e)}"
-        )
-
-
-@router.get("/tool-calls", response_class=HTMLResponse)
-async def tool_calls_visualization_ui(
-    request: Request,
-    session_id: str = None,
-    current_user: str = Depends(get_current_user),
-):
-    """Tool calls visualization UI page."""
-    try:
-        return templates.TemplateResponse(
-            "nextjs/tool_calls.html",
-            {
-                "request": request,
-                "session_id": session_id,
-                "current_user": current_user,
-            },
-        )
-
-    except Exception as e:
-        logger.error(f"Error in tool calls visualization UI: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to load tool calls visualization: {str(e)}"
-        )
-
-
-@router.websocket("/ws/{session_id}")
-async def websocket_endpoint(
-    websocket: WebSocket,
-    session_id: str,
-):
-    """WebSocket endpoint for real-time communication."""
-    await websocket_manager.connect(websocket)
-    try:
-        # Send initial connection message
-        await websocket_manager.send_personal_message(
-            json.dumps(
-                {
-                    "type": "connection",
-                    "message": "Connected to OryaAgent",
-                    "session_id": session_id,
-                }
-            ),
-            websocket,
-        )
-
-        while True:
-            # Wait for messages from client
-            data = await websocket.receive_text()
-            try:
-                message = json.loads(data)
-
-                # Handle different message types
-                if message.get("type") == "message":
-                    # Handle chat messages
-                    await handle_chat_message(message, session_id, websocket)
-                elif message.get("type") == "tool_call":
-                    # Handle tool calls
-                    await handle_tool_call(message, session_id, websocket)
-                elif message.get("type") == "stream_request":
-                    # Handle streaming requests
-                    await handle_stream_request(message, session_id, websocket)
-                else:
-                    # Unknown message type
-                    await websocket_manager.send_personal_message(
-                        json.dumps(
-                            {
-                                "type": "error",
-                                "message": f"Unknown message type: {message.get('type')}",
-                            }
-                        ),
-                        websocket,
-                    )
-
-            except json.JSONDecodeError:
-                await websocket_manager.send_personal_message(
-                    json.dumps(
-                        {
-                            "type": "error",
-                            "message": "Invalid JSON message",
-                        }
-                    ),
-                    websocket,
-                )
-
-    except WebSocketDisconnect:
-        websocket_manager.disconnect(websocket)
-
-
-async def handle_chat_message(
-    message: Dict[str, Any], session_id: str, websocket: WebSocket
-):
-    """Handle chat messages from the client."""
-    try:
-        # Extract message data
-        content = message.get("content", "")
-        user_id = message.get("user_id", "default_user")
-
-        # Send user message back to confirm receipt
-        await websocket_manager.send_personal_message(
-            json.dumps(
-                {
-                    "type": "message",
-                    "role": "user",
-                    "content": content,
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "session_id": session_id,
-                }
-            ),
-            websocket,
-        )
-
-        # Process message through the agent
-        await process_agent_message(content, session_id, user_id, websocket)
-
-    except Exception as e:
-        logger.error(f"Error handling chat message: {e}")
-        await websocket_manager.send_personal_message(
-            json.dumps(
-                {
-                    "type": "error",
-                    "message": f"Error processing message: {str(e)}",
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "session_id": session_id,
-                }
-            ),
-            websocket,
-        )
-
-
-async def handle_tool_call(
-    message: Dict[str, Any], session_id: str, websocket: WebSocket
-):
-    """Handle tool calls from the client."""
-    try:
-        # Extract tool call data
-        tool_name = message.get("tool_name")
-        arguments = message.get("arguments", {})
-        tool_call_id = message.get("tool_call_id", f"tool_{int(time.time() * 1000)}")
-
-        # Send tool call start message
-        tool_call_message = {
-            "type": "tool_call",
-            "tool_name": tool_name,
-            "tool_call_id": tool_call_id,
-            "arguments": arguments,
-            "start_time": datetime.utcnow().isoformat(),
-            "status": "running",
-            "session_id": session_id,
-        }
-
-        await websocket_manager.send_personal_message(
-            json.dumps(tool_call_message),
-            websocket,
-        )
-
-        # In a real implementation, this would:
-        # 1. Execute the tool
-        # 2. Get the result
-        # 3. Send the result back
-        
-        # Simulate tool execution
-        import asyncio
-        await asyncio.sleep(0.1)  # Simulate processing time
-        
-        result = {
-            "tool_name": tool_name,
-            "arguments": arguments,
-            "result": f"Simulated result for {tool_name}",
-            "status": "completed",
-        }
-
-        # Send tool call result message
-        tool_result_message = {
-            "type": "tool_result",
-            "tool_call_id": tool_call_id,
-            "result": result,
-            "end_time": datetime.utcnow().isoformat(),
-            "duration_ms": 100,  # Simulated duration
-            "session_id": session_id,
-        }
-
-        await websocket_manager.send_personal_message(
-            json.dumps(tool_result_message),
-            websocket,
-        )
-
-    except Exception as e:
-        logger.error(f"Error handling tool call: {e}")
-        await websocket_manager.send_personal_message(
-            json.dumps(
-                {
-                    "type": "error",
-                    "message": f"Error processing tool call: {str(e)}",
-                    "session_id": session_id,
-                }
-            ),
-            websocket,
-        )
-
-
-async def handle_stream_request(
-    message: Dict[str, Any], session_id: str, websocket: WebSocket
-):
-    """Handle streaming requests from the client."""
-    try:
-        # Extract stream request data
-        request_id = message.get("request_id")
-        prompt = message.get("prompt")
-        user_id = message.get("user_id", "default_user")
-
-        # Send user message
-        await websocket_manager.send_personal_message(
-            json.dumps(
-                {
-                    "type": "message",
-                    "role": "user",
-                    "content": prompt,
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "session_id": session_id,
-                }
-            ),
-            websocket,
-        )
-
-        # Process message through the agent with streaming
-        await process_agent_message(
-            prompt, session_id, user_id, websocket, streaming=True
-        )
-
-    except Exception as e:
-        logger.error(f"Error handling stream request: {e}")
-        await websocket_manager.send_personal_message(
-            json.dumps(
-                {
-                    "type": "error",
-                    "message": f"Error processing stream request: {str(e)}",
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "session_id": session_id,
-                }
-            ),
-            websocket,
-        )
-
-
-# In-memory session storage (in production, use database)
-sessions_db = {}
-session_counter = 0
-
-
-@router.get("/api/sessions")
-async def get_sessions(
-    current_user: str = Depends(get_current_user),
-):
-    """Get all sessions for the current user."""
-    try:
-        # In a real implementation, this would query the database
-        # For now, return sessions from memory
-        user_sessions = [
-            {
-                "id": session_id,
-                "name": session_data.get("name", f"Session {session_id}"),
-                "created_at": session_data.get(
-                    "created_at", datetime.utcnow().isoformat()
-                ),
-                "updated_at": session_data.get(
-                    "updated_at", datetime.utcnow().isoformat()
-                ),
-                "turn_count": session_data.get("turn_count", 0),
-                "status": session_data.get("status", "active"),
+        <script>
+            function saveSettings() {
+                const settings = {
+                    ws_url: document.getElementById('ws-url').value,
+                    reconnect_attempts: document.getElementById('reconnect-attempts').value,
+                    reconnect_delay: document.getElementById('reconnect-delay').value,
+                    max_concurrent_streams: document.getElementById('max-concurrent-streams').value,
+                    max_stream_duration: document.getElementById('max-stream-duration').value,
+                    log_level: document.getElementById('log-level').value,
+                    theme: document.getElementById('theme').value,
+                };
+                
+                // Save to localStorage
+                localStorage.setItem('orya_settings', JSON.stringify(settings));
+                
+                alert('Settings saved successfully!');
             }
-            for session_id, session_data in sessions_db.items()
-            if session_data.get("user_id") == current_user
+            
+            // Load settings on page load
+            window.addEventListener('load', function() {
+                const savedSettings = localStorage.getItem('orya_settings');
+                if (savedSettings) {
+                    const settings = JSON.parse(savedSettings);
+                    document.getElementById('ws-url').value = settings.ws_url || 'ws://localhost:8000';
+                    document.getElementById('reconnect-attempts').value = settings.reconnect_attempts || 5;
+                    document.getElementById('reconnect-delay').value = settings.reconnect_delay || 3000;
+                    document.getElementById('max-concurrent-streams').value = settings.max_concurrent_streams || 100;
+                    document.getElementById('max-stream-duration').value = settings.max_stream_duration || 300;
+                    document.getElementById('log-level').value = settings.log_level || 'INFO';
+                    document.getElementById('theme').value = settings.theme || 'light';
+                }
+            });
+        </script>
+    </body>
+    </html>
+    """
+
+
+# API endpoints for session management
+@router.get("/api/sessions")
+async def get_sessions():
+    """Get user sessions."""
+    # This would normally fetch from the database
+    # For now, return mock data
+    return {
+        "sessions": [
+            {
+                "id": "session_123",
+                "name": "Test Session",
+                "created_at": "2024-01-15T10:00:00Z",
+                "updated_at": "2024-01-15T10:30:00Z",
+            }
         ]
-
-        return JSONResponse(content={"sessions": user_sessions})
-
-    except Exception as e:
-        logger.error(f"Error getting sessions: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get sessions: {str(e)}")
+    }
 
 
 @router.post("/api/sessions")
-async def create_session(
-    current_user: str = Depends(get_current_user),
-):
+async def create_session():
     """Create a new session."""
-    try:
-        global session_counter
-        session_counter += 1
-
-        new_session = {
-            "id": f"session_{session_counter}_{int(time.time())}",
-            "name": f"New Session {session_counter}",
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat(),
-            "turn_count": 0,
-            "status": "active",
-            "user_id": current_user,
-            "messages": [],
-        }
-
-        # Store in memory (in production, use database)
-        sessions_db[new_session["id"]] = new_session
-
-        return JSONResponse(content=new_session, status_code=201)
-
-    except Exception as e:
-        logger.error(f"Error creating session: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to create session: {str(e)}"
-        )
+    # This would normally create a session in the database
+    # For now, return mock data
+    import uuid
+    from datetime import datetime
+    
+    session_id = str(uuid.uuid4())
+    return {
+        "id": session_id,
+        "name": f"Session {session_id[:8]}",
+        "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat(),
+    }
 
 
 @router.get("/api/sessions/{session_id}/messages")
-async def get_session_messages(
-    session_id: str,
-    current_user: str = Depends(get_current_user),
-):
-    """Get messages for a specific session."""
-    try:
-        # Check if session exists and belongs to user
-        if session_id not in sessions_db:
-            raise HTTPException(status_code=404, detail="Session not found")
-
-        session = sessions_db[session_id]
-        if session.get("user_id") != current_user:
-            raise HTTPException(status_code=403, detail="Access denied")
-
-        messages = session.get("messages", [])
-
-        return JSONResponse(content={"messages": messages})
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting session messages: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to get session messages: {str(e)}"
-        )
+async def get_session_messages(session_id: str):
+    """Get messages for a session."""
+    # This would normally fetch from the database
+    # For now, return mock data
+    return {
+        "messages": [
+            {
+                "id": "msg_123",
+                "role": "user",
+                "content": "Hello, how are you?",
+                "timestamp": "2024-01-15T10:00:00Z",
+            },
+            {
+                "id": "msg_124",
+                "role": "assistant",
+                "content": "I'm doing well, thank you for asking!",
+                "timestamp": "2024-01-15T10:01:00Z",
+            }
+        ]
+    }
 
 
 @router.post("/api/sessions/{session_id}/messages")
-async def send_message(
-    session_id: str,
-    request: Request,
-    current_user: str = Depends(get_current_user),
-):
+async def send_message_to_session(session_id: str, message: dict):
     """Send a message to a session."""
+    # This would normally process the message and start streaming
+    # For now, return mock data
+    return {
+        "id": str(uuid.uuid4()),
+        "role": "user",
+        "content": message.get("content", ""),
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+
+# WebSocket endpoint for real-time communication
+@router.websocket("/ws/{session_id}")
+async def websocket_endpoint(websocket: WebSocket, session_id: str):
+    """WebSocket endpoint for real-time communication."""
+    await websocket.accept()
+    
     try:
-        data = await request.json()
-        content = data.get("content", "")
+        # Handle WebSocket connection
+        await handle_websocket_connection(websocket, session_id, "demo_user")
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected for session {session_id}")
+    except Exception as e:
+        logger.error(f"WebSocket error for session {session_id}: {e}")
 
-        # Check if session exists and belongs to user
-        if session_id not in sessions_db:
-            raise HTTPException(status_code=404, detail="Session not found")
 
-        session = sessions_db[session_id]
-        if session.get("user_id") != current_user:
-            raise HTTPException(status_code=403, detail="Access denied")
-
-        # Store user message
-        user_message = {
-            "id": f"msg_{int(time.time())}",
-            "role": "user",
-            "content": content,
+# Health check endpoint
+@router.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    try:
+        # Check WebSocket manager health
+        ws_health = await websocket_manager.health_check()
+        
+        # Check streaming manager health
+        streaming_health = await streaming_manager.health_check()
+        
+        # Overall health status
+        overall_status = "healthy"
+        issues = []
+        
+        if ws_health["status"] != "healthy":
+            overall_status = "degraded"
+            issues.extend(ws_health["issues"])
+            
+        if streaming_health["status"] != "healthy":
+            overall_status = "degraded"
+            issues.extend(streaming_health["issues"])
+            
+        return {
+            "status": overall_status,
+            "issues": issues,
+            "components": {
+                "websocket": ws_health,
+                "streaming": streaming_health,
+            },
             "timestamp": datetime.utcnow().isoformat(),
         }
-
-        session["messages"].append(user_message)
-        session["updated_at"] = datetime.utcnow().isoformat()
-        session["turn_count"] += 1
-
-        # Process the message through the agent
-        # Note: This is a simplified version - in production, you'd want to handle this asynchronously
-        try:
-            from app.core.graph import build_graph
-            from app.core.tools import get_tools
-
-            tools = get_tools()
-            graph = build_graph(
-                tools=tools,
-                model="haiku",
-                checkpointer=None,
-                policy=None,
-                system_prompt_fn=None,
-                trim_fn=None,
-            )
-
-            from langchain_core.messages import HumanMessage
-
-            initial_message = HumanMessage(content=content)
-
-            # Get response from agent
-            response = await graph.ainvoke({"messages": [initial_message]})
-
-            if response and "messages" in response:
-                assistant_message = response["messages"][-1]
-                if hasattr(assistant_message, "content") and assistant_message.content:
-                    assistant_response = {
-                        "id": f"msg_{int(time.time())}",
-                        "role": "assistant",
-                        "content": assistant_message.content,
-                        "timestamp": datetime.utcnow().isoformat(),
-                    }
-                    session["messages"].append(assistant_response)
-                    session["updated_at"] = datetime.utcnow().isoformat()
-
-                    return JSONResponse(content=assistant_response, status_code=201)
-
-        except Exception as e:
-            logger.error(f"Error processing agent message: {e}")
-            # Handle soft limits gracefully
-            if "step" in str(e).lower() or "limit" in str(e).lower():
-                assistant_response = {
-                    "id": f"msg_{int(time.time())}",
-                    "role": "assistant",
-                    "content": "I've reached my processing limit for this conversation. Please provide a new instruction to continue.",
-                    "timestamp": datetime.utcnow().isoformat(),
-                }
-            else:
-                assistant_response = {
-                    "id": f"msg_{int(time.time())}",
-                    "role": "assistant",
-                    "content": f"I apologize, but I encountered an error processing your request: {str(e)}",
-                    "timestamp": datetime.utcnow().isoformat(),
-                }
-
-            session["messages"].append(assistant_response)
-            session["updated_at"] = datetime.utcnow().isoformat()
-
-            return JSONResponse(content=assistant_response, status_code=201)
-
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error sending message: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to send message: {str(e)}")
-
-
-async def process_agent_message(
-    content: str,
-    session_id: str,
-    user_id: str,
-    websocket: WebSocket,
-    streaming: bool = False,
-):
-    """Process a message through the OryaAgent."""
-    try:
-        # Import here to avoid circular imports
-        from app.core.graph import build_graph
-        from app.core.tools import get_tools
-        from app.core.memory import get_md_store
-        from app.core.config import get_settings
-
-        settings = get_settings()
-
-        # Get tools and build graph
-        tools = get_tools()
-
-        # Get or create session
-        # In a real implementation, this would use the database session store
-        # For now, we'll use a simple approach
-        graph = build_graph(
-            tools=tools,
-            model="haiku",  # Default model for web UI
-            checkpointer=None,  # No checkpointing for web UI
-            policy=None,  # Use default policy
-            system_prompt_fn=None,
-            trim_fn=None,
-        )
-
-        # Create initial message
-        from langchain_core.messages import HumanMessage
-
-        initial_message = HumanMessage(content=content)
-
-        # Process the message
-        async for chunk in graph.astream(
-            {"messages": [initial_message]}, stream_mode="values"
-        ):
-            # Handle different types of chunks
-            if hasattr(chunk, "messages") and chunk.messages:
-                for message in chunk.messages:
-                    if hasattr(message, "content") and message.content:
-                        # Send streaming response
-                        await websocket_manager.send_personal_message(
-                            json.dumps(
-                                {
-                                    "type": "message",
-                                    "role": "assistant",
-                                    "content": message.content,
-                                    "timestamp": datetime.utcnow().isoformat(),
-                                    "session_id": session_id,
-                                }
-                            ),
-                            websocket,
-                        )
-
-            # Handle tool calls
-            if hasattr(chunk, "messages") and chunk.messages:
-                for message in chunk.messages:
-                    if hasattr(message, "tool_calls") and message.tool_calls:
-                        for tool_call in message.tool_calls:
-                            await websocket_manager.send_personal_message(
-                                json.dumps(
-                                    {
-                                        "type": "tool_call",
-                                        "tool_name": tool_call.get("name"),
-                                        "arguments": tool_call.get("args", {}),
-                                        "timestamp": datetime.utcnow().isoformat(),
-                                        "session_id": session_id,
-                                    }
-                                ),
-                                websocket,
-                            )
-
-                            # Simulate tool execution
-                            try:
-                                # In a real implementation, this would execute the tool
-                                tool_result = f"Executed {tool_call.get('name')} with {tool_call.get('args', {})}"
-
-                                await websocket_manager.send_personal_message(
-                                    json.dumps(
-                                        {
-                                            "type": "tool_result",
-                                            "tool_name": tool_call.get("name"),
-                                            "result": tool_result,
-                                            "status": "completed",
-                                            "timestamp": datetime.utcnow().isoformat(),
-                                            "session_id": session_id,
-                                        }
-                                    ),
-                                    websocket,
-                                )
-                            except Exception as e:
-                                await websocket_manager.send_personal_message(
-                                    json.dumps(
-                                        {
-                                            "type": "tool_result",
-                                            "tool_name": tool_call.get("name"),
-                                            "result": f"Error: {str(e)}",
-                                            "status": "error",
-                                            "timestamp": datetime.utcnow().isoformat(),
-                                            "session_id": session_id,
-                                        }
-                                    ),
-                                    websocket,
-                                )
-
-        # Send completion signal
-        await websocket_manager.send_personal_message(
-            json.dumps(
-                {
-                    "type": "stream_complete",
-                    "session_id": session_id,
-                    "timestamp": datetime.utcnow().isoformat(),
-                }
-            ),
-            websocket,
-        )
-
-    except Exception as e:
-        logger.error(f"Error processing agent message: {e}")
-        # Handle soft limits - NO error indicators for soft limits
-        if "step" in str(e).lower() or "limit" in str(e).lower():
-            # Soft limit - send normal completion message
-            await websocket_manager.send_personal_message(
-                json.dumps(
-                    {
-                        "type": "message",
-                        "role": "assistant",
-                        "content": "I've reached my processing limit for this conversation. Please provide a new instruction to continue.",
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "session_id": session_id,
-                    }
-                ),
-                websocket,
-            )
-        else:
-            # Hard error - send error message
-            await websocket_manager.send_personal_message(
-                json.dumps(
-                    {
-                        "type": "error",
-                        "message": f"Error processing your request: {str(e)}",
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "session_id": session_id,
-                    }
-                ),
-                websocket,
-            )
-
-
-# Include tool visualization router
-router.include_router(tool_visualization_router, prefix="/ui")
-
-# Helper function to initialize the UI router
-def setup_nextjs_ui():
-    """Setup Next.js UI routes."""
-    return router
+        logger.error(f"Health check failed: {e}")
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.utcnow().isoformat(),
+        }

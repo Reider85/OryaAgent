@@ -1,194 +1,184 @@
-'use client'
+"""WebSocket provider for Next.js Web UI B-15 streaming."""
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { WebSocketMessage, MessageType } from '../types/websocket';
 
-export interface Message {
-  id: string
-  type: 'user' | 'assistant' | 'error' | 'tool_call' | 'tool_result' | 'stream_token' | 'connection'
-  content: string
-  timestamp: string
-  role?: 'user' | 'assistant' | 'system'
-  session_id?: string
-  tool_name?: string
-  tool_args?: any
-  tool_result?: any
-  request_id?: string
-  position?: number
-  total_tokens?: number
+interface WebSocketProviderProps {
+  children: React.ReactNode;
+  session_id: string;
+  onConnectionChange?: (isConnected: boolean) => void;
+  onMessage?: (message: WebSocketMessage) => void;
 }
 
-export interface WebSocketManager {
-  connect: (sessionId: string) => Promise<void>
-  disconnect: () => void
-  sendMessage: (message: any) => Promise<void>
-  onMessage: (callback: (message: Message) => void) => void
-  onConnectionStatus: (callback: (connected: boolean) => void) => void
+interface WebSocketManager {
+  connect: (session_id: string) => Promise<void>;
+  disconnect: () => void;
+  send: (message: any) => void;
+  isConnected: boolean;
+  connectionId: string | null;
 }
 
-export function createWebSocketManager(): WebSocketManager {
-  let ws: WebSocket | null = null
-  let messageCallback: ((message: Message) => void) | null = null
-  let connectionStatusCallback: ((connected: boolean) => void) | null = null
-  let reconnectTimeout: NodeJS.Timeout | null = null
-  let isConnected = false
-
-  const connect = async (sessionId: string): Promise<void> => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      return
-    }
-
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const url = `${protocol}//${window.location.host}/ws/${sessionId}`
-    
-    ws = new WebSocket(url)
-
-    ws.onopen = () => {
-      isConnected = true
-      connectionStatusCallback?.(true)
-      console.log('WebSocket connected')
-    }
-
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        const message: Message = {
-          id: data.message_id || `msg-${Date.now()}`,
-          type: data.type,
-          content: data.content || data.message || '',
-          timestamp: new Date().toISOString(),
-          role: data.role,
-          session_id: data.session_id,
-          tool_name: data.tool_name,
-          tool_args: data.arguments,
-          tool_result: data.result,
-          request_id: data.request_id,
-          position: data.position,
-          total_tokens: data.total_tokens,
-        }
-        messageCallback?.(message)
-      } catch (error) {
-        console.error('Error parsing WebSocket message:', error)
-      }
-    }
-
-    ws.onclose = () => {
-      isConnected = false
-      connectionStatusCallback?.(false)
-      console.log('WebSocket disconnected')
-      
-      // Attempt to reconnect after 3 seconds
-      if (reconnectTimeout) {
-        clearTimeout(reconnectTimeout)
-      }
-      reconnectTimeout = setTimeout(() => {
-        connect(sessionId)
-      }, 3000)
-    }
-
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error)
-      connectionStatusCallback?.(false)
-    }
-  }
-
-  const disconnect = () => {
-    if (reconnectTimeout) {
-      clearTimeout(reconnectTimeout)
-      reconnectTimeout = null
-    }
-    
-    if (ws) {
-      ws.close()
-      ws = null
-    }
-    isConnected = false
-    connectionStatusCallback?.(false)
-  }
-
-  const sendMessage = async (message: any): Promise<void> => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      throw new Error('WebSocket not connected')
-    }
-
-    ws.send(JSON.stringify(message))
-  }
-
-  const onMessage = (callback: (message: Message) => void) => {
-    messageCallback = callback
-  }
-
-  const onConnectionStatus = (callback: (connected: boolean) => void) => {
-    connectionStatusCallback = callback
-  }
-
-  return {
-    connect,
-    disconnect,
-    sendMessage,
-    onMessage,
-    onConnectionStatus,
-  }
-}
-
-// Hook for using WebSocket
-export function useWebSocket(sessionId: string) {
-  const [messages, setMessages] = useState<Message[]>([])
-  const [isConnected, setIsConnected] = useState(false)
-  const [isLoading, setIsLoading] = useState(false)
+export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({
+  children,
+  session_id,
+  onConnectionChange,
+  onMessage,
+}) => {
+  const [isConnected, setIsConnected] = useState(false);
+  const [connectionId, setConnectionId] = useState<string | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const reconnectAttempts = useRef(0);
+  const reconnectTimeout = useRef<NodeJS.Timeout | null>(null);
   
-  const websocketManager = useRef<WebSocketManager | null>(null)
+  const wsRef = useRef<WebSocket | null>(null);
 
+  // Create WebSocket manager
+  const wsManager: WebSocketManager = {
+    connect: useCallback(async (session_id: string) => {
+      try {
+        const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000'}/ws/${session_id}`;
+        
+        wsRef.current = new WebSocket(wsUrl);
+        
+        wsRef.current.onopen = () => {
+          console.log('WebSocket connected');
+          setIsConnected(true);
+          setConnectionError(null);
+          reconnectAttempts.current = 0;
+          onConnectionChange?.(true);
+        };
+        
+        wsRef.current.onmessage = (event) => {
+          try {
+            const message = JSON.parse(event.data);
+            
+            // Handle different message types
+            switch (message.type) {
+              case MessageType.CONNECTION:
+                setConnectionId(message.connection_id);
+                break;
+              case MessageType.ERROR:
+                setConnectionError(message.content);
+                break;
+            }
+            
+            onMessage?.(message);
+          } catch (error) {
+            console.error('Error parsing WebSocket message:', error);
+          }
+        };
+        
+        wsRef.current.onclose = (event) => {
+          console.log('WebSocket disconnected:', event.code, event.reason);
+          setIsConnected(false);
+          setConnectionId(null);
+          onConnectionChange?.(false);
+          
+          // Attempt reconnection
+          if (event.code !== 1000) { // 1000 = normal closure
+            handleReconnect();
+          }
+        };
+        
+        wsRef.current.onerror = (error) => {
+          console.error('WebSocket error:', error);
+          setConnectionError('WebSocket connection error');
+          setIsConnected(false);
+          onConnectionChange?.(false);
+        };
+        
+      } catch (error) {
+        console.error('Failed to connect to WebSocket:', error);
+        setConnectionError('Failed to establish connection');
+        setIsConnected(false);
+        onConnectionChange?.(false);
+      }
+    }, [onConnectionChange, onMessage]),
+    
+    disconnect: useCallback(() => {
+      if (reconnectTimeout.current) {
+        clearTimeout(reconnectTimeout.current);
+        reconnectTimeout.current = null;
+      }
+      
+      if (wsRef.current) {
+        wsRef.current.close(1000, 'Client disconnect');
+        wsRef.current = null;
+      }
+      
+      setIsConnected(false);
+      setConnectionId(null);
+      onConnectionChange?.(false);
+    }, [onConnectionChange]),
+    
+    send: useCallback((message: any) => {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify(message));
+      } else {
+        console.warn('WebSocket not connected, cannot send message');
+      }
+    }, []),
+    
+    isConnected: isConnected,
+    connectionId: connectionId,
+  };
+
+  // Handle reconnection with exponential backoff
+  const handleReconnect = useCallback(() => {
+    if (reconnectAttempts.current >= 5) {
+      console.log('Max reconnection attempts reached');
+      setConnectionError('Connection failed after multiple attempts');
+      return;
+    }
+    
+    const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000);
+    reconnectAttempts.current++;
+    
+    console.log(`Attempting to reconnect in ${delay}ms (attempt ${reconnectAttempts.current})`);
+    
+    reconnectTimeout.current = setTimeout(() => {
+      wsManager.connect(session_id);
+    }, delay);
+  }, [session_id, wsManager]);
+
+  // Connect on mount and session_id change
   useEffect(() => {
-    if (!websocketManager.current) {
-      websocketManager.current = createWebSocketManager()
-    }
-
-    const ws = websocketManager.current
-
-    ws.connect(sessionId)
+    wsManager.connect(session_id);
     
-    ws.onMessage((message) => {
-      setMessages(prev => [...prev, message])
-    })
-
-    ws.onConnectionStatus((connected) => {
-      setIsConnected(connected)
-    })
-
     return () => {
-      ws.disconnect()
+      wsManager.disconnect();
+    };
+  }, [session_id, wsManager]);
+
+  // Auto-reconnect if connection is lost
+  useEffect(() => {
+    if (!isConnected && reconnectAttempts.current < 5) {
+      handleReconnect();
     }
-  }, [sessionId])
+  }, [isConnected, handleReconnect]);
 
-  const sendMessage = async (content: string) => {
-    if (!websocketManager.current || !isConnected) return
+  return (
+    <WebSocketContext.Provider value={wsManager}>
+      {children}
+    </WebSocketContext.Provider>
+  );
+};
 
-    setIsLoading(true)
-    
-    try {
-      await websocketManager.current.sendMessage({
-        type: 'message',
-        content,
-        session_id: sessionId
-      })
-    } catch (error) {
-      console.error('Error sending message:', error)
-      setMessages(prev => [...prev, {
-        id: `msg-error-${Date.now()}`,
-        type: 'error',
-        content: 'Failed to send message. Please try again.',
-        timestamp: new Date().toISOString(),
-        role: 'system'
-      }])
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  return {
-    messages,
-    isConnected,
-    isLoading,
-    sendMessage,
-  }
+// Create context
+interface WebSocketContextType extends WebSocketManager {
+  isConnected: boolean;
+  connectionId: string | null;
+  connectionError: string | null;
 }
+
+const WebSocketContext = React.createContext<WebSocketContextType | null>(null);
+
+export const useWebSocket = (): WebSocketContextType => {
+  const context = React.useContext(WebSocketContext);
+  if (!context) {
+    throw new Error('useWebSocket must be used within a WebSocketProvider');
+  }
+  return context;
+};
+
+export default WebSocketProvider;
