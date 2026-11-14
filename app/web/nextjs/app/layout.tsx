@@ -1,12 +1,14 @@
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
+import { Navigation } from '@/components/Navigation';
 import './globals.css';
+import './skills.css';
 
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'OryaAgent B-15 WebSocket Streaming',
-  description: 'Real-time chat interface with WebSocket streaming support',
+  title: 'OryaAgent B-19 Skills UI',
+  description: 'Skills management interface for OryaAgent',
 };
 
 export default function RootLayout({
@@ -16,7 +18,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={inter.className}>{children}</body>
+      <body className={inter.className}>
+        <Navigation />
+        {children}
+      </body>
     </html>
   );
 }

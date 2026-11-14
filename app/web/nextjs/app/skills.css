@@ -1,0 +1,181 @@
+/* Skill specific styles */
+.skill-card {
+  @apply border rounded-lg p-4 transition-all duration-200 hover:shadow-md hover:border-blue-300;
+}
+
+.skill-card:hover {
+  transform: translateY(-2px);
+}
+
+.skill-badge {
+  @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium transition-all duration-200;
+}
+
+.skill-badge:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.skill-category {
+  @apply skill-badge bg-blue-100 text-blue-800;
+}
+
+.skill-tag {
+  @apply skill-badge bg-gray-100 text-gray-700;
+}
+
+.skill-dependency {
+  @apply skill-badge bg-yellow-100 text-yellow-800;
+}
+
+.skill-button {
+  @apply px-4 py-2 rounded text-sm font-medium transition-colors duration-200;
+}
+
+.skill-button-active {
+  @apply skill-button bg-red-100 text-red-700 hover:bg-red-200;
+}
+
+.skill-button-inactive {
+  @apply skill-button bg-green-100 text-green-700 hover:bg-green-200;
+}
+
+.skill-button:disabled {
+  @apply opacity-50 cursor-not-allowed;
+}
+
+/* Search and filter animations */
+.search-container {
+  @apply transition-all duration-300 ease-in-out;
+}
+
+.search-container:focus-within {
+  @apply shadow-lg;
+}
+
+.filter-tag {
+  @apply inline-flex items-center px-3 py-1 rounded-full text-sm cursor-pointer transition-all duration-200;
+}
+
+.filter-tag.active {
+  @apply bg-blue-600 text-white;
+}
+
+.filter-tag.inactive {
+  @apply bg-gray-200 text-gray-700 hover:bg-gray-300;
+}
+
+/* Loading states */
+.skill-loading {
+  @apply animate-pulse;
+}
+
+.skill-loading > div {
+  @apply bg-gray-200 rounded;
+}
+
+/* Responsive adjustments */
+@media (max-width: 640px) {
+  .skill-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .skill-stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 641px) and (max-width: 1024px) {
+  .skill-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  
+  .skill-stats-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+@media (min-width: 1025px) {
+  .skill-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  
+  .skill-stats-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* Tool and hook lists */
+.tool-item, .hook-item {
+  @apply flex items-center gap-2 p-2 bg-gray-50 rounded border border-gray-200;
+}
+
+.tool-name, .hook-name {
+  @apply text-sm font-mono text-blue-600;
+}
+
+/* Toast animations */
+.toast-enter {
+  animation: toastSlideIn 0.3s ease-out;
+}
+
+.toast-exit {
+  animation: toastSlideOut 0.3s ease-in;
+}
+
+@keyframes toastSlideIn {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes toastSlideOut {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+}
+
+/* Skill detail page animations */
+.skill-detail-enter {
+  animation: skillDetailFadeIn 0.4s ease-out;
+}
+
+@keyframes skillDetailFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Scrollbar styling */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #a1a1a1;
+}
