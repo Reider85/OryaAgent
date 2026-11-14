@@ -1,0 +1,382 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }} - OryaAgent{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <!-- Header -->
+    <div class="mb-8">
+        <h1 class="text-3xl font-bold text-gray-900 mb-2">{{ title }}</h1>
+        <p class="text-gray-600">{{ description }}</p>
+    </div>
+
+    <!-- Time Range Selector -->
+    <div class="bg-white rounded-lg shadow p-6 mb-8">
+        <h2 class="text-xl font-semibold text-gray-900 mb-4">Time Range</h2>
+        <div class="flex flex-wrap gap-4">
+            <button onclick="setTimeRange(1)" class="time-range-btn px-4 py-2 rounded-md border border-gray-300 hover:bg-gray-50" data-range="1">
+                Last 1 hour
+            </button>
+            <button onclick="setTimeRange(6)" class="time-range-btn px-4 py-2 rounded-md border border-gray-300 hover:bg-gray-50" data-range="6">
+                Last 6 hours
+            </button>
+            <button onclick="setTimeRange(24)" class="time-range-btn px-4 py-2 rounded-md border border-gray-300 hover:bg-gray-50 bg-blue-100 border-blue-300" data-range="24">
+                Last 24 hours
+            </button>
+            <button onclick="setTimeRange(72)" class="time-range-btn px-4 py-2 rounded-md border border-gray-300 hover:bg-gray-50" data-range="72">
+                Last 3 days
+            </button>
+            <button onclick="setTimeRange(168)" class="time-range-btn px-4 py-2 rounded-md border border-gray-300 hover:bg-gray-50" data-range="168">
+                Last 7 days
+            </button>
+            <button onclick="setCustomTimeRange()" class="px-4 py-2 rounded-md border border-gray-300 hover:bg-gray-50">
+                Custom Range
+            </button>
+        </div>
+    </div>
+
+    <!-- Overall Statistics -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+        <div class="bg-white rounded-lg shadow p-6">
+            <div class="flex items-center">
+                <div class="p-2 bg-blue-100 rounded-lg">
+                    <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                    </svg>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm font-medium text-gray-600">Total Executions</p>
+                    <p class="text-2xl font-bold text-gray-900" id="total-executions">-</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-lg shadow p-6">
+            <div class="flex items-center">
+                <div class="p-2 bg-green-100 rounded-lg">
+                    <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm font-medium text-gray-600">Success Rate</p>
+                    <p class="text-2xl font-bold text-green-600" id="success-rate">-</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-lg shadow p-6">
+            <div class="flex items-center">
+                <div class="p-2 bg-yellow-100 rounded-lg">
+                    <svg class="w-6 h-6 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm font-medium text-gray-600">Avg Duration</p>
+                    <p class="text-2xl font-bold text-gray-900" id="avg-duration">-</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-lg shadow p-6">
+            <div class="flex items-center">
+                <div class="p-2 bg-purple-100 rounded-lg">
+                    <svg class="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>
+                    </svg>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm font-medium text-gray-600">Active Hooks</p>
+                    <p class="text-2xl font-bold text-gray-900" id="active-hooks">-</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Charts Section -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+        <!-- Executions Over Time Chart -->
+        <div class="bg-white rounded-lg shadow p-6">
+            <h3 class="text-lg font-semibold text-gray-900 mb-4">Executions Over Time</h3>
+            <div id="executions-chart" class="h-64">
+                <canvas id="executionsChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Success Rate by Tool Chart -->
+        <div class="bg-white rounded-lg shadow p-6">
+            <h3 class="text-lg font-semibold text-gray-900 mb-4">Success Rate by Tool</h3>
+            <div id="success-rate-chart" class="h-64">
+                <canvas id="successRateChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Detailed Breakdowns -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <!-- Tool Breakdown -->
+        <div class="bg-white rounded-lg shadow p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-semibold text-gray-900">Tool Breakdown</h3>
+                <button onclick="exportToolBreakdown()" class="text-blue-600 hover:text-blue-800 text-sm">
+                    Export CSV
+                </button>
+            </div>
+            <div id="tool-breakdown" class="space-y-3">
+                <div class="text-center text-gray-500 py-8">
+                    <svg class="w-12 h-12 mx-auto mb-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+                    </svg>
+                    <p>Loading tool breakdown...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Hook Type Breakdown -->
+        <div class="bg-white rounded-lg shadow p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-semibold text-gray-900">Hook Type Breakdown</h3>
+                <button onclick="exportHookTypeBreakdown()" class="text-blue-600 hover:text-blue-800 text-sm">
+                    Export CSV
+                </button>
+            </div>
+            <div id="hook-type-breakdown" class="space-y-3">
+                <div class="text-center text-gray-500 py-8">
+                    <svg class="w-12 h-12 mx-auto mb-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+                    </svg>
+                    <p>Loading hook type breakdown...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+let currentTimeRange = 24;
+let executionsChart = null;
+let successRateChart = null;
+
+// Set time range
+function setTimeRange(hours) {
+    currentTimeRange = hours;
+    
+    // Update button styles
+    document.querySelectorAll('.time-range-btn').forEach(btn => {
+        btn.classList.remove('bg-blue-100', 'border-blue-300');
+        btn.classList.add('border-gray-300');
+    });
+    
+    const activeBtn = document.querySelector(`[data-range="${hours}"]`);
+    if (activeBtn) {
+        activeBtn.classList.add('bg-blue-100', 'border-blue-300');
+        activeBtn.classList.remove('border-gray-300');
+    }
+    
+    loadStatistics();
+}
+
+// Set custom time range (placeholder)
+function setCustomTimeRange() {
+    alert('Custom time range selection would be implemented here');
+}
+
+// Load statistics
+async function loadStatistics() {
+    try {
+        const response = await fetch(`/api/hooks/statistics?hours=${currentTimeRange}`);
+        const data = await response.json();
+        
+        // Update overall statistics
+        document.getElementById('total-executions').textContent = data.total_executions;
+        document.getElementById('success-rate').textContent = data.success_rate.toFixed(1) + '%';
+        document.getElementById('avg-duration').textContent = data.average_duration_ms ? data.average_duration_ms.toFixed(0) + 'ms' : '-';
+        document.getElementById('active-hooks').textContent = data.by_hook ? Object.keys(data.by_hook).length : '-';
+        
+        // Update charts
+        updateExecutionsChart(data);
+        updateSuccessRateChart(data);
+        
+        // Update breakdowns
+        updateToolBreakdown(data.by_tool);
+        updateHookTypeBreakdown(data.by_type);
+        
+    } catch (error) {
+        console.error('Failed to load statistics:', error);
+    }
+}
+
+// Update executions over time chart
+function updateExecutionsChart(data) {
+    const ctx = document.getElementById('executionsChart').getContext('2d');
+    
+    // Generate time series data (placeholder - in real implementation this would come from API)
+    const labels = [];
+    const values = [];
+    const now = new Date();
+    
+    for (let i = 23; i >= 0; i--) {
+        const time = new Date(now.getTime() - i * 60 * 60 * 1000);
+        labels.push(time.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }));
+        values.push(Math.floor(Math.random() * 50) + 10); // Placeholder data
+    }
+    
+    if (executionsChart) {
+        executionsChart.destroy();
+    }
+    
+    executionsChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Executions',
+                data: values,
+                borderColor: 'rgb(59, 130, 246)',
+                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                tension: 0.1
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: false
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true
+                }
+            }
+        }
+    });
+}
+
+// Update success rate chart
+function updateSuccessRateChart(data) {
+    const ctx = document.getElementById('successRateChart').getContext('2d');
+    
+    // Generate tool success data (placeholder)
+    const labels = data.by_tool ? data.by_tool.map(tool => tool.tool_name) : [];
+    const successRates = data.by_tool ? data.by_tool.map(tool => tool.success_rate) : [];
+    
+    if (successRateChart) {
+        successRateChart.destroy();
+    }
+    
+    successRateChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Success Rate (%)',
+                data: successRates,
+                backgroundColor: successRates.map(rate => 
+                    rate > 80 ? 'rgba(34, 197, 94, 0.8)' : 
+                    rate > 60 ? 'rgba(234, 179, 8, 0.8)' : 
+                    'rgba(239, 68, 68, 0.8)'
+                )
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: false
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    max: 100
+                }
+            }
+        }
+    });
+}
+
+// Update tool breakdown
+function updateToolBreakdown(toolData) {
+    const container = document.getElementById('tool-breakdown');
+    
+    if (!toolData || toolData.length === 0) {
+        container.innerHTML = `
+            <div class="text-center text-gray-500 py-8">
+                <p>No tool data available</p>
+            </div>
+        `;
+        return;
+    }
+    
+    container.innerHTML = toolData.map(tool => `
+        <div class="flex justify-between items-center p-3 bg-gray-50 rounded-md">
+            <div>
+                <span class="font-medium">${tool.tool_name}</span>
+                <span class="text-sm text-gray-600 ml-2">(${tool.count} executions)</span>
+            </div>
+            <div class="flex items-center space-x-4">
+                <span class="text-sm ${tool.success_rate > 80 ? 'text-green-600' : tool.success_rate > 60 ? 'text-yellow-600' : 'text-red-600'}">
+                    ${tool.success_rate.toFixed(1)}% success
+                </span>
+                <span class="text-sm text-gray-600">
+                    ${tool.avg_duration_ms ? tool.avg_duration_ms.toFixed(0) + 'ms' : '-'} avg
+                </span>
+            </div>
+        </div>
+    `).join('');
+}
+
+// Update hook type breakdown
+function updateHookTypeBreakdown(typeData) {
+    const container = document.getElementById('hook-type-breakdown');
+    
+    if (!typeData || Object.keys(typeData).length === 0) {
+        container.innerHTML = `
+            <div class="text-center text-gray-500 py-8">
+                <p>No hook type data available</p>
+            </div>
+        `;
+        return;
+    }
+    
+    container.innerHTML = Object.entries(typeData).map(([type, count]) => `
+        <div class="flex justify-between items-center p-3 bg-gray-50 rounded-md">
+            <div>
+                <span class="font-medium">${type} hooks</span>
+                <span class="text-sm text-gray-600 ml-2">(${count} executions)</span>
+            </div>
+            <div class="flex items-center space-x-4">
+                <span class="text-sm text-blue-600">
+                    ${count > 50 ? 'High' : count > 20 ? 'Medium' : 'Low'} usage
+                </span>
+                <span class="text-sm text-gray-600">
+                    ${type === 'pre' ? 'Before tools' : 'After tools'}
+                </span>
+            </div>
+        </div>
+    `).join('');
+}
+
+// Export functions (placeholders)
+function exportToolBreakdown() {
+    alert('Tool breakdown export would be implemented here');
+}
+
+function exportHookTypeBreakdown() {
+    alert('Hook type breakdown export would be implemented here');
+}
+
+// Initialize page
+document.addEventListener('DOMContentLoaded', function() {
+    loadStatistics();
+    
+    // Auto-refresh every 30 seconds
+    setInterval(loadStatistics, 30000);
+});
+</script>
+{% endblock %}

@@ -5,11 +5,12 @@ Provides endpoints for viewing executed hooks and hook execution history.
 
 from __future__ import annotations
 
+import csv
 from datetime import timedelta
 from typing import Any, Optional
 
 from fastapi import APIRouter, Query, Depends
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.core.config import get_settings
 from app.core.hooks import get_hook_registry
@@ -84,3 +85,72 @@ async def get_hook_statistics_endpoint(
     Returns statistics about hook execution over the specified time period.
     """
     return get_hook_statistics(hours=hours)
+
+
+@router.get("/csv")
+async def get_hook_executions_csv(
+    session_id: Optional[str] = Query(None, description="Filter by session ID"),
+    tool_name: Optional[str] = Query(None, description="Filter by tool name"),
+    hook_name: Optional[str] = Query(None, description="Filter by hook name"),
+    hook_type: Optional[str] = Query(
+        None, regex="^(pre|post)$", description="Filter by hook type"
+    ),
+    success: Optional[bool] = Query(None, description="Filter by success status"),
+    hours: int = Query(24, ge=1, le=168, description="Filter by hours (default: 24)"),
+    current_user=Depends(get_current_user),
+) -> StreamingResponse:
+    """Export hook executions as CSV (B-20).
+
+    Returns a CSV file with hook execution data for the specified criteria.
+    """
+    # Get the data
+    result = get_hook_executions(
+        session_id=session_id,
+        tool_name=tool_name,
+        hook_name=hook_name,
+        hook_type=hook_type,
+        success=success,
+        hours=hours,
+        limit=10000,  # Large limit for export
+        offset=0,
+    )
+    
+    def generate_csv():
+        # Create CSV writer
+        output = csv.StringIO()
+        writer = csv.writer(output)
+        
+        # Write header
+        writer.writerow([
+            'ID', 'Session ID', 'Tool Name', 'Hook Name', 'Hook Type',
+            'Success', 'Message', 'Duration (ms)', 'Timestamp'
+        ])
+        
+        # Write data rows
+        for entry in result['entries']:
+            writer.writerow([
+                entry.get('id', ''),
+                entry.get('session_id', ''),
+                entry.get('tool_name', ''),
+                entry.get('hook_name', ''),
+                entry.get('hook_type', ''),
+                entry.get('success', ''),
+                entry.get('message', ''),
+                entry.get('duration_ms', ''),
+                entry.get('timestamp', '')
+            ])
+        
+        # Yield the CSV content
+        output.seek(0)
+        yield output.read().encode('utf-8')
+    
+    # Generate filename with timestamp
+    from datetime import datetime
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename = f'hook_executions_{timestamp}.csv'
+    
+    return StreamingResponse(
+        generate_csv(),
+        media_type='text/csv',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'}
+    )
