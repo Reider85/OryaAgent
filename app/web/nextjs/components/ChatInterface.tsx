@@ -1,8 +1,9 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Send, Bot, User, Loader2 } from 'lucide-react'
+import { Send, Bot, User, Loader2, Settings } from 'lucide-react'
 import { Message, WebSocketManager } from './WebSocketProvider'
+import { SettingsPanel } from '@/app/settings/SettingsPanel'
 
 interface ChatInterfaceProps {
   websocket?: WebSocketManager
@@ -20,6 +21,7 @@ export function ChatInterface({
   const [isConnected, setIsConnected] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [internalSessionId, setInternalSessionId] = useState<string>(currentSessionId)
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   
   const websocket = propWebSocket || new WebSocketManager()
 
@@ -133,6 +135,13 @@ export function ChatInterface({
           <div className="flex items-center space-x-2">
             <span className="text-sm text-gray-500">Session: {currentSessionId}</span>
             <button
+              onClick={() => setIsSettingsOpen(true)}
+              className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
+              title="Settings"
+            >
+              <Settings className="h-5 w-5" />
+            </button>
+            <button
               onClick={createNewSession}
               className="px-3 py-1 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
             >
@@ -217,6 +226,12 @@ export function ChatInterface({
           </button>
         </div>
       </div>
+
+      {/* Settings Panel */}
+      <SettingsPanel
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+      />
     </div>
   )
 }
