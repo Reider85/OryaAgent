@@ -12,7 +12,7 @@ jobs:
   nightly-prerelease:
     if: github.repository == 'Reider85/OryaAgent'
     runs-on: ubuntu-latest
-    steps:
+steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -20,11 +20,13 @@ jobs:
       - name: Resolve tag
         id: ver
         run: |
-          VERSION=$(grep -m1 '^version' pyproject.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          VERSION=$(grep -m1 '^version' pyproject.toml | sed -E 's.*"([^"]+)".*/\1/')
           DATE=$(date -u +%Y%m%d)
+          DATE_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           SHORT_SHA=$(git rev-parse --short HEAD)
           echo "tag=nightly-${DATE}-${SHORT_SHA}" >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "date=$DATE_ISO" >> $GITHUB_OUTPUT
 
       - name: Create/update nightly release
         uses: pyTooling/Actions/releaser@5c6a1aec0bb5a0243ad0c6f98a8e1258c019e679
@@ -38,6 +40,6 @@ jobs:
             Nightly build from main @ ${{ steps.ver.outputs.tag }}
 
             Версия pyproject: ${{ steps.ver.outputs.version }}
-            Дата: $(date -u)
+            Дата: ${{ steps.ver.outputs.date }}
 
             > Это автоматически собранный nightly-билд. Используй на свой риск.
