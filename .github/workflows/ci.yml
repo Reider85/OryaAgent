@@ -125,13 +125,29 @@ jobs:
     name: Security audit (pip-audit)
     needs: lint
     runs-on: ubuntu-latest
+    env:
+      NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v7
       - run: uv sync --frozen
-      - name: Audit dependencies
-        run: uv run pip-audit --strict
-        continue-on-error: true   # предупреждаем, но не блокируем
+      - name: Audit (block on high/critical)
+        run: |
+          uv run pip-audit --strict --output json > audit.json || true
+          uv run python scripts/audit_gate.py audit.json
+        continue-on-error: false
+      - name: Audit (report all)
+        run: uv run pip-audit --strict --desc
+        continue-on-error: true
+      - name: File security issue
+        if: failure()
+        uses: JasonEtco/create-an-issue@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          filename: .github/ISSUE_TEMPLATE/audit_failure.md
+          assignees: Reider85
+          labels: security, dependencies
 
   build:
     name: Build dist
