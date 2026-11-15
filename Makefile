@@ -1,4 +1,4 @@
-.PHONY: dev ui test lint clean install format check-lint check-format setup db-up db-migrate db-downgrade db-current db-down redis-up redis-down stack-up stack-down
+.PHONY: dev ui test lint clean install format check check-lint check-format check-type setup db-up db-migrate db-downgrade db-current db-down redis-up redis-down stack-up stack-down
 
 # Install dependencies
 install:
@@ -46,6 +46,13 @@ check-lint:
 # Quick format check (no linting)
 check-format:
 	uv run ruff format --check .
+
+# Type checking
+check-type:
+	uv run mypy app
+
+# Full code quality check
+check: check-lint check-format check-type
 
 # Database (M-03, A-11: alembic-backed)
 db-up:

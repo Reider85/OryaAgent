@@ -155,7 +155,7 @@ class PipelineState:
     session_id: str
     turns: List[TurnState] = field(default_factory=list)
     current_turn: Optional[TurnState] = None
- statistics: Dict[str, Any] = field(default_factory=dict)
+    statistics: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
