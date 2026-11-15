@@ -255,6 +255,28 @@ class Settings(BaseSettings):
         description="L0 compaction period in seconds (M-27); 0 disables the worker",
     )
 
+    # --- Memory extractor (B-22) -------------------------------------------
+    llm_memory_extractor_model: str = Field(
+        default="claude-haiku",
+        validation_alias=AliasChoices("ORYA_LLM_MEMORY_EXTRACTOR_MODEL"),
+        description="Model for memory extraction (B-22); cheaper model for fact extraction",
+    )
+    memory_extractor_batch_size: int = Field(
+        default=10,
+        validation_alias=AliasChoices("ORYA_MEMORY_EXTRACTOR_BATCH_SIZE"),
+        description="Number of messages before triggering batch extraction (B-22)",
+    )
+    memory_extractor_interval_min: int = Field(
+        default=10,
+        validation_alias=AliasChoices("ORYA_MEMORY_EXTRACTOR_INTERVAL_MINUTES"),
+        description="Minimum interval between extractions in minutes (B-22)",
+    )
+    memory_extractor_confidence_threshold: float = Field(
+        default=0.7,
+        validation_alias=AliasChoices("ORYA_MEMORY_EXTRACTOR_CONFIDENCE_THRESHOLD"),
+        description="Confidence threshold below which items are marked as needing review (B-22)",
+    )
+
     # --- Session log (M-14) ----------------------------------------------
     sessions_dir: Path = Field(
         default=Path.home() / ".orya" / "sessions",
