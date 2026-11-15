@@ -63,13 +63,12 @@ jobs:
         run: uv run pytest tests/unit tests/e2e tests/smoke --cov=app --cov-report=xml --cov-report=term-missing --continue-on-collection-errors --maxfail=20
         env:
           CI: "true"
-      - name: Upload coverage to Codecov
-        if: matrix.python-version == '3.12'
-        uses: codecov/codecov-action@v7
+      - name: Upload coverage XML
+        uses: actions/upload-artifact@v4
         with:
-          files: ./coverage.xml
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}   # опционально, без токена тоже работает для public
+          name: coverage-py${{ matrix.python-version }}
+          path: coverage.xml
+          retention-days: 7
 
   integration:
     name: Integration (Python ${{ matrix.python-version }})
@@ -152,9 +151,25 @@ jobs:
           assignees: Reider85
           labels: security, dependencies
 
+  coverage:
+    name: Upload coverage to Codecov
+    needs: [test-matrix]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-py*
+          merge-multiple: false
+      - uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+          files: coverage-py3.11/coverage.xml,coverage-py3.12/coverage.xml,coverage-py3.13/coverage.xml,coverage-py3.14/coverage.xml
+          flags: py3.11,py3.12,py3.13,py3.14
+
   build:
     name: Build dist
-    needs: [test-matrix, integration]
+    needs: [test-matrix, integration, coverage]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -164,7 +179,11 @@ jobs:
       - uses: astral-sh/setup-uv@v7
       - run: uv sync --frozen
       - run: uv run python -m build
-      - uses: actions/upload-artifact@v7
+      - name: Upload dist artifact
+        if: github.event_name == 'push' || startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
+          retention-days: 14
+          if-no-files-found: error
