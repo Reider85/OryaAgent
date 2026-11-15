@@ -273,3 +273,89 @@ class SemanticSearchMetricsContext:
             increment_semantic_search_cache_hit(self.server_url)
         else:
             increment_semantic_search_cache_miss(self.server_url)
+
+
+# Metrics definitions for memory extraction operations
+MEMORY_EXTRACTION_METRICS = {
+    "memory_extraction_total": {
+        "name": "orya_memory_extraction_total",
+        "description": "Total memory extraction operations",
+        "type": "counter",
+        "labels": ["status", "session_id"],
+    },
+    "memory_extraction_latency_ms": {
+        "name": "orya_memory_extraction_latency_ms",
+        "description": "Memory extraction latency in milliseconds",
+        "type": "histogram",
+        "buckets": [100, 500, 1000, 2000, 5000, 10000],
+        "labels": ["session_id"],
+    },
+    "memory_extraction_facts_count": {
+        "name": "orya_memory_extraction_facts_count",
+        "description": "Number of facts extracted per operation",
+        "type": "histogram",
+        "buckets": [1, 5, 10, 20, 50],
+        "labels": ["session_id"],
+    },
+    "memory_extraction_source_messages": {
+        "name": "orya_memory_extraction_source_messages",
+        "description": "Number of source messages processed per extraction",
+        "type": "histogram",
+        "buckets": [1, 5, 10, 20, 50, 100],
+        "labels": ["session_id"],
+    },
+}
+
+# Helper functions for memory extraction metrics
+def increment_memory_extraction(status: str, session_id: str):
+    """Increment memory extraction counter."""
+    _metric_collector.counter_inc(
+        "memory_extraction_total", {"status": status, "session_id": session_id}, 1
+    )
+
+
+def observe_memory_extraction_latency(session_id: str, latency_ms: float):
+    """Observe memory extraction latency."""
+    _metric_collector.histogram_observe(
+        "memory_extraction_latency_ms", {"session_id": session_id}, latency_ms
+    )
+
+
+def observe_memory_extraction_facts_count(session_id: str, count: int):
+    """Observe number of facts extracted."""
+    _metric_collector.histogram_observe(
+        "memory_extraction_facts_count", {"session_id": session_id}, count
+    )
+
+
+def observe_memory_extraction_source_messages(session_id: str, count: int):
+    """Observe number of source messages processed."""
+    _metric_collector.histogram_observe(
+        "memory_extraction_source_messages", {"session_id": session_id}, count
+    )
+
+
+class MemoryExtractionMetricsContext:
+    """Context manager for memory extraction operation metrics."""
+
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+        self.start_time = None
+        self.status = "success"
+        self.facts_count = 0
+        self.source_messages = 0
+
+    def __enter__(self):
+        self.start_time = __import__("time").time()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        latency_ms = (__import__("time").time() - self.start_time) * 1000
+
+        if exc_type is not None:
+            self.status = "error"
+
+        increment_memory_extraction(self.status, self.session_id)
+        observe_memory_extraction_latency(self.session_id, latency_ms)
+        observe_memory_extraction_facts_count(self.session_id, self.facts_count)
+        observe_memory_extraction_source_messages(self.session_id, self.source_messages)
