@@ -28,8 +28,8 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
       - run: uv sync --frozen
-      - run: uv run ruff check .
-      - run: uv run ruff format --check .
+      - run: uv run ruff check . --cache-dir ~/.cache/ruff
+      - run: uv run ruff format --check . --cache-dir ~/.cache/ruff
       - name: Type-check (mypy)
         run: uv run mypy app
         continue-on-error: true
@@ -39,6 +39,11 @@ jobs:
             data=yaml.safe_load(open('docker-compose.yml')); \
             assert 'services' in data and len(data['services'])>=13, 'compose broken'; \
             print('OK', list(data['services']))"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ruff
+          key: ruff-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+          restore-keys: ruff-${{ runner.os }}-
 
   test-matrix:
     name: Tests (Python ${{ matrix.python-version }})
