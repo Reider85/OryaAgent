@@ -17,16 +17,10 @@ from pydantic import BaseModel
 
 from app.core.observability.spans import emit_span
 
+# Import CompactSummary from models to avoid duplication
+from .models import CompactSummary
+
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class CompactSummary:
-    """Compact summary for COLD layer."""
-
-    content_hash: str
-    summary: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class HeatCache:
@@ -56,6 +50,15 @@ class HeatCache:
     def _get_size(self) -> int:
         """Get current size in tokens (simplified)."""
         return sum(len(str(v)) for v in self.cache.values())
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get cache statistics."""
+        return {
+            "size": self._get_size(),
+            "max_size": self.max_size,
+            "hit_count": getattr(self, 'hit_count', 0),
+            "miss_count": getattr(self, 'miss_count', 0),
+        }
 
 
 class DFC:
@@ -139,42 +142,40 @@ class DFC:
 
     def assemble_hot(self, plan: Dict[str, Any]) -> str:
         """Assemble HOT context from plan and layers."""
-        with emit_span(
-            "dfc.assemble_hot",
-            {
+        emit_span(
+            span_type="dfc.assemble_hot",
+            name="dfc.assemble_hot",
+            attributes={
                 "dfc.hot_size_tokens": self._get_hot_size(),
                 "dfc.warm_size_tokens": self._get_warm_size(),
                 "dfc.cold_size": len(self.cold),
             },
-        ) as span:
-            # Start with cacheable prefix (from plan)
-            cacheable_prefix = plan.get("cacheable_prefix", "")
+        )
+        
+        # Start with cacheable prefix (from plan)
+        cacheable_prefix = plan.get("cacheable_prefix", "")
 
-            # Add dynamic suffix from HOT layer
-            dynamic_suffix = []
-            for key, value in self.hot.items():
-                dynamic_suffix.append(f"{key}: {value}")
+        # Add dynamic suffix from HOT layer
+        dynamic_suffix = []
+        for key, value in self.hot.items():
+            dynamic_suffix.append(f"{key}: {value}")
 
-            # Add prefetch hints from plan
-            prefetch_hints = plan.get("prefetch_hints", [])
-            if prefetch_hints:
-                dynamic_suffix.append("Prefetch hints:")
-                for hint in prefetch_hints:
-                    dynamic_suffix.append(f"- {hint}")
+        # Add prefetch hints from plan
+        prefetch_hints = plan.get("prefetch_hints", [])
+        if prefetch_hints:
+            dynamic_suffix.append("Prefetch hints:")
+            for hint in prefetch_hints:
+                dynamic_suffix.append(f"- {hint}")
 
-            # Combine everything
-            hot_context = "\n".join(
-                [
-                    cacheable_prefix,
-                    *dynamic_suffix,
-                ]
-            )
+        # Combine everything
+        hot_context = "\n".join(
+            [
+                cacheable_prefix,
+                *dynamic_suffix,
+            ]
+        )
 
-            span.set_attribute("dfc.hot_size_tokens", self._get_hot_size())
-            span.set_attribute("dfc.warm_demoted", len(self.warm))
-            span.set_attribute("dfc.cold_compacted", len(self.cold))
-
-            return hot_context
+        return hot_context
 
     def promote_to_hot(self, key: str, value: str) -> None:
         """Promote item to HOT layer with demotion to WARM if needed."""
@@ -270,39 +271,42 @@ class BackgroundCompactor:
 
     async def compact_warm_to_cold(self) -> None:
         """Compact oldest items from WARM to COLD."""
-        with emit_span(
-            "dfc.compact",
-            {
+        emit_span(
+            span_type="dfc.compact",
+            name="dfc.compact",
+            attributes={
                 "dfc.warm_size_before": len(self.dfc.warm),
                 "dfc.cold_size_before": len(self.dfc.cold),
             },
-        ) as span:
-            # Take oldest 20% of WARM items
-            items_to_compact = max(1, len(self.dfc.warm) // 5)
-            items = list(self.dfc.warm.items())[:items_to_compact]
+        )
+        
+        # Take oldest 20% of WARM items
+        items_to_compact = max(1, len(self.dfc.warm) // 5)
+        items = list(self.dfc.warm.items())[:items_to_compact]
 
-            # Create summaries
-            for key, value in items:
-                content_hash = hashlib.sha256((key + value).encode()).hexdigest()
-                summary = f"Summary of {key}: {value[:100]}..."  # Simplified summary
+        # Create summaries
+        for key, value in items:
+            content_hash = hashlib.sha256((key + value).encode()).hexdigest()
+            summary = f"Summary of {key}: {value[:100]}..."  # Simplified summary
 
-                compact_summary = CompactSummary(
-                    content_hash=content_hash,
-                    summary=summary,
-                    metadata={"original_key": key, "original_value": value},
-                )
+            compact_summary = CompactSummary(
+                content_hash=content_hash,
+                summary=summary,
+                metadata={"original_key": key, "original_value": value},
+            )
 
-                self.dfc.cold.append(compact_summary)
+            self.dfc.cold.append(compact_summary)
 
-                # Remove from WARM
-                if key in self.dfc.warm:
-                    self.dfc.warm.pop(key)
+            # Remove from WARM
+            if key in self.dfc.warm:
+                self.dfc.warm.pop(key)
 
-            span.set_attribute("dfc.warm_size_after", len(self.dfc.warm))
-            span.set_attribute("dfc.cold_size_after", len(self.dfc.cold))
-            span.set_attribute("dfc.compacted_items", items_to_compact)
+        # Update span attributes
+        span.set_attribute("dfc.warm_size_after", len(self.dfc.warm))
+        span.set_attribute("dfc.cold_size_after", len(self.dfc.cold))
+        span.set_attribute("dfc.compacted_items", items_to_compact)
 
-            logger.info(f"Compacted {items_to_compact} items from WARM to COLD")
+        logger.info(f"Compacted {items_to_compact} items from WARM to COLD")
 
 
 # Global DFC instance
