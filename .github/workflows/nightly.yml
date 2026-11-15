@@ -20,7 +20,7 @@ steps:
       - name: Resolve tag
         id: ver
         run: |
-          VERSION=$(grep -m1 '^version' pyproject.toml | sed -E 's.*"([^"]+)".*/\1/')
+          VERSION=$(make version)
           DATE=$(date -u +%Y%m%d)
           DATE_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           SHORT_SHA=$(git rev-parse --short HEAD)

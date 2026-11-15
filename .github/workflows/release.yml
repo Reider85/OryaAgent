@@ -30,10 +30,10 @@ jobs:
         with:
           fetch-depth: 0   # нужна история для changelog
 
-      - name: Read version from pyproject.toml
+- name: Read version from pyproject.toml
         id: ver
         run: |
-          VERSION=$(grep -m1 '^version' pyproject.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          VERSION=$(make version)
           SHORT_SHA=$(git rev-parse --short HEAD)
           TAG="v${VERSION}-dev.${GITHUB_RUN_NUMBER}+${SHORT_SHA}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT

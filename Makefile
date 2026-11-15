@@ -1,4 +1,4 @@
-.PHONY: dev ui test lint clean install format check check-lint check-format check-type setup db-up db-migrate db-downgrade db-current db-down redis-up redis-down stack-up stack-down
+.PHONY: dev ui test lint clean install format check check-lint check-format check-type setup db-up db-migrate db-downgrade db-current db-down redis-up redis-down stack-up stack-down version
 
 # Install dependencies
 install:
@@ -50,6 +50,10 @@ check-format:
 # Type checking
 check-type:
 	uv run mypy app
+
+# Get version from pyproject.toml using tomllib
+version:
+	@uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
 
 # Full code quality check
 check: check-lint check-format check-type
