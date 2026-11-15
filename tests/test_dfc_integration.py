@@ -36,8 +36,8 @@ class TestDFCIntegration:
                 "read": {"file": "test.py", "content": "# test"},
             },
             "memory_items": [
-                {"id": "1", "content": "Memory item 1"},
-                {"id": "2", "content": "Memory item 2"},
+                Mock(id="1", content="Memory item 1"),
+                Mock(id="2", content="Memory item 2"),
             ],
         }
 
