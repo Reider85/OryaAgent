@@ -42,3 +42,11 @@ updates:
       interval: "monthly"
     open-pull-requests-limit: 3
     labels: ["dependencies", "docker"]
+
+  # Docker compose image references (docker-compose.yml)
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "docker"]

@@ -102,7 +102,7 @@ services:
     build:
       context: .
       dockerfile: deploy/Dockerfile
-    image: orya-agent:local
+    image: ${ORYA_IMAGE:-ghcr.io/reider85/orya-agent:latest}
     restart: unless-stopped
     # Migrations are idempotent (A-11/Alembic replaces this later); fail-fast
     # container exit + restart lets postgres come back after a reboot.
@@ -146,7 +146,7 @@ services:
 
   chainlit:
     profiles: ["app"]
-    image: orya-agent:local
+    image: ${ORYA_IMAGE:-ghcr.io/reider85/orya-agent:latest}
     restart: unless-stopped
     command: chainlit run app/ui/chainlit_app.py --host 0.0.0.0 --port 8001
     env_file:

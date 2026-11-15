@@ -197,6 +197,21 @@ scripts/start.sh                                  # Linux / macOS / Git Bash
 powershell -ExecutionPolicy Bypass -File scripts\start.ps1   # native Windows
 ```
 
+### Pull pre-built image
+
+Alternatively, you can use the pre-built Docker image from GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/reider85/orya-agent:latest
+docker run --rm -p 8000:8000 -p 8001:8001 ghcr.io/reider85/orya-agent:latest
+```
+
+For a specific version:
+```bash
+docker pull ghcr.io/reider85/orya-agent:v7.0.0
+docker run --rm -p 8000:8000 -p 8001:8001 ghcr.io/reider85/orya-agent:v7.0.0
+```
+
 The script runs the full bring-up (`uv sync` → `docker compose up -d postgres redis` → `orya db migrate` → API → Chainlit), waits on `/health` at each stage, and writes `logs/runtime.env`, `logs/api.log`, `logs/ui.log` (plus `.err.log` twins). Flags: `--skip-sync`, `--reload`, `--stack`, `--no-docker-start` (PowerShell: `-SkipSync`, `-Reload`, `-Stack`, `-NoDockerStart`).
 
 - **Auto-start Docker** — if the daemon is down, the script launches Docker Desktop (Windows/macOS) or `systemctl start docker` (Linux) and waits up to 120 s; disable with `--no-docker-start`.
