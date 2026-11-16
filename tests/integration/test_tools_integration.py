@@ -38,8 +38,13 @@ from app.core.tools import get_tools
 # modules themselves are loaded via importlib (MVP-POLISH-8 split).
 glob_module = importlib.import_module("app.tools.glob")
 grep_module = importlib.import_module("app.tools.grep")
+lsp_module = importlib.import_module("app.tools.lsp")
 
-EXPECTED_NAMES = ["read", "write", "edit", "bash", "grep", "glob", "oriahs_search"]
+EXPECTED_NAMES = [
+    "read", "write", "edit", "bash", "grep", "glob", "oriahs_search",
+    "lsp_hover", "lsp_definition", "lsp_references", "lsp_symbol_search", 
+    "lsp_rename", "lsp_diagnostics", "lsp_code_action"
+]
 
 EXPECTED_REQUIRED_ARGS = {
     "read": {"path"},
@@ -49,6 +54,13 @@ EXPECTED_REQUIRED_ARGS = {
     "grep": {"pattern"},
     "glob": {"pattern"},
     "oriahs_search": {"query"},
+    "lsp_hover": {"file_path", "line", "column"},
+    "lsp_definition": {"file_path", "line", "column"},
+    "lsp_references": {"file_path", "line", "column"},
+    "lsp_symbol_search": {"query"},
+    "lsp_rename": {"file_path", "line", "column", "new_name"},
+    "lsp_diagnostics": {"file_path"},
+    "lsp_code_action": {"file_path", "line", "column"},
 }
 
 
