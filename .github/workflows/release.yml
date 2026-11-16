@@ -110,7 +110,7 @@ jobs:
             ## OryaAgent ${{ github.ref_name }}
 
             ### Highlights
-            (заполни вручную или доверь auto-generated notes ниже)
+            <!-- Breaking changes or migration notes go here -->
 
             ### Installation
             ```bash
