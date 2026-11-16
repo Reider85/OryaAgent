@@ -233,7 +233,7 @@ services:
 
   minio:
     profiles: ["observability"]
-    image: quay.io/minio/minio:latest
+    image: quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z
     restart: unless-stopped
     entrypoint: sh
     # Pre-create the langfuse bucket in the data dir (no init script needed).
@@ -252,7 +252,7 @@ services:
 
   langfuse:
     profiles: ["observability"]
-    image: langfuse/langfuse:3
+    image: langfuse/langfuse:3.42.0
     restart: unless-stopped
     depends_on:
       postgres:
@@ -291,7 +291,7 @@ services:
 
   langfuse-worker:
     profiles: ["observability"]
-    image: langfuse/langfuse-worker:3
+    image: langfuse/langfuse-worker:3.42.0
     restart: unless-stopped
     depends_on:
       postgres:
