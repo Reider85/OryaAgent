@@ -234,7 +234,22 @@ Stop with `scripts/stop.sh` / `stop.ps1`: kills local API/UI by PID tree, then `
 | `make db-downgrade REV=base` | roll back to a revision |
 | `make db-current` | print current revision |
 | `make redis-up` / `redis-down` | redis container |
-| `make stack-up` / `stack-down` | full compose stack with profiles |
+| `make stack-up` / `stack-down` | full compose stack (postgres + redis + app + observability) |
+| `make stack-infra` | infrastructure only (postgres + redis) |
+| `make stack-app` | application only (requires infrastructure) |
+| `make stack-obs` | observability only (requires infrastructure + app) |
+| `make stack-full` | alias for `make stack-up` |
+
+### Stack Management
+
+OryaAgent provides flexible stack management through Docker Compose profiles:
+
+- **`make stack-up` / `make stack-down`**: Full stack with all services (recommended for development)
+- **`make stack-infra`**: Infrastructure only (PostgreSQL + Redis) - useful for database-only work
+- **`make stack-app`**: Application services (API + Chainlit + MCP) - requires infrastructure
+- **`make stack-obs`**: Observability stack (Langfuse + ClickHouse + Prometheus) - requires infrastructure + app
+
+The stack commands use Docker Compose profiles to ensure symmetric startup and shutdown behavior.
 
 ---
 

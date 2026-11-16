@@ -1,4 +1,4 @@
-.PHONY: dev ui test lint clean install format check check-lint check-format check-type setup db-up db-migrate db-downgrade db-current db-down redis-up redis-down stack-up stack-down version
+.PHONY: dev ui test lint clean install format check check-lint check-format check-type setup db-up db-migrate db-downgrade db-current db-down redis-up redis-down stack-up stack-down stack-infra stack-app stack-obs stack-full version
 
 # Install dependencies
 install:
@@ -85,7 +85,22 @@ redis-down:
 # Full compose stack (A-10): profiles from COMPOSE_PROFILES in .env
 # (app,observability = api + chainlit + langfuse v3 + sampler-proxy)
 stack-up:
-	docker compose up -d --build
+	docker compose --profile app --profile observability up -d --build
 
 stack-down:
 	docker compose --profile app --profile observability down
+
+# Infrastructure only (postgres + redis)
+stack-infra:
+	docker compose up -d postgres redis
+
+# Application only (requires infrastructure)
+stack-app:
+	docker compose --profile app up -d --build
+
+# Observability only (requires infrastructure + app)
+stack-obs:
+	docker compose --profile observability up -d --build
+
+# Alias for full stack (backward compatibility)
+stack-full: stack-up

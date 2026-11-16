@@ -1,4 +1,4 @@
-"""Docker configuration for oriahs-mcp server (B-01)."""
+# Docker configuration for oriahs-mcp server (B-01)
 
 FROM python:3.11-slim
 
