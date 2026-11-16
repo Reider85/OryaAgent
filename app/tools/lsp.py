@@ -7,6 +7,8 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+from langchain_core.tools import InjectedToolArg, ToolException, tool
+
 from app.core.observability.spans import emit_span
 from app.core.lsp.bus import get_lsp_bus
 from app.core.tools._validators import validate_path
@@ -23,6 +25,7 @@ class LSPToolException(Exception):
 
 
 @emit_span("lsp.hover")
+@tool
 async def lsp_hover(
     file_path: str, line: int, column: int, workspace: str = "."
 ) -> Dict[str, Any]:
@@ -72,6 +75,7 @@ async def lsp_hover(
 
 
 @emit_span("lsp.definition")
+@tool
 async def lsp_definition(
     file_path: str, line: int, column: int, workspace: str = "."
 ) -> Dict[str, Any]:
@@ -121,6 +125,7 @@ async def lsp_definition(
 
 
 @emit_span("lsp.references")
+@tool
 async def lsp_references(
     file_path: str,
     line: int,
@@ -178,6 +183,7 @@ async def lsp_references(
 
 
 @emit_span("lsp_symbol_search")
+@tool
 async def lsp_symbol_search(
     query: str, workspace: str = ".", limit: int = 10
 ) -> Dict[str, Any]:
@@ -232,6 +238,7 @@ async def lsp_symbol_search(
 
 
 @emit_span("lsp_rename")
+@tool
 async def lsp_rename(
     file_path: str, line: int, column: int, new_name: str, workspace: str = "."
 ) -> Dict[str, Any]:
@@ -286,6 +293,7 @@ async def lsp_rename(
 
 
 @emit_span("lsp_diagnostics")
+@tool
 async def lsp_diagnostics(file_path: str, workspace: str = ".") -> Dict[str, Any]:
     """Get diagnostics for a file.
 
@@ -331,6 +339,7 @@ async def lsp_diagnostics(file_path: str, workspace: str = ".") -> Dict[str, Any
 
 
 @emit_span("lsp_code_action")
+@tool
 async def lsp_code_action(
     file_path: str, line: int, column: int, workspace: str = "."
 ) -> Dict[str, Any]:

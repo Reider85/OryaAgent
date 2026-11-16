@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from app.core.lsp.bus import get_lsp_bus
-from app.core.tools._validators import validate_path
+from app.tools._validators import validate_path
 
 logger = logging.getLogger(__name__)
 
