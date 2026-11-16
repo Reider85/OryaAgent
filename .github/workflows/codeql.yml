@@ -8,6 +8,10 @@ on:
       - "docs/**"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
   schedule:
     - cron: "0 4 * * 1"   # каждый понедельник 04:00 UTC
   workflow_dispatch:
