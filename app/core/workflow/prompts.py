@@ -101,7 +101,7 @@ Output: {execution_result.get("output", "")}"""
         session_text = (
             f"""Session Context:
 {session_context}"""
-            if session_text
+            if session_context
             else ""
         )
 

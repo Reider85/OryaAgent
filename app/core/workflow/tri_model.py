@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
-from app.core.observability.spans import emit_span
+from app.core.observability.spans import emit_span, timed_span
 
 logger = logging.getLogger(__name__)
 
@@ -150,9 +150,10 @@ class TriModelPipeline:
         start_time = time.time()
         context = context or {}
 
-        with emit_span(
-            "tri_model.execute_turn",
-            {
+        with timed_span(
+            span_type="tri_model",
+            name="tri_model.execute_turn",
+            attributes={
                 "task": task,
                 "session_id": session_state.get("session_id"),
                 "concurrent_tester": self.concurrent_tester,
@@ -250,9 +251,10 @@ class TriModelPipeline:
         context: Dict[str, Any],
     ) -> Plan:
         """Execute planning step."""
-        with emit_span(
-            "tri_model.plan",
-            {
+        with timed_span(
+            span_type="tri_model",
+            name="tri_model.plan",
+            attributes={
                 "task": task,
                 "session_id": session_state.get("session_id"),
             },
@@ -290,9 +292,10 @@ class TriModelPipeline:
         context: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Execute planning step."""
-        with emit_span(
-            "tri_model.execute",
-            {
+        with timed_span(
+            span_type="tri_model",
+            name="tri_model.execute",
+            attributes={
                 "tier": plan.tier,
                 "session_id": session_state.get("session_id"),
             },
@@ -324,9 +327,10 @@ class TriModelPipeline:
         context: Dict[str, Any],
     ) -> Verdict:
         """Execute testing step."""
-        with emit_span(
-            "tri_model.test",
-            {
+        with timed_span(
+            span_type="tri_model",
+            name="tri_model.test",
+            attributes={
                 "session_id": session_state.get("session_id"),
             },
         ) as span:
@@ -359,9 +363,10 @@ class TriModelPipeline:
         context: Dict[str, Any],
     ) -> TurnResult:
         """Handle replanning."""
-        with emit_span(
-            "tri_model.replan",
-            {
+        with timed_span(
+            span_type="tri_model",
+            name="tri_model.replan",
+            attributes={
                 "replan_count": turn_result.replan_count + 1,
                 "session_id": session_state.get("session_id"),
             },
