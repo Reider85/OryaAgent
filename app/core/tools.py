@@ -56,8 +56,8 @@ def get_tools(session_id: str | None = None) -> list[BaseTool]:
     ``session_id`` is reserved for per-session tool filtering (M-13+ /
     v7 BETA ``CapabilityRegistry``); the MVP list is global.
     """
-    del session_id  # reserved for per-session filtering
-    return [
+    # Get all available tools
+    all_tools = [
         read, write, edit, bash, grep, glob,
         oriahs_search, oriahs_index,
         lsp_hover, lsp_definition, lsp_references,
@@ -65,3 +65,21 @@ def get_tools(session_id: str | None = None) -> list[BaseTool]:
         ukb_lookup,
         retrieval_orchestrate
     ]
+    
+    # Apply CapabilityRegistry filtering if session_id is provided
+    if session_id:
+        from app.core.tools.capability_registry import get_capability_registry
+        from app.core.tools.context import TurnContext
+        
+        registry = get_capability_registry()
+        
+        # Create context from session state
+        # Note: This is a simplified context creation
+        # In a real implementation, you'd extract context from the actual session state
+        context = TurnContext()
+        
+        # Apply filtering
+        filtered_tools = registry.filter_tools(all_tools, context)
+        return filtered_tools
+    
+    return all_tools
