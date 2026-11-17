@@ -163,7 +163,7 @@ class TestAgentProgram:
         
 # Mock skill registry
         mock_skill_registry = MagicMock()
-        mock_skill_registry.activate = MagicMock(return_value=[])
+        mock_skill_registry.activate = MagicMock()
         mock_get_skill_registry.return_value = mock_skill_registry
         
         # Mock capability registry

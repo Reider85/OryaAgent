@@ -11,6 +11,7 @@ from langchain_core.tools import InjectedToolArg, ToolException, tool
 
 from app.core.observability.spans import emit_span
 from app.core.lsp.bus import get_lsp_bus
+from app.core.lsp.refactor_recipes import get_refactor_recipes_for_language
 from app.core.tools._validators import validate_path
 
 logger = logging.getLogger(__name__)
@@ -352,7 +353,7 @@ async def lsp_code_action(
         workspace: Workspace directory
 
     Returns:
-        Dictionary containing list of available code actions
+        Dictionary containing list of available code actions and mapped refactor actions
     """
     try:
         # Validate file path
@@ -379,13 +380,21 @@ async def lsp_code_action(
             },
         )
 
+        # Get refactor recipes for this language
+        refactor_recipes = get_refactor_recipes_for_language(language)
+        
+        # Map LSP code actions to refactor actions
+        mapped_actions = refactor_recipes.map_lsp_actions(result)
+
         return {
             "success": True,
             "language": language,
             "code_actions": result,
+            "refactor_actions": mapped_actions,
             "position": {"line": line, "column": column},
             "file_path": str(file_path),
             "action_count": len(result),
+            "refactor_action_count": len(mapped_actions),
         }
 
     except Exception as e:

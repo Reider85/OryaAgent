@@ -57,7 +57,9 @@ file_extensions:
 capabilities:
   - go-development
   - go-modules
+  - gopls-lsp
   - static-analysis
+  - refactor-recipes
   - interface-generation
 
 dependencies:
@@ -81,6 +83,14 @@ behavior:
   # LSP integration
   lsp_server: "gopls"
   lsp_workspace: "."
+  
+  # Refactor recipes
+  refactor_actions:
+    - extract_function
+    - convert_to_interface
+    - implement_missing_methods
+    - fix_struct_tag
+    - format_code
   
   # Build and test
   build_on_save: false

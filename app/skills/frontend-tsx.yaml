@@ -61,8 +61,10 @@ file_extensions:
 
 capabilities:
   - frontend-development
-  - react-tsx
+  - react-components
+  - typescript-language-server
   - accessibility
+  - refactor-recipes
   - css-styling
 
 dependencies:
@@ -93,6 +95,16 @@ behavior:
   # LSP integration
   lsp_server: "typescript-language-server"
   lsp_workspace: "."
+  
+  # Refactor recipes
+  refactor_actions:
+    - extract_to_component
+    - extract_to_function
+    - convert_to_arrow_function
+    - add_missing_return_type
+    - fix_eslint_rule
+    - fix_a11y_violation
+    - organize_imports
   
   # Build and test
   build_on_save: false

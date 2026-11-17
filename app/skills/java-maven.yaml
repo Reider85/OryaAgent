@@ -53,6 +53,7 @@ capabilities:
   - maven-build
   - eclipse-jdt
   - static-analysis
+  - refactor-recipes
 
 dependencies:
   # Required tools
@@ -75,6 +76,15 @@ behavior:
   # LSP integration
   lsp_server: "jdtls"
   lsp_workspace: ".jdtls"
+  
+  # Refactor recipes
+  refactor_actions:
+    - extract_method
+    - convert_to_record
+    - generate_hashCode_equals
+    - add_missing_interface_methods
+    - organize_imports
+    - fix_quickfix
   
   # Build and test
   build_on_save: false

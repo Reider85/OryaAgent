@@ -59,6 +59,7 @@ capabilities:
   - cargo-build
   - clippy-linting
   - async-programming
+  - refactor-recipes
 
 dependencies:
   # Required tools
