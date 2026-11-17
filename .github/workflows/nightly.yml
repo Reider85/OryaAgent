@@ -17,6 +17,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
       - name: Resolve tag
         id: ver
         run: |
