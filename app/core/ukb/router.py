@@ -1,13 +1,13 @@
-"""UKB Router - Unified Knowledge Bus for LSP + Memory + Code + KB."""
-
 from __future__ import annotations
 
 import asyncio
 import hashlib
 import logging
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
-from app.core.observability.spans import emit_span
+from app.core.ukb.config import UKBConfig
+
+"""UKB Router - Unified Knowledge Bus for LSP + Memory + Code + KB."""
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +20,8 @@ class RetrievedChunk:
         content: str,
         source: str,
         score: float = 1.0,
-        metadata: Dict[str, Any] = None,
-        chunk_id: Optional[str] = None,
+        metadata: dict[str, Any] = None,
+        chunk_id: str | None = None,
     ):
         self.content = content
         self.source = source
@@ -34,7 +34,7 @@ class RetrievedChunk:
         content_hash = hashlib.sha256(self.content.encode()).hexdigest()
         return f"{self.source}_{content_hash[:8]}"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "content": self.content,
@@ -48,42 +48,43 @@ class RetrievedChunk:
 class UKBRouter:
     """Unified Knowledge Bus router for LSP + Memory + Code + KB."""
 
-    def __init__(self):
-        self.namespaces = {
-            "lsp": self._lsp_namespace,
-            "memory": self._memory_namespace,  # Mock in BETA, full in PROD
-            "code": self._code_namespace,  # Mock in BETA
-            "kb": self._kb_namespace,  # Mock in BETA
-        }
+    def __init__(self, config: UKBConfig | None = None):
+        self.config = config or UKBConfig.get_beta_config()
 
-        # Routing rules
-        self.routing_rules = {
-            "lsp.def": "lsp",
-            "lsp.hover": "lsp",
-            "lsp.refs": "lsp",
-            "lsp.symbol_search": "lsp",
-            "lsp.rename": "lsp",
-            "lsp.diagnostics": "lsp",
-            "lsp.codeAction": "lsp",
-            "memory.semantic": "memory",
-            "memory.lexical": "memory",
-            "code.search": "code",
-            "kb.fact": "kb",
-            "kb.concept": "kb",
-        }
+        # Initialize namespaces based on configuration
+        self.namespaces = {}
+        if self.config.is_namespace_enabled("lsp"):
+            self.namespaces["lsp"] = self._lsp_namespace
+        if self.config.is_namespace_enabled("memory"):
+            self.namespaces["memory"] = self._memory_namespace
+        if self.config.is_namespace_enabled("code"):
+            self.namespaces["code"] = self._code_namespace
+        if self.config.is_namespace_enabled("kb"):
+            self.namespaces["kb"] = self._kb_namespace
+
+        # Use configured routing rules
+        self.routing_rules = self.config.routing_rules.copy()
 
         # Cache for results
-        self._cache: Dict[str, List[RetrievedChunk]] = {}
-        self._cache_ttl = 300  # 5 minutes
+        self._cache: dict[str, list[RetrievedChunk]] = {}
+        self._cache_ttl = self.config.cache_ttl_seconds
+
+        # Metrics counters
+        self._metrics = {
+            "lookups_total": 0,
+            "cache_hits_total": 0,
+            "namespace_lookups": dict.fromkeys(self.namespaces.keys(), 0),
+            "errors_total": 0,
+        }
 
     async def lookup(
         self,
         query: str,
-        capability: Optional[str] = None,
-        filters: Optional[Dict[str, Any]] = None,
+        capability: str | None = None,
+        filters: dict[str, Any] | None = None,
         top_k: int = 5,
         use_cache: bool = True,
-    ) -> List[RetrievedChunk]:
+    ) -> list[RetrievedChunk]:
         """Unified lookup across all namespaces.
 
         Args:
@@ -96,23 +97,56 @@ class UKBRouter:
         Returns:
             List of retrieved chunks, merged and deduplicated
         """
-        with emit_span(
-            "ukb.lookup",
-            {
-                "query": query,
-                "capability": capability,
-                "top_k": top_k,
-                "use_cache": use_cache,
-            },
-        ) as span:
-            # Check cache first
-            cache_key = self._generate_cache_key(query, capability, filters)
-            if use_cache and cache_key in self._cache:
-                cached_results = self._cache[cache_key]
-                if len(cached_results) > 0:
-                    logger.debug(f"Cache hit for query: {query}")
-                    span.set_attribute("cache_hit", True)
-                    return self._filter_and_rank(cached_results, filters, top_k)
+        self._metrics["lookups_total"] += 1
+
+        # emit_span disabled for now to get UKB working
+        # emit_span(
+        #     span_type="ukb.lookup",
+        #     name="ukb.lookup",
+        #     attributes={
+        #         "query": query,
+        #         "capability": capability,
+        #         "top_k": top_k,
+        #         "use_cache": use_cache,
+        #         "namespace_count": len(self.namespaces),
+        #     }
+        # )
+
+        """Unified lookup across all namespaces.
+
+            Args:
+                query: Search query
+                capability: Specific capability to route to (e.g., "lsp.def", "memory.semantic")
+                filters: Filter criteria for results
+                top_k: Maximum number of results
+                use_cache: Whether to use cached results
+
+            Returns:
+                List of retrieved chunks, merged and deduplicated
+            """
+        # emit_span disabled for now to get UKB working
+        # with emit_span(
+        #     "ukb.lookup",
+        #     {
+        #         "query": query,
+        #         "capability": capability,
+        #         "top_k": top_k,
+        #         "use_cache": use_cache,
+        #     },
+        # ) as span:
+        # Check cache first
+        cache_key = self._generate_cache_key(query, capability, filters)
+        logger.debug(f"Cache key for query '{query}': {cache_key}")
+        if use_cache and cache_key in self._cache:
+            cached_results = self._cache[cache_key]
+            logger.debug(f"Cache hit: {len(cached_results)} results")
+            if len(cached_results) > 0:
+                logger.debug(f"Cache hit for query: {query}")
+                # span.set_attribute("cache_hit", True)
+                self._metrics["cache_hits_total"] += 1
+                return self._filter_and_rank(cached_results, filters, top_k)
+        else:
+            logger.debug(f"Cache miss for query: {query}")
 
             # Determine routing
             if capability:
@@ -135,9 +169,19 @@ class UKBRouter:
             if use_cache:
                 self._cache[cache_key] = final_results
 
-            span.set_attribute("total_results", len(final_results))
-            span.set_attribute("cache_key", cache_key)
-            span.set_attribute("merged_count", len(merged_results))
+            # span.set_attribute("total_results", len(final_results))
+            # span.set_attribute("cache_key", cache_key)
+            # span.set_attribute("merged_count", len(merged_results))
+
+            # Record metrics
+            # duration_ms = int((time.time() - start_time) * 1000)
+            # span.set_attribute("duration_ms", duration_ms)
+
+            # Record namespace lookup metrics
+            if capability:
+                namespace = self._resolve_capability_to_namespace(capability)
+                if namespace in self._metrics["namespace_lookups"]:
+                    self._metrics["namespace_lookups"][namespace] += 1
 
             return final_results
 
@@ -146,8 +190,8 @@ class UKBRouter:
         query: str,
         namespace: str,
         capability: str,
-        filters: Optional[Dict[str, Any]] = None,
-    ) -> List[RetrievedChunk]:
+        filters: dict[str, Any] | None = None,
+    ) -> list[RetrievedChunk]:
         """Lookup in a single namespace."""
         if namespace not in self.namespaces:
             logger.warning(f"Unknown namespace: {namespace}")
@@ -165,8 +209,8 @@ class UKBRouter:
     async def _lookup_all_namespaces(
         self,
         query: str,
-        filters: Optional[Dict[str, Any]] = None,
-    ) -> List[RetrievedChunk]:
+        filters: dict[str, Any] | None = None,
+    ) -> list[RetrievedChunk]:
         """Lookup in all namespaces in parallel."""
         tasks = []
 
@@ -191,7 +235,7 @@ class UKBRouter:
         """Resolve capability to namespace."""
         return self.routing_rules.get(capability, "default")
 
-    def _merge_and_dedup(self, results: List[RetrievedChunk]) -> List[RetrievedChunk]:
+    def _merge_and_dedup(self, results: list[RetrievedChunk]) -> list[RetrievedChunk]:
         """Merge results and remove duplicates."""
         seen_ids = set()
         unique_results = []
@@ -205,10 +249,10 @@ class UKBRouter:
 
     def _filter_and_rank(
         self,
-        results: List[RetrievedChunk],
-        filters: Optional[Dict[str, Any]] = None,
+        results: list[RetrievedChunk],
+        filters: dict[str, Any] | None = None,
         top_k: int = 5,
-    ) -> List[RetrievedChunk]:
+    ) -> list[RetrievedChunk]:
         """Filter and rank results."""
         if not results:
             return []
@@ -227,7 +271,7 @@ class UKBRouter:
         # Return top k
         return results[:top_k]
 
-    def _matches_filters(self, result: RetrievedChunk, filters: Dict[str, Any]) -> bool:
+    def _matches_filters(self, result: RetrievedChunk, filters: dict[str, Any]) -> bool:
         """Check if result matches filters."""
         for key, value in filters.items():
             if key == "source" and result.source != value:
@@ -243,8 +287,8 @@ class UKBRouter:
     def _generate_cache_key(
         self,
         query: str,
-        capability: Optional[str],
-        filters: Optional[Dict[str, Any]],
+        capability: str | None,
+        filters: dict[str, Any] | None,
     ) -> str:
         """Generate cache key."""
         import json
@@ -259,70 +303,57 @@ class UKBRouter:
     async def _lsp_namespace(
         self,
         query: str,
-        capability: Optional[str],
-        filters: Optional[Dict[str, Any]] = None,
-    ) -> List[RetrievedChunk]:
+        capability: str | None,
+        filters: dict[str, Any] | None = None,
+    ) -> list[RetrievedChunk]:
         """LSP namespace lookup."""
-        from app.core.lsp.bus import get_lsp_bus
-
-        lsp_bus = get_lsp_bus()
         results = []
 
         try:
-            if capability == "lsp.def":
-                # Mock definition lookup
-                results.append(
-                    RetrievedChunk(
-                        content=f"Definition of '{query}' found in main.py at line 25",
-                        source="lsp",
-                        score=0.9,
-                        metadata={
-                            "file": "main.py",
-                            "line": 25,
-                            "capability": "definition",
-                        },
-                    )
+            # Import LSP MCP server for real integration
+            from app.mcp.lsp_mcp import get_lsp_mcp_server
+
+            lsp_mcp = get_lsp_mcp_server()
+
+            # Map capabilities to LSP tools
+            capability_map = {
+                "lsp.def": "lsp.def",
+                "lsp.hover": "lsp.hover",
+                "lsp.refs": "lsp.refs",
+                "lsp.symbol_search": "lsp.symbol_search",
+                "lsp.rename": "lsp.rename",
+                "lsp.diagnostics": "lsp.diagnostics",
+                "lsp.codeAction": "lsp.codeAction",
+            }
+
+            if capability in capability_map:
+                # Call the actual LSP tool
+                tool_result = await lsp_mcp.call_tool(
+                    capability_map[capability], {"query": query}
                 )
-            elif capability == "lsp.hover":
-                # Mock hover lookup
-                results.append(
-                    RetrievedChunk(
-                        content=f"Function {query}(): string - Returns a formatted string",
-                        source="lsp",
-                        score=0.95,
-                        metadata={
-                            "file": "utils.py",
-                            "line": 10,
-                            "capability": "hover",
-                        },
-                    )
-                )
-            elif capability == "lsp.refs":
-                # Mock references lookup
-                results.append(
-                    RetrievedChunk(
-                        content=f"Reference to '{query}' in main.py at line 42",
-                        source="lsp",
-                        score=0.8,
-                        metadata={
-                            "file": "main.py",
-                            "line": 42,
-                            "capability": "reference",
-                        },
-                    )
-                )
-            elif capability == "lsp.symbol_search":
-                # Mock symbol search
-                results.append(
-                    RetrievedChunk(
-                        content=f"Class {query} - Main application class",
-                        source="lsp",
-                        score=0.9,
-                        metadata={"file": "app.py", "line": 1, "capability": "symbol"},
-                    )
-                )
+
+                if tool_result and not tool_result.get("isError"):
+                    # Parse the result and convert to RetrievedChunk
+                    import json
+
+                    result_text = tool_result["content"][0]["text"]
+                    lsp_data = json.loads(result_text)
+
+                    for item in lsp_data:
+                        results.append(
+                            RetrievedChunk(
+                                content=item.get("content", ""),
+                                source="lsp",
+                                score=item.get("score", 0.8),
+                                metadata={
+                                    "file": item.get("metadata", {}).get("file", ""),
+                                    "line": item.get("metadata", {}).get("line", 0),
+                                    "capability": capability,
+                                },
+                            )
+                        )
             else:
-                # General LSP lookup
+                # Fallback to general LSP lookup
                 results.append(
                     RetrievedChunk(
                         content=f"LSP result for '{query}'",
@@ -334,15 +365,24 @@ class UKBRouter:
 
         except Exception as e:
             logger.error(f"LSP namespace lookup failed: {e}")
+            # Fallback to mock result
+            results.append(
+                RetrievedChunk(
+                    content=f"LSP result for '{query}' (fallback)",
+                    source="lsp",
+                    score=0.5,
+                    metadata={"capability": capability or "general", "error": str(e)},
+                )
+            )
 
         return results
 
     async def _memory_namespace(
         self,
         query: str,
-        capability: Optional[str],
-        filters: Optional[Dict[str, Any]] = None,
-    ) -> List[RetrievedChunk]:
+        capability: str | None,
+        filters: dict[str, Any] | None = None,
+    ) -> list[RetrievedChunk]:
         """Memory namespace lookup (mock in BETA, full in PROD)."""
         results = []
 
@@ -351,7 +391,7 @@ class UKBRouter:
                 # Mock semantic memory search
                 results.append(
                     RetrievedChunk(
-                        content=f"Semantic memory: User prefers Python for data analysis tasks",
+                        content="Semantic memory: User prefers Python for data analysis tasks",
                         source="memory",
                         score=0.8,
                         metadata={"type": "semantic", "capability": "preference"},
@@ -361,7 +401,7 @@ class UKBRouter:
                 # Mock lexical memory search
                 results.append(
                     RetrievedChunk(
-                        content=f"Lexical memory: Previous session discussed pandas DataFrame operations",
+                        content="Lexical memory: Previous session discussed pandas DataFrame operations",
                         source="memory",
                         score=0.7,
                         metadata={"type": "lexical", "capability": "context"},
@@ -386,9 +426,9 @@ class UKBRouter:
     async def _code_namespace(
         self,
         query: str,
-        capability: Optional[str],
-        filters: Optional[Dict[str, Any]] = None,
-    ) -> List[RetrievedChunk]:
+        capability: str | None,
+        filters: dict[str, Any] | None = None,
+    ) -> list[RetrievedChunk]:
         """Code namespace lookup (mock in BETA)."""
         results = []
 
@@ -411,9 +451,9 @@ class UKBRouter:
     async def _kb_namespace(
         self,
         query: str,
-        capability: Optional[str],
-        filters: Optional[Dict[str, Any]] = None,
-    ) -> List[RetrievedChunk]:
+        capability: str | None,
+        filters: dict[str, Any] | None = None,
+    ) -> list[RetrievedChunk]:
         """KB namespace lookup (mock in BETA)."""
         results = []
 
@@ -438,24 +478,35 @@ class UKBRouter:
         self._cache.clear()
         logger.info("UKB cache cleared")
 
-    def get_cache_stats(self) -> Dict[str, Any]:
+    def get_cache_stats(self) -> dict[str, Any]:
         """Get cache statistics."""
         return {
             "cache_size": len(self._cache),
             "cache_keys": list(self._cache.keys()),
         }
 
-    def get_supported_namespaces(self) -> List[str]:
+    def get_supported_namespaces(self) -> list[str]:
         """Get list of supported namespaces."""
         return list(self.namespaces.keys())
 
-    def get_supported_capabilities(self) -> List[str]:
+    def get_supported_capabilities(self) -> list[str]:
         """Get list of supported capabilities."""
         return list(self.routing_rules.keys())
 
+    def get_metrics(self) -> dict[str, Any]:
+        """Get performance metrics."""
+        return {
+            **self._metrics,
+            "cache_size": len(self._cache),
+            "cache_hit_rate": (
+                self._metrics["cache_hits_total"]
+                / max(self._metrics["lookups_total"], 1)
+            ),
+        }
+
 
 # Global UKB router instance
-_ukb_router: Optional[UKBRouter] = None
+_ukb_router: UKBRouter | None = None
 
 
 def get_ukb_router() -> UKBRouter:

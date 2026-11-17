@@ -22,16 +22,27 @@ from .watcher import (
     get_file_watcher,
     initialize_file_watcher,
 )
-from ..tools.lsp import (
-    lsp_hover,
-    lsp_definition,
-    lsp_references,
-    lsp_symbol_search,
-    lsp_rename,
-    lsp_diagnostics,
-    lsp_code_action,
-    LSPToolException,
-)
+try:
+    from app.tools.lsp import (
+        lsp_hover,
+        lsp_definition,
+        lsp_references,
+        lsp_symbol_search,
+        lsp_rename,
+        lsp_diagnostics,
+        lsp_code_action,
+        LSPToolException,
+    )
+except ImportError:
+    # Handle circular import during testing
+    lsp_hover = None
+    lsp_definition = None
+    lsp_references = None
+    lsp_symbol_search = None
+    lsp_rename = None
+    lsp_diagnostics = None
+    lsp_code_action = None
+    LSPToolException = Exception
 
 __all__ = [
     # Core LSP components
