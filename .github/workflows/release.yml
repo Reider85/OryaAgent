@@ -14,10 +14,6 @@ on:
                          # does NOT match prerelease tags v7.0.0-dev.N+SHA
                          # (this is intentional - prerelease is created by separate job)
   workflow_dispatch:
-    inputs:
-      prerelease:
-        description: "Mark as prerelease"
-        default: "true"
 
 permissions:
   contents: write   # нужно для создания тегов и релизов
@@ -26,7 +22,9 @@ permissions:
 jobs:
   prerelease-on-push:
     name: Prerelease (push to main)
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: |
+          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -121,7 +119,6 @@ jobs:
             ## OryaAgent ${{ github.ref_name }}
 
             ### Highlights
-            <!-- Breaking changes or migration notes go here -->
 
             ### Installation
             ```bash
