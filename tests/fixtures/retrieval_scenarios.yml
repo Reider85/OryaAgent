@@ -1,0 +1,133 @@
+"""Synthetic dataset for testing RetrievalOrchestrator decision accuracy."""
+
+scenarios:
+  - scenario_id: "first_turn_context"
+    name: "First turn context request"
+    session_state:
+      turn_count: 0
+      last_message: "Help me understand this codebase structure"
+      previous_messages: []
+    expected_strategy: "standard"
+    confidence: 0.9
+    description: "User asks for context on first turn"
+    
+  - scenario_id: "referential_recall"
+    name: "Referential recall request"
+    session_state:
+      turn_count: 5
+      last_message: "Помнишь, мы обсуждали authentication system?"
+      previous_messages: [
+        "Let's build an authentication system",
+        "We need to implement JWT tokens",
+        "Create user models with password hashing",
+        "Add login endpoints"
+      ]
+    expected_strategy: "explicit_recall"
+    confidence: 0.8
+    description: "User references previous discussion about authentication"
+    
+  - scenario_id: "code_definition_lookup"
+    name: "Code definition lookup"
+    session_state:
+      turn_count: 3
+      last_message: "Find the definition of UserService.create method"
+      previous_messages: [
+        "I need to create a user service",
+        "Let me check the existing UserService class"
+      ]
+    expected_strategy: "code_lookup"
+    confidence: 0.9
+    description: "User asks for code definition"
+    
+  - scenario_id: "topic_continuation"
+    name: "Topic continuation request"
+    session_state:
+      turn_count: 8
+      last_message: "How can I optimize the database queries?"
+      previous_messages: [
+        "I'm working on performance optimization",
+        "The application is slow during peak hours",
+        "I need to identify bottlenecks",
+        "Database queries seem to be the main issue"
+      ]
+    expected_strategy: "topic_continuation"
+    confidence: 0.7
+    description: "User continues previous topic about performance optimization"
+    
+  - scenario_id: "memory_intent"
+    name: "Memory intent request"
+    session_state:
+      turn_count: 12
+      last_message: "What did we decide about the caching strategy?"
+      previous_messages: [
+        "We need to implement Redis caching",
+        "Cache user sessions for 1 hour",
+        "Use Redis for rate limiting too"
+      ]
+    expected_strategy: "explicit_recall"
+    confidence: 0.8
+    description: "User asks about previous decision on caching"
+    
+  - scenario_id: "code_file_reference"
+    name: "Code file reference"
+    session_state:
+      turn_count: 4
+      last_message: "Show me the implementation in utils.py"
+      previous_messages: [
+        "I need to create utility functions",
+        "Let me check the existing utils.py file"
+      ]
+    expected_strategy: "code_lookup"
+    confidence: 0.9
+    description: "User references specific code file"
+    
+  - scenario_id: "general_question"
+    name: "General question without context"
+    session_state:
+      turn_count: 2
+      last_message: "How do I handle errors in Python?"
+      previous_messages: [
+        "I'm building a new application"
+      ]
+    expected_strategy: "standard"
+    confidence: 0.6
+    description: "User asks general programming question"
+    
+  - scenario_id: "past_work_reference"
+    name: "Past work reference"
+    session_state:
+      turn_count: 15
+      last_message: "Earlier we worked on the payment integration"
+      previous_messages: [
+        "Let's integrate Stripe payment",
+        "Create payment models and endpoints",
+        "Handle webhooks for payment events"
+      ]
+    expected_strategy: "explicit_recall"
+    confidence: 0.7
+    description: "User references past work on payment integration"
+    
+  - scenario_id: "speculative_context"
+    name: "Speculative context request"
+    session_state:
+      turn_count: 6
+      last_message: "I want to implement machine learning features"
+      previous_messages: [
+        "The application needs data analysis",
+        "We have collected user behavior data"
+      ]
+    expected_strategy: "speculative_prefetch"
+    confidence: 0.5
+    description: "User indicates interest in ML features (placeholder)"
+    
+  - scenario_id: "degraded_scenario"
+    name: "Degraded scenario"
+    session_state:
+      turn_count: 20
+      last_message: "I need help with something"
+      previous_messages: [
+        "Previous complex discussions about system architecture"
+      ]
+    expected_strategy: "degraded"
+    confidence: 0.4
+    description: "Fallback scenario when other strategies are not applicable"
