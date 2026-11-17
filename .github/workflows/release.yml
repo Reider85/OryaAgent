@@ -30,7 +30,7 @@ jobs:
         with:
           fetch-depth: 0   # нужна история для changelog
 
-- name: Read version from pyproject.toml
+      - name: Read version from pyproject.toml
         id: ver
         run: |
           VERSION=$(make version)
