@@ -1,0 +1,137 @@
+"""Frontend TSX skill bundle for B-30 multi-language programming.
+
+This skill bundle provides comprehensive frontend development capabilities
+including React/TSX support, LSP integration, build/test support, and
+automated formatting/linting with accessibility hints.
+"""
+
+name: frontend-tsx
+description: "Frontend development with React/TSX, TypeScript Language Server, Prettier, and accessibility hints"
+version: "1.0.0"
+language: frontend
+tools:
+  # Basic tools
+  - read
+  - write
+  - edit
+  - bash
+  - grep
+  
+  # LSP tools for frontend development
+  - lsp_hover
+  - lsp_definition
+  - lsp_references
+  - lsp_rename
+  - lsp_diagnostics
+  - lsp_code_action
+  - lsp_symbol_search
+  
+  # Frontend-specific tools
+  - bash (npm run build)
+  - bash (npm test)
+  - bash (npm lint)
+  - bash (npm format)
+  
+  # Memory and search tools
+  - ukb_lookup
+  
+build_command: "npm run build"
+test_command: "npm test"
+lint_command: "eslint"
+format_command: "prettier --write"
+
+hooks:
+  - auto-format-prettier
+  - auto-lint-eslint
+  - accessibility-hint-axe
+
+refactor_actions:
+  - extract_to_component
+  - convert_to_arrow_function
+  - add_missing_return_type
+  - fix_eslint_rule
+  - fix_a11y_violation
+
+default_workspace: "."
+file_extensions:
+  - ".tsx"
+  - ".jsx"
+  - ".css"
+  - ".html"
+
+capabilities:
+  - frontend-development
+  - react-tsx
+  - accessibility
+  - css-styling
+
+dependencies:
+  # Required tools
+  - node: ">=18"
+  - npm: ">=8"
+  - typescript-language-server: ">=2.0"
+  
+  # Optional tools
+  - eslint: ">=8.0"
+  - prettier: ">=2.0"
+  - typescript: ">=5.0"
+  - @typescript-eslint/parser: ">=5.0"
+  - @typescript-eslint/eslint-plugin: ">=5.0"
+  - eslint-plugin-react: ">=7.0"
+  - eslint-plugin-react-hooks: ">=4.0"
+  - axe-core: ">=4.0"
+
+activation_rules:
+  - language: "frontend"
+    file_extensions: [".tsx", ".jsx", ".css", ".html"]
+    build_files: ["package.json", "tsconfig.json", "package-lock.json"]
+    
+  - context: "frontend-project"
+    indicators: ["package.json", "src/", "public/", "node_modules/"]
+
+behavior:
+  # LSP integration
+  lsp_server: "typescript-language-server"
+  lsp_workspace: "."
+  
+  # Build and test
+  build_on_save: false
+  test_on_save: false
+  lint_on_save: true
+  
+  # Code generation
+  auto_import: true
+  organize_imports: true
+  
+  # Refactoring
+  safe_rename: true
+  extract_function_limit: 50
+  
+  # Formatting
+  format_on_save: true
+  format_style: "prettier"
+  
+  # Frontend features
+  jsx_support: true
+  react_support: true
+  typescript_support: true
+  
+  # CSS/HTML support (BETA: basic, FUTURE+: full LSP)
+  css_support: "basic"  # BETA uses read+grep, PROD will use vscode-css-languageserver
+  html_support: "basic"  # BETA uses read+grep, PROD will use vscode-html-languageserver
+  
+  # Accessibility
+  accessibility_check: true
+  axe_rules: "recommended"
+  
+  # Node.js features
+  node_env: "development"
+  node_target: "es2020"
+  
+  # ESLint configuration
+  eslint_config: ".eslintrc.js"
+  eslint_ignore: ".eslintignore"
+  
+  # TypeScript configuration
+  tsconfig: "tsconfig.json"
+  tsx_support: true

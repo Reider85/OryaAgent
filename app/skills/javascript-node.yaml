@@ -1,0 +1,117 @@
+"""JavaScript Node skill bundle for B-30 multi-language programming.
+
+This skill bundle provides comprehensive JavaScript development capabilities
+including LSP integration, Node.js build/test support, and automated
+formatting/linting through hooks.
+"""
+
+name: javascript-node
+description: "JavaScript development with Node.js, TypeScript Language Server, and Prettier"
+version: "1.0.0"
+language: javascript
+tools:
+  # Basic tools
+  - read
+  - write
+  - edit
+  - bash
+  - grep
+  
+  # LSP tools for JavaScript development
+  - lsp_hover
+  - lsp_definition
+  - lsp_references
+  - lsp_rename
+  - lsp_diagnostics
+  - lsp_code_action
+  - lsp_symbol_search
+  
+  # Node.js-specific tools
+  - bash (npm run build)
+  - bash (npm test)
+  - bash (npm lint)
+  - bash (npm format)
+  
+  # Memory and search tools
+  - ukb_lookup
+  
+build_command: "npm run build"
+test_command: "npm test"
+lint_command: "eslint"
+format_command: "prettier --write"
+
+hooks:
+  - auto-format-prettier
+  - auto-lint-eslint
+
+refactor_actions:
+  - extract_to_function
+  - convert_to_arrow_function
+  - add_missing_return_type
+  - fix_eslint_rule
+
+default_workspace: "."
+file_extensions:
+  - ".js"
+  - ".mjs"
+  - ".cjs"
+
+capabilities:
+  - javascript-development
+  - nodejs-build
+  - eslint-linting
+  - arrow-functions
+
+dependencies:
+  # Required tools
+  - node: ">=18"
+  - npm: ">=8"
+  - typescript-language-server: ">=2.0"
+  
+  # Optional tools
+  - eslint: ">=8.0"
+  - prettier: ">=2.0"
+  - typescript: ">=5.0"
+
+activation_rules:
+  - language: "javascript"
+    file_extensions: [".js", ".mjs", ".cjs"]
+    build_files: ["package.json", "package-lock.json"]
+    
+  - context: "javascript-project"
+    indicators: ["package.json", "node_modules/", "src/", "dist/"]
+
+behavior:
+  # LSP integration
+  lsp_server: "typescript-language-server"
+  lsp_workspace: "."
+  
+  # Build and test
+  build_on_save: false
+  test_on_save: false
+  lint_on_save: true
+  
+  # Code generation
+  auto_import: true
+  organize_imports: true
+  
+  # Refactoring
+  safe_rename: true
+  extract_function_limit: 50
+  
+  # Formatting
+  format_on_save: true
+  format_style: "prettier"
+  
+  # Node.js features
+  node_env: "development"
+  node_target: "es2020"
+  
+  # JavaScript features
+  allow_js: true
+  jsx_support: false
+  typescript_support: false
+  
+  # ESLint configuration
+  eslint_config: ".eslintrc.js"
+  eslint_ignore: ".eslintignore"

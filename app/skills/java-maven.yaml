@@ -1,0 +1,94 @@
+"""Java Maven skill bundle for B-30 multi-language programming.
+
+This skill bundle provides comprehensive Java development capabilities
+including LSP integration, Maven build/test support, and automated
+formatting/linting through hooks.
+"""
+
+name: java-maven
+description: "Java development with Maven, jdtls LSP, and Google Java Format"
+version: "1.0.0"
+language: java
+tools:
+  # Basic tools
+  - read
+  - write
+  - edit
+  - bash
+  - grep
+  
+  # LSP tools for Java development
+  - lsp_hover
+  - lsp_definition
+  - lsp_references
+  - lsp_rename
+  - lsp_diagnostics
+  - lsp_code_action
+  - lsp_symbol_search
+  
+  # Memory and search tools
+  - ukb_lookup
+  
+build_command: "mvn compile"
+test_command: "mvn test"
+lint_command: "checkstyle"
+format_command: "google-java-format -i"
+
+hooks:
+  - auto-format-google-java-format
+  - auto-lint-checkstyle
+
+refactor_actions:
+  - extract_method
+  - convert_to_record
+  - generate_hashCode_equals
+  - add_missing_interface_methods
+
+default_workspace: "."
+file_extensions:
+  - ".java"
+
+capabilities:
+  - java-development
+  - maven-build
+  - eclipse-jdt
+  - static-analysis
+
+dependencies:
+  # Required tools
+  - jdk: ">=17"
+  - maven: ">=3.8"
+  
+  # Optional tools
+  - google-java-format: ">=1.15"
+  - checkstyle: ">=10.0"
+
+activation_rules:
+  - language: "java"
+    file_extensions: [".java"]
+    build_files: ["pom.xml", "build.gradle", "build.gradle.kts"]
+    
+  - context: "java-project"
+    indicators: ["pom.xml", "src/main/java", "src/test/java"]
+
+behavior:
+  # LSP integration
+  lsp_server: "jdtls"
+  lsp_workspace: ".jdtls"
+  
+  # Build and test
+  build_on_save: false
+  test_on_save: false
+  lint_on_save: true
+  
+  # Code generation
+  auto_import: true
+  organize_imports: true
+  
+  # Refactoring
+  safe_rename: true
+  extract_method_limit: 30
+  
+  # Formatting
+  format_on_save: true
+  format_style: "google"

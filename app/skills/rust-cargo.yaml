@@ -1,0 +1,105 @@
+"""Rust Cargo skill bundle for B-30 multi-language programming.
+
+This skill bundle provides comprehensive Rust development capabilities
+including LSP integration, Cargo build/test support, and automated
+formatting/linting through hooks.
+"""
+
+name: rust-cargo
+description: "Rust development with Cargo, rust-analyzer LSP, and rustfmt"
+version: "1.0.0"
+language: rust
+tools:
+  # Basic tools
+  - read
+  - write
+  - edit
+  - bash
+  - grep
+  
+  # LSP tools for Rust development
+  - lsp_hover
+  - lsp_definition
+  - lsp_references
+  - lsp_rename
+  - lsp_diagnostics
+  - lsp_code_action
+  - lsp_symbol_search
+  
+  # Cargo-specific tools
+  - bash (cargo build)
+  - bash (cargo test)
+  - bash (cargo clippy)
+  - bash (cargo fmt)
+  
+  # Memory and search tools
+  - ukb_lookup
+  
+build_command: "cargo build"
+test_command: "cargo test"
+lint_command: "cargo clippy"
+format_command: "cargo fmt"
+
+hooks:
+  - auto-format-rustfmt
+  - auto-lint-clippy
+
+refactor_actions:
+  - extract_function
+  - convert_to_async
+  - generate_impl_block
+  - fix_clippy_lint
+
+default_workspace: "."
+file_extensions:
+  - ".rs"
+
+capabilities:
+  - rust-development
+  - cargo-build
+  - clippy-linting
+  - async-programming
+
+dependencies:
+  # Required tools
+  - rust: ">=1.70"
+  - cargo: ">=1.70"
+  - rust-analyzer: ">=0.3"
+  
+  # Optional tools
+  - rustfmt: ">=1.5"
+
+activation_rules:
+  - language: "rust"
+    file_extensions: [".rs"]
+    build_files: ["Cargo.toml", "Cargo.lock"]
+    
+  - context: "rust-project"
+    indicators: ["Cargo.toml", "src/", "tests/"]
+
+behavior:
+  # LSP integration
+  lsp_server: "rust-analyzer"
+  lsp_workspace: "."
+  
+  # Build and test
+  build_on_save: false
+  test_on_save: false
+  lint_on_save: true
+  
+  # Code generation
+  auto_import: false  # Rust doesn't need imports
+  organize_imports: false
+  
+  # Refactoring
+  safe_rename: true
+  extract_function_limit: 50
+  
+  # Formatting
+  format_on_save: true
+  format_style: "default"
+  
+  # Cargo features
+  cargo_features: []
+  cargo_target: "debug"
+  cargo_release: false

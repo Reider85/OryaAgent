@@ -1,0 +1,109 @@
+"""Go Modules skill bundle for B-30 multi-language programming.
+
+This skill bundle provides comprehensive Go development capabilities
+including LSP integration, Go modules support, and automated
+formatting/linting through hooks.
+"""
+
+name: go-mod
+description: "Go development with modules, gopls LSP, and gofmt"
+version: "1.0.0"
+language: go
+tools:
+  # Basic tools
+  - read
+  - write
+  - edit
+  - bash
+  - grep
+  
+  # LSP tools for Go development
+  - lsp_hover
+  - lsp_definition
+  - lsp_references
+  - lsp_rename
+  - lsp_diagnostics
+  - lsp_code_action
+  - lsp_symbol_search
+  
+  # Go-specific tools
+  - bash (go build)
+  - bash (go test)
+  - bash (go vet)
+  - bash (gofmt)
+  
+  # Memory and search tools
+  - ukb_lookup
+  
+build_command: "go build ./..."
+test_command: "go test ./..."
+lint_command: "go vet"
+format_command: "gofmt -w"
+
+hooks:
+  - auto-format-gofmt
+  - auto-lint-govet
+
+refactor_actions:
+  - extract_function
+  - convert_to_interface
+  - implement_missing_methods
+  - fix_struct_tag
+
+default_workspace: "."
+file_extensions:
+  - ".go"
+
+capabilities:
+  - go-development
+  - go-modules
+  - static-analysis
+  - interface-generation
+
+dependencies:
+  # Required tools
+  - go: ">=1.21"
+  - gopls: ">=0.15"
+  
+  # Optional tools
+  - gofmt: ">=1.21"
+  - govet: ">=1.21"
+
+activation_rules:
+  - language: "go"
+    file_extensions: [".go"]
+    build_files: ["go.mod", "go.sum"]
+    
+  - context: "go-project"
+    indicators: ["go.mod", "go.sum", "pkg/", "cmd/"]
+
+behavior:
+  # LSP integration
+  lsp_server: "gopls"
+  lsp_workspace: "."
+  
+  # Build and test
+  build_on_save: false
+  test_on_save: false
+  lint_on_save: true
+  
+  # Code generation
+  auto_import: false  # Go doesn't need imports
+  organize_imports: false
+  
+  # Refactoring
+  safe_rename: true
+  extract_function_limit: 100
+  
+  # Formatting
+  format_on_save: true
+  format_style: "default"
+  
+  # Go features
+  go_mod: true
+  go_target: ""
+  go_race: false
+  
+  # Static analysis
+  staticcheck: true
+  govet: true

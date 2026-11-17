@@ -15,6 +15,7 @@ from app.core.tools.triggers import (
     group_tools_by_capability,
     LSP_LANGUAGES,
 )
+from app.tools import bash, edit, glob, grep, read, write
 
 __all__ = [
     "get_capability_registry",
@@ -26,4 +27,14 @@ __all__ = [
     "get_tool_capabilities",
     "group_tools_by_capability",
     "LSP_LANGUAGES",
+    "get_tools",
 ]
+
+
+def get_tools():
+    """Get all available tools in the order they should be used.
+    
+    Returns:
+        List of all available tools in the canonical order.
+    """
+    return [read, write, edit, bash, grep, glob]

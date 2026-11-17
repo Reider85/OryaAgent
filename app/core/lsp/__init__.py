@@ -17,6 +17,18 @@ from .bus import (
     get_lsp_bus,
     initialize_lsp_bus,
 )
+from .config import (
+    LanguageLSPConfig,
+    LANGUAGE_LSP_CONFIGS,
+    get_language_lsp_config,
+    get_supported_languages,
+    detect_language_from_file,
+    get_file_extensions_for_language,
+    get_build_command_for_language,
+    get_test_command_for_language,
+    get_lint_command_for_language,
+    get_format_command_for_language,
+)
 from .watcher import (
     LSPFileWatcher,
     get_file_watcher,
@@ -51,6 +63,18 @@ __all__ = [
     "LSPClient",
     "get_lsp_bus",
     "initialize_lsp_bus",
+    
+    # Per-language LSP configurations
+    "LanguageLSPConfig",
+    "LANGUAGE_LSP_CONFIGS",
+    "get_language_lsp_config",
+    "get_supported_languages",
+    "detect_language_from_file",
+    "get_file_extensions_for_language",
+    "get_build_command_for_language",
+    "get_test_command_for_language",
+    "get_lint_command_for_language",
+    "get_format_command_for_language",
     
     # File watcher
     "LSPFileWatcher",
