@@ -59,7 +59,6 @@ def test_memory_routes_registered(client: TestClient) -> None:
     for path in (
         "/memory/compact",
         "/memory/stats",
-        "/memory",
         "/sessions/{session_id}/memory/compact",
         "/sessions/{session_id}/memory/stats",
         "/sessions/{session_id}/memory",
@@ -67,6 +66,9 @@ def test_memory_routes_registered(client: TestClient) -> None:
         assert path in paths, f"{path} missing from the API (M-27 union contract)"
     assert "post" in paths["/memory/compact"]
     assert "get" in paths["/memory/stats"]
+    # ``GET /memory`` exists but serves the B-16 HTML Memory Management page
+    # (base.html nav link); the JSON cat lives on the session-scoped twin and
+    # is asserted by test_memory_cat_returns_four_files_as_markdown.
     assert "get" in paths["/memory"]
 
 
@@ -184,14 +186,16 @@ async def test_compact_is_audited_without_a_pool(client, monkeypatch) -> None:
     assert "memory.compact" in actions
 
 
-# --- GET /memory (cat) ----------------------------------------------------------
+# --- GET /sessions/{id}/memory (cat) --------------------------------------------
 
 
 def test_memory_cat_returns_four_files_as_markdown(client: TestClient) -> None:
+    """The JSON cat lives on the session-scoped twin (``GET /memory`` itself
+    serves the B-16 HTML Memory Management page since aedab72)."""
     _fill_store("LEARNED.md", [_learned("the learned fact")])
     _fill_store("FACTS.md", ["PostgreSQL 16"])
 
-    payload = client.get("/memory").json()
+    payload = client.get("/sessions/sess-1/memory").json()
 
     assert set(payload["files"]) == {
         "LEARNED.md",
@@ -220,7 +224,12 @@ def test_session_scoped_paths_share_the_global_handlers(client: TestClient) -> N
 
     assert stats.status_code == content.status_code == compact.status_code == 200
     assert stats.json()["files"] == client.get("/memory/stats").json()["files"]
-    assert content.json()["markdown"] == client.get("/memory").json()["markdown"]
+    # Content has no global JSON twin (``GET /memory`` is the B-16 HTML page),
+    # so sharing is proven across two session ids instead.
+    assert (
+        content.json()["markdown"]
+        == client.get("/sessions/sess-2/memory").json()["markdown"]
+    )
     assert [r["file"] for r in compact.json()["results"]] == [
         r["file"] for r in client.post("/memory/compact").json()["results"]
     ]

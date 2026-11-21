@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import logging
-from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from app.core.skills import get_skill_registry
 from app.core.security import get_current_user
-from app.core.observability.spans import emit_span
+from app.core.skills import get_skill_registry
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ui/skills", tags=["skills-ui"])
@@ -185,7 +182,7 @@ async def skills_activate_ui(
             )
 
         # Activate skill
-        activated_items = await registry.activate_skill(skill_name)
+        await registry.activate_skill(skill_name)
 
         # Redirect to skills list with success message
         return RedirectResponse("/ui/skills/", status_code=303)
@@ -210,7 +207,7 @@ async def skills_deactivate_ui(
         registry = await get_skill_registry()
 
         # Deactivate skill
-        deactivated_items = await registry.deactivate_skill(skill_name)
+        await registry.deactivate_skill(skill_name)
 
         # Redirect to skills list with success message
         return RedirectResponse("/ui/skills/", status_code=303)
@@ -268,7 +265,7 @@ async def skills_validate_post(
     """Validate a skill via UI."""
     try:
         registry = await get_skill_registry()
-        validation_result = await registry.validate_skill(skill_name)
+        await registry.validate_skill(skill_name)
 
         # Redirect to validation page with result
         return RedirectResponse(f"/ui/skills/validation/{skill_name}", status_code=303)
@@ -353,8 +350,8 @@ async def skills_export_post(
         registry = await get_skill_registry()
 
         # Export skills to a file
-        import tempfile
         import os
+        import tempfile
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             temp_file = f.name
@@ -362,7 +359,7 @@ async def skills_export_post(
         registry.export_skills(temp_file)
 
         # Read the exported content
-        with open(temp_file, "r") as f:
+        with open(temp_file) as f:
             exported_content = f.read()
 
         # Clean up temp file

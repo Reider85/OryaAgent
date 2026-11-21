@@ -117,6 +117,30 @@ def test_start_scripts_fall_back_on_busy_db_ports():
         )
 
 
+def test_start_scripts_force_selector_event_loop():
+    """Windows default uvicorn runs ProactorEventLoop, which psycopg (the
+    LangGraph checkpointer) refuses — both scripts must pass the same
+    ``--loop`` seam `make dev` uses."""
+    for path in (START_SH, START_PS1):
+        assert "app.core.loop_factory:selector_loop_factory" in _read(path), (
+            f"{path.name}: uvicorn must be started with the selector loop"
+        )
+
+
+def test_start_and_stop_scripts_manage_the_mcp_process():
+    """Local mode runs oriahs-mcp on :8765 (parity with the stack); stop must
+    kill it by pid file and sweep the port."""
+    for path in (START_SH, START_PS1):
+        text = _read(path)
+        assert "app.mcp.oriahs_mcp" in text, f"{path.name}: must spawn oriahs-mcp"
+        assert "mcp.pid" in text, f"{path.name}: must record the MCP pid"
+        assert "8765" in text, f"{path.name}: must health-wait :8765"
+    for path in (STOP_SH, STOP_PS1):
+        text = _read(path)
+        assert "mcp.pid" in text, f"{path.name}: must stop the MCP pid file"
+        assert "8765" in text, f"{path.name}: must sweep port 8765"
+
+
 # --- syntax -----------------------------------------------------------------
 
 

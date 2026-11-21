@@ -1,19 +1,31 @@
 """Tests for RetrievalOrchestrator components."""
 
 import pytest
-import asyncio
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-from pathlib import Path
 
-from app.core.retrieval.orchestrator import (
-    get_retrieval_orchestrator,
-    initialize_retrieval_orchestrator,
+# Legacy pre-B-28 API: RetrievalRequest and the UKB/Semantic/Lexical/Hybrid
+# strategy classes were replaced by the heuristics engine + the
+# app/core/retrieval/strategies package (BaseStrategy/Standard/...), and no
+# production symbol in this file's import list exists anymore. The current
+# API is covered by test_retrieval_orchestrator.py — this file is retained
+# for the original spec trace but must not import the removed names (it
+# aborted collection for the whole suite).
+pytest.skip(
+    "legacy pre-B-28 retrieval API (RetrievalRequest/UKB... strategies removed); "
+    "current API covered by test_retrieval_orchestrator.py",
+    allow_module_level=True,
+)
+
+from unittest.mock import AsyncMock, Mock, patch  # noqa: E402
+
+from app.core.retrieval.orchestrator import (  # noqa: E402
+    HybridRetrievalStrategy,
+    LexicalRetrievalStrategy,
     RetrievalOrchestrator,
     RetrievalRequest,
-    UKBRetrievalStrategy,
     SemanticRetrievalStrategy,
-    LexicalRetrievalStrategy,
-    HybridRetrievalStrategy,
+    UKBRetrievalStrategy,
+    get_retrieval_orchestrator,
+    initialize_retrieval_orchestrator,
 )
 
 

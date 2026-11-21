@@ -6,9 +6,8 @@ Provides REST API for accessing SQLiteStore data.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.core.sqlite_store import get_sqlite_store

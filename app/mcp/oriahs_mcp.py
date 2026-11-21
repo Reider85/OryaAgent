@@ -1,6 +1,17 @@
 """MCP server: oriahs-mcp (B-01) - OriaHS semantic search MCP server.
 
 Wraps OriaHS API as an MCP server providing semantic codebase search capabilities.
+
+Two transports (B-02 wires the HTTP one):
+
+* **HTTP (default)** — ``GET /health``, ``GET /tools``, ``POST /call`` exactly
+  as ``app/mcp/client.py`` expects, and as the compose/Docker healthchecks
+  probe them. The pre-B-01 container ran the stdio transport while everything
+  around it spoke HTTP, so ``api``/``chainlit`` (``depends_on:
+  service_healthy``) could never start. Bind with ``--host``/``--port``
+  (containers pass ``--host 0.0.0.0``).
+* **stdio** (``--stdio``) — the classic MCP stdio transport for external MCP
+  clients that spawn the process themselves.
 """
 
 from __future__ import annotations
@@ -8,9 +19,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 import httpx
+from fastapi import FastAPI, HTTPException
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import (
@@ -20,6 +33,7 @@ from mcp.types import (
     TextContent,
     Tool,
 )
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -326,29 +340,132 @@ class OriaHSMCPServer:
 
 
 async def run_server(config: OriaHSConfig):
-    """Run the OriaHS MCP server."""
+    """Run the OriaHS MCP server (stdio transport)."""
     server = OriaHSMCPServer(config)
 
     async with stdio_server() as (read_stream, write_stream):
         await server.server.run(read_stream, write_stream)
 
 
-if __name__ == "__main__":
+class CallPayload(BaseModel):
+    """Body of ``POST /call`` — the shape app/mcp/client.py posts."""
+
+    name: str
+    arguments: dict[str, Any] = {}
+
+
+def create_http_app(config: OriaHSConfig) -> FastAPI:
+    """HTTP transport matching ``app/mcp/client.py``'s REST contract (B-02).
+
+    ``GET /health`` is **pure liveness**: the compose ``api`` service waits on
+    ``oriahs-mcp: service_healthy`` while the OriaHS backend itself may
+    legitimately be absent from the stack — probing the backend here would
+    deadlock the whole app profile. Backend failures surface per call as
+    HTTP 502 (``MCPClient`` raises ``raise_for_status`` → the tools report
+    ``Search failed`` / ``Indexing failed`` and the recover node takes over).
+
+    ``POST /call`` unwraps each ``TextContent`` block: ``TextContent.text``
+    carries a JSON payload (``{"score", "path", ...}``) which the client's
+    callers (``oriahs_search`` / ``oriahs_index``) expect as a flat dict, not
+    as an MCP content envelope.
+    """
+    server = OriaHSMCPServer(config)
+    app = FastAPI(title="oriahs-mcp", version="1.0.0")
+
+    @app.get("/health")
+    async def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get("/tools")
+    async def list_tools_http() -> dict[str, Any]:
+        result = await server.list_tools()
+        return {"tools": [tool.model_dump() for tool in result.tools]}
+
+    @app.post("/call")
+    async def call_tool_http(payload: CallPayload) -> dict[str, Any]:
+        request = CallToolRequest(
+            params={"name": payload.name, "arguments": payload.arguments}
+        )
+        result = await server.call_tool(request)
+        if result.isError:
+            detail = (
+                " | ".join(
+                    getattr(block, "text", str(block)) for block in result.content
+                )
+                or f"tool {payload.name!r} failed"
+            )
+            logger.error("OriaHS tool %r failed: %s", payload.name, detail)
+            raise HTTPException(status_code=502, detail=detail)
+
+        content: list[Any] = []
+        for block in result.content:
+            text = getattr(block, "text", None)
+            if text is None:
+                content.append(block.model_dump())
+                continue
+            try:
+                content.append(json.loads(text))
+            except (json.JSONDecodeError, TypeError):
+                content.append(text)
+        return {"content": content}
+
+    return app
+
+
+def _build_config() -> OriaHSConfig:
+    """OriaHSConfig from the environment (same vars as before)."""
     import os
 
-    # Configuration from environment
-    config = OriaHSConfig(
+    return OriaHSConfig(
         base_url=os.getenv("ORIAHS_BASE_URL", "http://localhost:8000"),
         token=os.getenv("ORIAHS_TOKEN"),
         timeout=float(os.getenv("ORIAHS_TIMEOUT", "10.0")),
     )
 
-    async def main():
-        try:
-            await run_server(config)
-        except KeyboardInterrupt:
-            print("Shutting down OriaHS MCP server...")
-        finally:
-            await config.close()
 
-    asyncio.run(main())
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="python -m app.mcp.oriahs_mcp",
+        description=(
+            "OriaHS MCP server. HTTP transport by default "
+            "(/health, /tools, /call for app/mcp/client.py); "
+            "--stdio runs the classic MCP stdio transport."
+        ),
+    )
+    parser.add_argument(
+        "--stdio",
+        action="store_true",
+        help="run the MCP stdio transport instead of HTTP",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="HTTP bind address (default 127.0.0.1; containers use 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8765,
+        help="HTTP port (default 8765)",
+    )
+    args = parser.parse_args()
+
+    config = _build_config()
+
+    if args.stdio:
+
+        async def _stdio_main() -> None:
+            try:
+                await run_server(config)
+            except KeyboardInterrupt:
+                print("Shutting down OriaHS MCP server...")
+            finally:
+                await config.close()
+
+        asyncio.run(_stdio_main())
+    else:
+        import uvicorn
+
+        uvicorn.run(create_http_app(config), host=args.host, port=args.port)

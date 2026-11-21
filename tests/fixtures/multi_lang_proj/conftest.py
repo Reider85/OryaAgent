@@ -1,9 +1,9 @@
 """Test fixtures for B-30 multi-language projects."""
 
-import pytest
-from pathlib import Path
 import tempfile
-import os
+from pathlib import Path
+
+import pytest
 
 
 @pytest.fixture
@@ -11,14 +11,14 @@ def java_project():
     """Create a temporary Java project for testing."""
     with tempfile.TemporaryDirectory() as temp_dir:
         project_path = Path(temp_dir)
-        
+
         # Create basic Java project structure
         src_main_java = project_path / "src" / "main" / "java"
         src_main_java.mkdir(parents=True)
-        
+
         src_test_java = project_path / "src" / "test" / "java"
         src_test_java.mkdir(parents=True)
-        
+
         # Create pom.xml
         pom_xml = project_path / "pom.xml"
         pom_xml.write_text("""<?xml version="1.0" encoding="UTF-8"?>
@@ -40,7 +40,7 @@ def java_project():
         </dependency>
     </dependencies>
 </project>""")
-        
+
         # Create a simple Java class
         main_class = src_main_java / "Main.java"
         main_class.write_text("""package com.example;
@@ -49,13 +49,13 @@ public class Main {
     public static void main(String[] args) {
         System.out.println("Hello, World!");
     }
-    
+
     public void greet(String name) {
         System.out.println("Hello, " + name + "!");
     }
 }
 """)
-        
+
         # Create a test class
         test_class = src_test_java / "MainTest.java"
         test_class.write_text("""package com.example;
@@ -71,7 +71,7 @@ class MainTest {
     }
 }
 """)
-        
+
         yield project_path
 
 
@@ -80,11 +80,11 @@ def rust_project():
     """Create a temporary Rust project for testing."""
     with tempfile.TemporaryDirectory() as temp_dir:
         project_path = Path(temp_dir)
-        
+
         # Create basic Rust project structure
         src_dir = project_path / "src"
         src_dir.mkdir()
-        
+
         # Create Cargo.toml
         cargo_toml = project_path / "Cargo.toml"
         cargo_toml.write_text("""[package]
@@ -94,7 +94,7 @@ edition = "2021"
 
 [dependencies]
 """)
-        
+
         # Create main.rs
         main_rs = src_dir / "main.rs"
         main_rs.write_text("""fn main() {
@@ -116,7 +116,7 @@ mod tests {
     }
 }
 """)
-        
+
         yield project_path
 
 
@@ -125,14 +125,14 @@ def go_project():
     """Create a temporary Go project for testing."""
     with tempfile.TemporaryDirectory() as temp_dir:
         project_path = Path(temp_dir)
-        
+
         # Create basic Go project structure
         cmd_dir = project_path / "cmd" / "server"
         cmd_dir.mkdir(parents=True)
-        
+
         pkg_dir = project_path / "pkg" / "handler"
         pkg_dir.mkdir(parents=True)
-        
+
         # Create go.mod
         go_mod = project_path / "go.mod"
         go_mod.write_text("""module example.com/test-project
@@ -142,7 +142,7 @@ go 1.21
 require (
 )
 """)
-        
+
         # Create main.go
         main_go = cmd_dir / "main.go"
         main_go.write_text("""package main
@@ -157,7 +157,7 @@ func main() {
     handler.Greet("World")
 }
 """)
-        
+
         # Create handler.go
         handler_go = pkg_dir / "handler.go"
         handler_go.write_text("""package handler
@@ -168,7 +168,7 @@ func Greet(name string) {
     fmt.Printf("Hello, %s!\\n", name)
 }
 """)
-        
+
         yield project_path
 
 
@@ -177,11 +177,11 @@ def javascript_project():
     """Create a temporary JavaScript project for testing."""
     with tempfile.TemporaryDirectory() as temp_dir:
         project_path = Path(temp_dir)
-        
+
         # Create basic JavaScript project structure
         src_dir = project_path / "src"
         src_dir.mkdir()
-        
+
         # Create package.json
         package_json = project_path / "package.json"
         package_json.write_text("""{
@@ -199,7 +199,7 @@ def javascript_project():
     "prettier": "^2.0.0"
   }
 }""")
-        
+
         # Create a simple JavaScript file
         main_js = src_dir / "main.js"
         main_js.write_text("""function greet(name) {
@@ -213,7 +213,7 @@ function main() {
 
 main();
 """)
-        
+
         # Create a test file
         test_js = src_dir / "main.test.js"
         test_js.write_text("""import { greet } from './main.js';
@@ -225,7 +225,7 @@ function testGreet() {
 
 testGreet();
 """)
-        
+
         yield project_path
 
 
@@ -234,14 +234,14 @@ def frontend_project():
     """Create a temporary Frontend project for testing."""
     with tempfile.TemporaryDirectory() as temp_dir:
         project_path = Path(temp_dir)
-        
+
         # Create basic Frontend project structure
         src_dir = project_path / "src"
         src_dir.mkdir()
-        
+
         public_dir = project_path / "public"
         public_dir.mkdir()
-        
+
         # Create package.json
         package_json = project_path / "package.json"
         package_json.write_text("""{
@@ -263,7 +263,7 @@ def frontend_project():
     "eslint-plugin-react-hooks": "^4.0.0"
   }
 }""")
-        
+
         # Create tsconfig.json
         tsconfig_json = project_path / "tsconfig.json"
         tsconfig_json.write_text("""{
@@ -285,7 +285,7 @@ def frontend_project():
   },
   "include": ["src"]
 }""")
-        
+
         # Create a simple React component
         app_tsx = src_dir / "App.tsx"
         app_tsx.write_text("""import React from 'react';
@@ -307,7 +307,7 @@ function App({ name }: AppProps) {
 
 export default App;
 """)
-        
+
         # Create a test file
         app_test_tsx = src_dir / "App.test.tsx"
         app_test_tsx.write_text("""import React from 'react';
@@ -320,7 +320,7 @@ test('renders greeting', () => {
   expect(heading).toBeInTheDocument();
 });
 """)
-        
+
         yield project_path
 
 
@@ -329,11 +329,11 @@ def multi_language_project():
     """Create a temporary multi-language project for testing."""
     with tempfile.TemporaryDirectory() as temp_dir:
         project_path = Path(temp_dir)
-        
+
         # Create Java part
         java_src = project_path / "java" / "src" / "main" / "java"
         java_src.mkdir(parents=True)
-        
+
         java_main = java_src / "Main.java"
         java_main.write_text("""package com.example;
 
@@ -343,21 +343,21 @@ public class Main {
     }
 }
 """)
-        
+
         # Create Rust part
         rust_src = project_path / "rust" / "src"
         rust_src.mkdir()
-        
+
         rust_main = rust_src / "main.rs"
         rust_main.write_text("""fn main() {
     println!("Hello from Rust!");
 }
 """)
-        
+
         # Create Go part
         go_src = project_path / "go" / "cmd" / "server"
         go_src.mkdir(parents=True)
-        
+
         go_main = go_src / "main.go"
         go_main.write_text("""package main
 
@@ -367,11 +367,11 @@ func main() {
     fmt.Println("Hello from Go!")
 }
 """)
-        
+
         # Create JavaScript part
         js_src = project_path / "javascript" / "src"
         js_src.mkdir()
-        
+
         js_main = js_src / "main.js"
         js_main.write_text("""function main() {
     console.log("Hello from JavaScript!");
@@ -379,11 +379,11 @@ func main() {
 
 main();
 """)
-        
+
         # Create Frontend part
         frontend_src = project_path / "frontend" / "src"
         frontend_src.mkdir()
-        
+
         frontend_app = frontend_src / "App.tsx"
         frontend_app.write_text("""import React from 'react';
 
@@ -397,7 +397,7 @@ function App() {
 
 export default App;
 """)
-        
+
         yield project_path
 
 
@@ -406,7 +406,7 @@ def mixed_file_types():
     """Create a temporary directory with mixed file types for testing."""
     with tempfile.TemporaryDirectory() as temp_dir:
         project_path = Path(temp_dir)
-        
+
         # Create various file types
         files = {
             "src/Main.java": "public class Main { }",
@@ -419,13 +419,13 @@ def mixed_file_types():
             "pom.xml": "<project></project>",
             "Cargo.toml": "[package]",
             "go.mod": "module test",
-            "package.json": "{ \"name\": \"test\" }",
-            "tsconfig.json": "{ \"compilerOptions\": {} }",
+            "package.json": '{ "name": "test" }',
+            "tsconfig.json": '{ "compilerOptions": {} }',
         }
-        
+
         for file_path, content in files.items():
             full_path = project_path / file_path
             full_path.parent.mkdir(parents=True, exist_ok=True)
             full_path.write_text(content)
-        
+
         yield project_path

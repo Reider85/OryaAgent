@@ -6,14 +6,11 @@ import asyncio
 import json
 import logging
 import os
-import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import redis.asyncio as redis
 from pydantic import BaseModel
-
-from app.core.observability.spans import emit_span
 
 logger = logging.getLogger(__name__)
 
@@ -22,16 +19,16 @@ class LSPServerConfig(BaseModel):
     """Configuration for LSP server."""
 
     language: str
-    command: List[str]
-    init_options: Dict[str, Any] = {}
-    file_extensions: List[str] = []
-    workspace_root: Optional[Path] = None
-    env: Dict[str, str] = {}
+    command: list[str]
+    init_options: dict[str, Any] = {}
+    file_extensions: list[str] = []
+    workspace_root: Path | None = None
+    env: dict[str, str] = {}
     timeout: int = 30
     max_restarts: int = 3
     restart_delay: int = 5
 
-    def get_command_with_args(self, workspace_root: Path) -> List[str]:
+    def get_command_with_args(self, workspace_root: Path) -> list[str]:
         """Get command with workspace arguments."""
         cmd = self.command.copy()
 
@@ -53,11 +50,11 @@ class LSPClient:
 
     def __init__(self, config: LSPServerConfig):
         self.config = config
-        self.process: Optional[asyncio.subprocess.Process] = None
-        self.reader: Optional[asyncio.StreamReader] = None
-        self.writer: Optional[asyncio.StreamWriter] = None
+        self.process: asyncio.subprocess.Process | None = None
+        self.reader: asyncio.StreamReader | None = None
+        self.writer: asyncio.StreamWriter | None = None
         self.request_id = 0
-        self.pending_requests: Dict[int, asyncio.Future] = {}
+        self.pending_requests: dict[int, asyncio.Future] = {}
         self.is_running = False
         self.restart_count = 0
 
@@ -118,7 +115,7 @@ class LSPClient:
                 self.process.terminate()
                 try:
                     await asyncio.wait_for(self.process.wait(), timeout=5)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     self.process.kill()
                     await self.process.wait()
 
@@ -175,8 +172,8 @@ class LSPClient:
         return init_result
 
     async def _send_request(
-        self, method: str, params: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, method: str, params: dict[str, Any]
+    ) -> dict[str, Any]:
         """Send JSON-RPC request."""
         if not self.writer:
             raise RuntimeError("LSP server not running")
@@ -201,12 +198,12 @@ class LSPClient:
         try:
             result = await asyncio.wait_for(future, timeout=self.config.timeout)
             return result
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise TimeoutError(f"LSP request {method} timed out")
         finally:
             self.pending_requests.pop(self.request_id, None)
 
-    async def _send_notification(self, method: str, params: Dict[str, Any]) -> None:
+    async def _send_notification(self, method: str, params: dict[str, Any]) -> None:
         """Send JSON-RPC notification."""
         if not self.writer:
             return
@@ -250,7 +247,7 @@ class LSPClient:
             logger.warning(f"LSP server disconnected for {self.config.language}")
             self.is_running = False
 
-    async def _handle_message(self, message: Dict[str, Any]) -> None:
+    async def _handle_message(self, message: dict[str, Any]) -> None:
         """Handle incoming LSP message."""
         if "id" in message:
             # Response to request
@@ -284,7 +281,7 @@ class LSPClient:
         )
 
     async def did_change(
-        self, file_path: Path, content_changes: List[Dict[str, Any]]
+        self, file_path: Path, content_changes: list[dict[str, Any]]
     ) -> None:
         """Send textDocument/didChange notification."""
         await self._send_notification(
@@ -309,7 +306,7 @@ class LSPClient:
             },
         )
 
-    async def hover(self, file_path: Path, position: Dict[str, int]) -> Dict[str, Any]:
+    async def hover(self, file_path: Path, position: dict[str, int]) -> dict[str, Any]:
         """Send textDocument/hover request."""
         return await self._send_request(
             "textDocument/hover",
@@ -320,8 +317,8 @@ class LSPClient:
         )
 
     async def definition(
-        self, file_path: Path, position: Dict[str, int]
-    ) -> Dict[str, Any]:
+        self, file_path: Path, position: dict[str, int]
+    ) -> dict[str, Any]:
         """Send textDocument/definition request."""
         return await self._send_request(
             "textDocument/definition",
@@ -332,8 +329,8 @@ class LSPClient:
         )
 
     async def references(
-        self, file_path: Path, position: Dict[str, int], context: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, file_path: Path, position: dict[str, int], context: dict[str, Any]
+    ) -> dict[str, Any]:
         """Send textDocument/references request."""
         return await self._send_request(
             "textDocument/references",
@@ -344,7 +341,7 @@ class LSPClient:
             },
         )
 
-    async def symbol_search(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    async def symbol_search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         """Send workspace/symbol request."""
         return await self._send_request(
             "workspace/symbol",
@@ -355,8 +352,8 @@ class LSPClient:
         )
 
     async def rename(
-        self, file_path: Path, position: Dict[str, int], new_name: str
-    ) -> Dict[str, Any]:
+        self, file_path: Path, position: dict[str, int], new_name: str
+    ) -> dict[str, Any]:
         """Send textDocument/rename request."""
         return await self._send_request(
             "textDocument/rename",
@@ -367,7 +364,7 @@ class LSPClient:
             },
         )
 
-    async def diagnostics(self, file_path: Path) -> List[Dict[str, Any]]:
+    async def diagnostics(self, file_path: Path) -> list[dict[str, Any]]:
         """Get diagnostics for a file."""
         return await self._send_request(
             "textDocument/diagnostic",
@@ -377,8 +374,8 @@ class LSPClient:
         )
 
     async def code_action(
-        self, file_path: Path, range: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+        self, file_path: Path, range: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         """Send textDocument/codeAction request."""
         return await self._send_request(
             "textDocument/codeAction",
@@ -394,8 +391,8 @@ class LSPBus:
 
     def __init__(self, redis_client: redis.Redis = None):
         self.redis_client = redis_client
-        self.servers: Dict[str, LSPClient] = {}
-        self.server_configs: Dict[str, LSPServerConfig] = {}
+        self.servers: dict[str, LSPClient] = {}
+        self.server_configs: dict[str, LSPServerConfig] = {}
         self.is_running = False
 
         # Initialize server configurations
@@ -474,8 +471,8 @@ class LSPBus:
                 command=["lua-language-server"],
                 init_options={
                     "Lua.workspace.library": {
-                        "/usr/share/lua/5.4/?.lua": true,
-                        "/usr/share/lua/5.4/?/init.lua": true,
+                        "/usr/share/lua/5.4/?.lua": True,
+                        "/usr/share/lua/5.4/?/init.lua": True,
                     },
                 },
                 file_extensions=[".lua"],
@@ -545,7 +542,7 @@ class LSPBus:
             await server.stop()
             raise
 
-    async def get_server(self, language: str, workspace: Path) -> Optional[LSPClient]:
+    async def get_server(self, language: str, workspace: Path) -> LSPClient | None:
         """Get LSP server if running."""
         if language in self.servers:
             server = self.servers[language]
@@ -593,17 +590,17 @@ class LSPBus:
             return self.servers[language].is_running
         return False
 
-    def get_supported_languages(self) -> List[str]:
+    def get_supported_languages(self) -> list[str]:
         """Get list of supported languages."""
         return list(self.server_configs.keys())
 
-    def get_file_extensions(self, language: str) -> List[str]:
+    def get_file_extensions(self, language: str) -> list[str]:
         """Get file extensions for language."""
         if language in self.server_configs:
             return self.server_configs[language].file_extensions
         return []
 
-    def detect_language(self, file_path: Path) -> Optional[str]:
+    def detect_language(self, file_path: Path) -> str | None:
         """Detect language from file extension."""
         extension = file_path.suffix.lower()
 
@@ -615,7 +612,7 @@ class LSPBus:
 
 
 # Global LSP bus instance
-_lsp_bus: Optional[LSPBus] = None
+_lsp_bus: LSPBus | None = None
 
 
 def get_lsp_bus() -> LSPBus:

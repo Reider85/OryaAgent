@@ -6,9 +6,9 @@ Provides settings management for the Web UI.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.core.config import get_settings
@@ -27,8 +27,8 @@ class SettingsModel(BaseModel):
     llm_model: str
     temperature: float
     max_tokens: int
-    permission_policy: Dict[str, Any]
-    active_skills: List[str]
+    permission_policy: dict[str, Any]
+    active_skills: list[str]
 
 
 class LLMProviderModel(BaseModel):
@@ -36,7 +36,7 @@ class LLMProviderModel(BaseModel):
 
     name: str
     display_name: str
-    models: List[str]
+    models: list[str]
     default_model: str
     description: str
 
@@ -46,7 +46,6 @@ class SettingsPanel:
 
     def __init__(self):
         self.settings = get_settings()
-        self.skill_registry = get_skill_registry()
         self.permission_policy = PermissionPolicy()
 
     async def get_settings(self) -> SettingsModel:
@@ -60,7 +59,8 @@ class SettingsPanel:
 
             # Get active skills
             active_skills = []
-            skills = self.skill_registry.list_skills()
+            registry = await get_skill_registry()
+            skills = registry.list_skills()
             for skill in skills:
                 if skill.is_active:
                     active_skills.append(skill.name)
@@ -80,7 +80,7 @@ class SettingsPanel:
                 status_code=500, detail=f"Failed to get settings: {str(e)}"
             )
 
-    async def update_settings(self, settings: SettingsModel) -> Dict[str, Any]:
+    async def update_settings(self, settings: SettingsModel) -> dict[str, Any]:
         """Update settings."""
         try:
             # Update LLM settings
@@ -97,7 +97,8 @@ class SettingsPanel:
             # Update active skills
             for skill_name in settings.active_skills:
                 try:
-                    self.skill_registry.activate_skill(skill_name)
+                    registry = await get_skill_registry()
+                    await registry.activate_skill(skill_name)
                 except Exception as e:
                     logger.warning(f"Failed to activate skill {skill_name}: {e}")
 
@@ -109,7 +110,7 @@ class SettingsPanel:
                 status_code=500, detail=f"Failed to update settings: {str(e)}"
             )
 
-    async def get_llm_providers(self) -> List[LLMProviderModel]:
+    async def get_llm_providers(self) -> list[LLMProviderModel]:
         """Get available LLM providers."""
         try:
             # This would typically come from configuration
@@ -156,10 +157,11 @@ class SettingsPanel:
                 status_code=500, detail=f"Failed to get LLM providers: {str(e)}"
             )
 
-    async def get_available_skills(self) -> List[Dict[str, Any]]:
+    async def get_available_skills(self) -> list[dict[str, Any]]:
         """Get available skills."""
         try:
-            skills = self.skill_registry.list_skills()
+            registry = await get_skill_registry()
+            skills = registry.list_skills()
             return [
                 {
                     "name": skill.name,
@@ -180,7 +182,7 @@ class SettingsPanel:
                 status_code=500, detail=f"Failed to get available skills: {str(e)}"
             )
 
-    async def get_permission_policy(self) -> Dict[str, Any]:
+    async def get_permission_policy(self) -> dict[str, Any]:
         """Get current permission policy."""
         try:
             return self.permission_policy.get_policy_config()
@@ -191,7 +193,7 @@ class SettingsPanel:
                 status_code=500, detail=f"Failed to get permission policy: {str(e)}"
             )
 
-    async def update_permission_policy(self, policy: Dict[str, Any]) -> Dict[str, Any]:
+    async def update_permission_policy(self, policy: dict[str, Any]) -> dict[str, Any]:
         """Update permission policy."""
         try:
             self.permission_policy.update_policy(policy)
@@ -206,7 +208,7 @@ class SettingsPanel:
                 status_code=500, detail=f"Failed to update permission policy: {str(e)}"
             )
 
-    async def validate_settings(self, settings: SettingsModel) -> Dict[str, Any]:
+    async def validate_settings(self, settings: SettingsModel) -> dict[str, Any]:
         """Validate settings before applying."""
         try:
             errors = []
@@ -222,9 +224,8 @@ class SettingsPanel:
                 errors.append("Max tokens must be between 1 and 100000")
 
             # Validate skills
-            available_skills = [
-                skill.name for skill in self.skill_registry.list_skills()
-            ]
+            registry = await get_skill_registry()
+            available_skills = [skill.name for skill in registry.list_skills()]
             for skill_name in settings.active_skills:
                 if skill_name not in available_skills:
                     errors.append(f"Skill not available: {skill_name}")
@@ -295,7 +296,7 @@ async def get_permission_policy():
 
 
 @router.put("/settings/permission-policy")
-async def update_permission_policy(policy: Dict[str, Any]):
+async def update_permission_policy(policy: dict[str, Any]):
     """Update permission policy."""
     settings_panel = get_settings_panel()
     return await settings_panel.update_permission_policy(policy)

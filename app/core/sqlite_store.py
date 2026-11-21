@@ -10,7 +10,7 @@ import sqlite3
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import aiosqlite
 
@@ -22,20 +22,23 @@ logger = logging.getLogger(__name__)
 class SQLiteStore:
     """Simple SQLite-based key-value store with support for JSON data."""
 
-    def __init__(self, db_path: Optional[Union[str, Path]] = None):
+    def __init__(self, db_path: str | Path | None = None):
         """Initialize the SQLite store."""
         settings = get_settings()
-        
-        # Use default path if not provided
+
+        # Use default path if not provided.
+        # There is no `data_dir` Settings field (pydantic raises AttributeError
+        # on it): anchor the store next to the L0 memory dir — `~/.orya` by
+        # default, and whatever ORYA_MEMORY_DIR points at in sandboxed tests.
         if db_path is None:
-            db_path = Path(settings.data_dir) / "orya_store.db"
-        
+            db_path = Path(settings.memory_dir).parent / "orya_store.db"
+
         self.db_path = Path(db_path)
         self._lock = threading.Lock()
-        
+
         # Ensure data directory exists
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         # Initialize database tables
         self._init_tables()
 
@@ -56,7 +59,7 @@ class SQLiteStore:
                     metadata TEXT
                 )
             """)
-            
+
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS skills_metadata (
                     name TEXT PRIMARY KEY,
@@ -75,7 +78,7 @@ class SQLiteStore:
                     validation_status TEXT
                 )
             """)
-            
+
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS skills_dependencies (
                     skill_name TEXT,
@@ -84,40 +87,42 @@ class SQLiteStore:
                     PRIMARY KEY (skill_name, dependency_name)
                 )
             """)
-            
+
             conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_hooks_audit_session_id 
+                CREATE INDEX IF NOT EXISTS idx_hooks_audit_session_id
                 ON hooks_audit(session_id)
             """)
-            
+
             conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_hooks_audit_tool_name 
+                CREATE INDEX IF NOT EXISTS idx_hooks_audit_tool_name
                 ON hooks_audit(tool_name)
             """)
-            
+
             conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_hooks_audit_hook_name 
+                CREATE INDEX IF NOT EXISTS idx_hooks_audit_hook_name
                 ON hooks_audit(hook_name)
             """)
-            
+
             conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_hooks_audit_timestamp 
+                CREATE INDEX IF NOT EXISTS idx_hooks_audit_timestamp
                 ON hooks_audit(timestamp)
             """)
-            
+
             conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_skills_metadata_category 
+                CREATE INDEX IF NOT EXISTS idx_skills_metadata_category
                 ON skills_metadata(category)
             """)
-            
+
             conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_skills_metadata_is_active 
+                CREATE INDEX IF NOT EXISTS idx_skills_metadata_is_active
                 ON skills_metadata(is_active)
             """)
-            
+
             conn.commit()
 
-    async def _execute_query(self, query: str, params: tuple = ()) -> List[Dict[str, Any]]:
+    async def _execute_query(
+        self, query: str, params: tuple = ()
+    ) -> list[dict[str, Any]]:
         """Execute a query and return results as dictionaries."""
         async with aiosqlite.connect(self.db_path) as conn:
             conn.row_factory = aiosqlite.Row
@@ -147,15 +152,15 @@ class SQLiteStore:
             return cursor.rowcount
 
     # Hooks Audit Methods
-    async def add_hook_execution(self, execution_data: Dict[str, Any]) -> str:
+    async def add_hook_execution(self, execution_data: dict[str, Any]) -> str:
         """Add a hook execution record."""
         query = """
             INSERT INTO hooks_audit (
-                id, session_id, tool_name, hook_name, hook_type, 
+                id, session_id, tool_name, hook_name, hook_type,
                 success, message, duration_ms, timestamp, metadata
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
-        
+
         params = (
             execution_data.get("id"),
             execution_data.get("session_id"),
@@ -168,11 +173,11 @@ class SQLiteStore:
             execution_data.get("timestamp"),
             execution_data.get("metadata", {}),
         )
-        
+
         await self._execute_insert(query, params)
         return execution_data.get("id", "")
 
-    async def get_hook_execution(self, execution_id: str) -> Optional[Dict[str, Any]]:
+    async def get_hook_execution(self, execution_id: str) -> dict[str, Any] | None:
         """Get a specific hook execution record."""
         query = "SELECT * FROM hooks_audit WHERE id = ?"
         results = await self._execute_query(query, (execution_id,))
@@ -180,58 +185,58 @@ class SQLiteStore:
 
     async def get_hook_executions(
         self,
-        session_id: Optional[str] = None,
-        tool_name: Optional[str] = None,
-        hook_name: Optional[str] = None,
-        hook_type: Optional[str] = None,
-        success: Optional[bool] = None,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        session_id: str | None = None,
+        tool_name: str | None = None,
+        hook_name: str | None = None,
+        hook_type: str | None = None,
+        success: bool | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         limit: int = 100,
-        offset: int = 0
-    ) -> List[Dict[str, Any]]:
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
         """Get hook execution records with optional filtering."""
         query_parts = ["SELECT * FROM hooks_audit WHERE 1=1"]
         params = []
-        
+
         if session_id:
             query_parts.append("AND session_id = ?")
             params.append(session_id)
-        
+
         if tool_name:
             query_parts.append("AND tool_name = ?")
             params.append(tool_name)
-        
+
         if hook_name:
             query_parts.append("AND hook_name = ?")
             params.append(hook_name)
-        
+
         if hook_type:
             query_parts.append("AND hook_type = ?")
             params.append(hook_type)
-        
+
         if success is not None:
             query_parts.append("AND success = ?")
             params.append(success)
-        
+
         if start_date:
             query_parts.append("AND timestamp >= ?")
             params.append(start_date)
-        
+
         if end_date:
             query_parts.append("AND timestamp <= ?")
             params.append(end_date)
-        
+
         query_parts.append("ORDER BY timestamp DESC")
-        
+
         if limit:
             query_parts.append("LIMIT ?")
             params.append(limit)
-        
+
         if offset:
             query_parts.append("OFFSET ?")
             params.append(offset)
-        
+
         query = " ".join(query_parts)
         return await self._execute_query(query, tuple(params))
 
@@ -249,7 +254,7 @@ class SQLiteStore:
         return result
 
     # Skills Metadata Methods
-    async def add_skill_metadata(self, skill_data: Dict[str, Any]) -> str:
+    async def add_skill_metadata(self, skill_data: dict[str, Any]) -> str:
         """Add skill metadata."""
         query = """
             INSERT OR REPLACE INTO skills_metadata (
@@ -258,7 +263,7 @@ class SQLiteStore:
                 activated_at, deactivated_at, validation_status
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
-        
+
         params = (
             skill_data.get("name"),
             skill_data.get("description"),
@@ -275,11 +280,11 @@ class SQLiteStore:
             skill_data.get("deactivated_at"),
             skill_data.get("validation_status", "unknown"),
         )
-        
+
         await self._execute_insert(query, params)
         return skill_data.get("name", "")
 
-    async def get_skill_metadata(self, skill_name: str) -> Optional[Dict[str, Any]]:
+    async def get_skill_metadata(self, skill_name: str) -> dict[str, Any] | None:
         """Get skill metadata."""
         query = "SELECT * FROM skills_metadata WHERE name = ?"
         results = await self._execute_query(query, (skill_name,))
@@ -287,68 +292,63 @@ class SQLiteStore:
 
     async def get_skills_metadata(
         self,
-        category: Optional[str] = None,
-        is_active: Optional[bool] = None,
+        category: str | None = None,
+        is_active: bool | None = None,
         limit: int = 100,
-        offset: int = 0
-    ) -> List[Dict[str, Any]]:
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
         """Get skills metadata with optional filtering."""
         query_parts = ["SELECT * FROM skills_metadata WHERE 1=1"]
         params = []
-        
+
         if category:
             query_parts.append("AND category = ?")
             params.append(category)
-        
+
         if is_active is not None:
             query_parts.append("AND is_active = ?")
             params.append(is_active)
-        
+
         query_parts.append("ORDER BY name")
-        
+
         if limit:
             query_parts.append("LIMIT ?")
             params.append(limit)
-        
+
         if offset:
             query_parts.append("OFFSET ?")
             params.append(offset)
-        
+
         query = " ".join(query_parts)
         return await self._execute_query(query, tuple(params))
 
     async def update_skill_activation(
-        self, 
-        skill_name: str, 
-        activate: bool, 
-        timestamp: Optional[str] = None
+        self, skill_name: str, activate: bool, timestamp: str | None = None
     ) -> bool:
         """Update skill activation status."""
         if timestamp is None:
             timestamp = datetime.utcnow().isoformat()
-        
+
         if activate:
             query = """
-                UPDATE skills_metadata 
-                SET is_active = ?, activated_at = ?, deactivated_at = NULL 
+                UPDATE skills_metadata
+                SET is_active = ?, activated_at = ?, deactivated_at = NULL
                 WHERE name = ?
             """
             params = (True, timestamp, skill_name)
         else:
             query = """
-                UPDATE skills_metadata 
-                SET is_active = ?, deactivated_at = ?, activated_at = NULL 
+                UPDATE skills_metadata
+                SET is_active = ?, deactivated_at = ?, activated_at = NULL
                 WHERE name = ?
             """
             params = (False, timestamp, skill_name)
-        
+
         result = await self._execute_update(query, params)
         return result > 0
 
     async def update_skill_validation_status(
-        self, 
-        skill_name: str, 
-        validation_status: str
+        self, skill_name: str, validation_status: str
     ) -> bool:
         """Update skill validation status."""
         query = "UPDATE skills_metadata SET validation_status = ? WHERE name = ?"
@@ -363,104 +363,113 @@ class SQLiteStore:
 
     # Skills Dependencies Methods
     async def add_skill_dependency(
-        self, 
-        skill_name: str, 
-        dependency_name: str, 
-        dependency_type: str = "required"
+        self, skill_name: str, dependency_name: str, dependency_type: str = "required"
     ) -> bool:
         """Add a skill dependency."""
         query = """
-            INSERT OR REPLACE INTO skills_dependencies 
-            (skill_name, dependency_name, dependency_type) 
+            INSERT OR REPLACE INTO skills_dependencies
+            (skill_name, dependency_name, dependency_type)
             VALUES (?, ?, ?)
         """
-        result = await self._execute_update(query, (skill_name, dependency_name, dependency_type))
+        result = await self._execute_update(
+            query, (skill_name, dependency_name, dependency_type)
+        )
         return result > 0
 
-    async def get_skill_dependencies(self, skill_name: str) -> List[Dict[str, Any]]:
+    async def get_skill_dependencies(self, skill_name: str) -> list[dict[str, Any]]:
         """Get dependencies for a skill."""
         query = """
-            SELECT dependency_name, dependency_type 
-            FROM skills_dependencies 
+            SELECT dependency_name, dependency_type
+            FROM skills_dependencies
             WHERE skill_name = ?
         """
         return await self._execute_query(query, (skill_name,))
 
-    async def delete_skill_dependency(self, skill_name: str, dependency_name: str) -> bool:
+    async def delete_skill_dependency(
+        self, skill_name: str, dependency_name: str
+    ) -> bool:
         """Delete a skill dependency."""
         query = "DELETE FROM skills_dependencies WHERE skill_name = ? AND dependency_name = ?"
         result = await self._execute_delete(query, (skill_name, dependency_name))
         return result > 0
 
-    async def get_all_skills_dependencies(self) -> List[Dict[str, Any]]:
+    async def get_all_skills_dependencies(self) -> list[dict[str, Any]]:
         """Get all skills dependencies."""
         query = """
-            SELECT skill_name, dependency_name, dependency_type 
-            FROM skills_dependencies 
+            SELECT skill_name, dependency_name, dependency_type
+            FROM skills_dependencies
             ORDER BY skill_name, dependency_name
         """
         return await self._execute_query(query)
 
     # Utility Methods
-    async def get_hooks_statistics(self, days: int = 7) -> Dict[str, Any]:
+    async def get_hooks_statistics(self, days: int = 7) -> dict[str, Any]:
         """Get hooks execution statistics."""
         cutoff_date = datetime.utcnow() - timedelta(days=days)
         cutoff_str = cutoff_date.isoformat()
-        
+
         # Total executions
         query = "SELECT COUNT(*) as total FROM hooks_audit WHERE timestamp >= ?"
         results = await self._execute_query(query, (cutoff_str,))
         total_executions = results[0]["total"] if results else 0
-        
+
         # Success rate
         query = """
-            SELECT 
+            SELECT
                 COUNT(*) as total,
                 SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful,
                 AVG(duration_ms) as avg_duration
-            FROM hooks_audit 
+            FROM hooks_audit
             WHERE timestamp >= ?
         """
         results = await self._execute_query(query, (cutoff_str,))
         stats = results[0] if results else {}
-        
+
         # Tool breakdown
         query = """
-            SELECT 
+            SELECT
                 tool_name,
                 COUNT(*) as total,
                 SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful,
                 AVG(duration_ms) as avg_duration
-            FROM hooks_audit 
+            FROM hooks_audit
             WHERE timestamp >= ?
             GROUP BY tool_name
             ORDER BY total DESC
         """
         tool_breakdown = await self._execute_query(query, (cutoff_str,))
-        
+
         return {
             "total_executions": total_executions,
             "successful_executions": stats.get("successful", 0),
-            "success_rate": stats.get("successful", 0) / total_executions if total_executions > 0 else 0,
+            "success_rate": stats.get("successful", 0) / total_executions
+            if total_executions > 0
+            else 0,
             "average_duration_ms": stats.get("avg_duration", 0),
             "tool_breakdown": tool_breakdown,
         }
 
-    async def get_skills_statistics(self) -> Dict[str, Any]:
+    async def get_skills_statistics(self) -> dict[str, Any]:
         """Get skills metadata statistics."""
-        query = "SELECT category, COUNT(*) as count FROM skills_metadata GROUP BY category"
+        query = (
+            "SELECT category, COUNT(*) as count FROM skills_metadata GROUP BY category"
+        )
         category_stats = await self._execute_query(query)
-        
+
         query = "SELECT is_active, COUNT(*) as count FROM skills_metadata GROUP BY is_active"
         active_stats = await self._execute_query(query)
-        
+
         query = "SELECT validation_status, COUNT(*) as count FROM skills_metadata GROUP BY validation_status"
         validation_stats = await self._execute_query(query)
-        
+
         return {
             "total_skills": sum(stat["count"] for stat in active_stats),
-            "active_skills": next((stat["count"] for stat in active_stats if stat["is_active"]), 0),
-            "inactive_skills": next((stat["count"] for stat in active_stats if not stat["is_active"]), 0),
+            "active_skills": next(
+                (stat["count"] for stat in active_stats if stat["is_active"]), 0
+            ),
+            "inactive_skills": next(
+                (stat["count"] for stat in active_stats if not stat["is_active"]), 0
+            ),
             "categories": category_stats,
             "validation_status": validation_stats,
         }
@@ -469,9 +478,9 @@ class SQLiteStore:
         """Clean up old data from the store."""
         # Delete old hook executions
         deleted_hooks = await self.delete_old_hook_executions(max_days)
-        
+
         # Note: Skills metadata is kept indefinitely as it's small
-        
+
         logger.info(f"Cleaned up {deleted_hooks} old hook execution records")
         return {"deleted_hook_executions": deleted_hooks}
 
@@ -489,19 +498,19 @@ def get_sqlite_store() -> SQLiteStore:
 
 
 # Export the main functions for use in other modules
-async def add_hook_execution(execution_data: Dict[str, Any]) -> str:
+async def add_hook_execution(execution_data: dict[str, Any]) -> str:
     """Add a hook execution record."""
     store = get_sqlite_store()
     return await store.add_hook_execution(execution_data)
 
 
-async def get_hook_execution(execution_id: str) -> Optional[Dict[str, Any]]:
+async def get_hook_execution(execution_id: str) -> dict[str, Any] | None:
     """Get a specific hook execution record."""
     store = get_sqlite_store()
     return await store.get_hook_execution(execution_id)
 
 
-async def get_hook_executions(**kwargs) -> List[Dict[str, Any]]:
+async def get_hook_executions(**kwargs) -> list[dict[str, Any]]:
     """Get hook execution records with optional filtering."""
     store = get_sqlite_store()
     return await store.get_hook_executions(**kwargs)
@@ -513,19 +522,19 @@ async def delete_hook_execution(execution_id: str) -> bool:
     return await store.delete_hook_execution(execution_id)
 
 
-async def add_skill_metadata(skill_data: Dict[str, Any]) -> str:
+async def add_skill_metadata(skill_data: dict[str, Any]) -> str:
     """Add skill metadata."""
     store = get_sqlite_store()
     return await store.add_skill_metadata(skill_data)
 
 
-async def get_skill_metadata(skill_name: str) -> Optional[Dict[str, Any]]:
+async def get_skill_metadata(skill_name: str) -> dict[str, Any] | None:
     """Get skill metadata."""
     store = get_sqlite_store()
     return await store.get_skill_metadata(skill_name)
 
 
-async def get_skills_metadata(**kwargs) -> List[Dict[str, Any]]:
+async def get_skills_metadata(**kwargs) -> list[dict[str, Any]]:
     """Get skills metadata with optional filtering."""
     store = get_sqlite_store()
     return await store.get_skills_metadata(**kwargs)
@@ -537,13 +546,15 @@ async def update_skill_activation(skill_name: str, activate: bool) -> bool:
     return await store.update_skill_activation(skill_name, activate)
 
 
-async def update_skill_validation_status(skill_name: str, validation_status: str) -> bool:
+async def update_skill_validation_status(
+    skill_name: str, validation_status: str
+) -> bool:
     """Update skill validation status."""
     store = get_sqlite_store()
     return await store.update_skill_validation_status(skill_name, validation_status)
 
 
-async def get_skill_dependencies(skill_name: str) -> List[Dict[str, Any]]:
+async def get_skill_dependencies(skill_name: str) -> list[dict[str, Any]]:
     """Get dependencies for a skill."""
     store = get_sqlite_store()
     return await store.get_skill_dependencies(skill_name)

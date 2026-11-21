@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -12,7 +11,6 @@ from fastapi.templating import Jinja2Templates
 
 from app.core.memory.sqlitestore import get_sqlite_store
 from app.core.security import get_current_user
-from app.core.observability.spans import emit_span
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ui/memory", tags=["memory-ui"])
@@ -198,7 +196,7 @@ async def memory_import_ui(
         session_id = form_data.get("session_id", "default")
 
         store = await get_sqlite_store()
-        imported_count = await store.import_memories(session_id, import_data)
+        await store.import_memories(session_id, import_data)
 
         return RedirectResponse(f"/ui/memory/?session_id={session_id}", status_code=303)
 

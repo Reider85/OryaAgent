@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
 
 from app.core.hooks import (
     HookContext,
@@ -13,10 +12,9 @@ from app.core.hooks import (
     PreToolHook,
     get_hook_registry,
     post_tool_hook,
+    post_tool_hook_for_all_tools,
     pre_tool_hook,
     pre_tool_hook_for_all_tools,
-    post_tool_hook_for_all_tools,
-    _hook_registry,
 )
 
 logger = logging.getLogger(__name__)

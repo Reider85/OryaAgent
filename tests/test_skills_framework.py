@@ -1,23 +1,42 @@
 """Test suite for the skills framework."""
 
 import os
-import pytest
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from app.core.config import clear_settings_cache
 from app.core.skills import (
     Skill,
     SkillRegistry,
+    activate_skill,
+    deactivate_skill,
+    get_skill,
     get_skill_registry,
     initialize_skill_registry,
     list_skills,
-    get_skill,
-    activate_skill,
-    deactivate_skill,
     validate_skill,
 )
-from app.core.tools import get_tools
+
+
+@pytest.fixture(autouse=True)
+def _isolated_memory_store(tmp_path, monkeypatch):
+    """Sandbox the skills/hooks SQLite store (runs before setup_method).
+
+    Loading YAML skills persists metadata into the store resolved from
+    ORYA_MEMORY_DIR — without the sandbox every run would write into the
+    real ~/.orya/orya_store.db and cross-pollute the registry tests.
+    """
+    monkeypatch.setenv("ORYA_MEMORY_DIR", str(tmp_path / "memory"))
+    clear_settings_cache()
+    import app.core.sqlite_store as sqlite_store
+
+    sqlite_store._sqlite_store = None
+    yield
+    sqlite_store._sqlite_store = None
+    clear_settings_cache()
 
 
 class TestSkill:
@@ -95,7 +114,7 @@ class TestSkill:
         config = {"name": "repr-skill", "version": "1.5.0", "tools": ["read"]}
 
         skill = Skill("repr-skill", config)
-        assert repr(skill) == "Skill(name='repr-skill', version='1.5.0')"
+        assert repr(skill) == "Skill(name='repr-skill', version='1.5.0', active=True)"
 
 
 class TestSkillRegistry:
@@ -243,7 +262,7 @@ class TestSkillRegistry:
         assert unit_skills[0].name == "tag1"
 
     @patch("app.core.skills.get_tools")
-    def test_activate_skill(self, mock_get_tools):
+    async def test_activate_skill(self, mock_get_tools):
         """Test skill activation."""
         # Create mock tools with proper name attributes
         mock_read = MagicMock()
@@ -266,21 +285,21 @@ class TestSkillRegistry:
         skill = Skill("activate-skill", config)
         self.registry.register_skill(skill)
 
-        with patch.object(self.registry, "_hook_registry") as mock_hook_registry:
-            activated = self.registry.activate_skill("activate-skill")
+        with patch.object(self.registry, "_hook_registry"):
+            activated = await self.registry.activate_skill("activate-skill")
 
             # Should return activated tools and hooks
             assert "read" in activated
             assert "write" in activated
             assert "pre-write" in activated
 
-    def test_activate_nonexistent_skill(self):
+    async def test_activate_nonexistent_skill(self):
         """Test activating a non-existent skill."""
         with pytest.raises(ValueError, match="Skill not found: nonexistent"):
-            self.registry.activate_skill("nonexistent")
+            await self.registry.activate_skill("nonexistent")
 
     @patch("app.core.skills.get_tools")
-    def test_deactivate_skill(self, mock_get_tools):
+    async def test_deactivate_skill(self, mock_get_tools):
         """Test skill deactivation."""
         # Create mock tools with proper name attributes
         mock_read = MagicMock()
@@ -303,21 +322,21 @@ class TestSkillRegistry:
         skill = Skill("deactivate-skill", config)
         self.registry.register_skill(skill)
 
-        with patch.object(self.registry, "_hook_registry") as mock_hook_registry:
-            deactivated = self.registry.deactivate_skill("deactivate-skill")
+        with patch.object(self.registry, "_hook_registry"):
+            deactivated = await self.registry.deactivate_skill("deactivate-skill")
 
             # Should return deactivated tools and hooks
             assert "read" in deactivated
             assert "write" in deactivated
             assert "post-write" in deactivated
 
-    def test_deactivate_nonexistent_skill(self):
+    async def test_deactivate_nonexistent_skill(self):
         """Test deactivating a non-existent skill."""
         with pytest.raises(ValueError, match="Skill not found: nonexistent"):
-            self.registry.deactivate_skill("nonexistent")
+            await self.registry.deactivate_skill("nonexistent")
 
     @patch("app.core.skills.get_tools")
-    def test_validate_skill(self, mock_get_tools):
+    async def test_validate_skill(self, mock_get_tools):
         """Test skill validation."""
         # Create mock tools with proper name attributes
         mock_read = MagicMock()
@@ -340,18 +359,18 @@ class TestSkillRegistry:
         skill = Skill("valid-skill", config)
         self.registry.register_skill(skill)
 
-        result = self.registry.validate_skill("valid-skill")
+        result = await self.registry.validate_skill("valid-skill")
         assert result["valid"] is True
         assert "issues" not in result
 
-    def test_validate_nonexistent_skill(self):
+    async def test_validate_nonexistent_skill(self):
         """Test validating a non-existent skill."""
-        result = self.registry.validate_skill("nonexistent")
+        result = await self.registry.validate_skill("nonexistent")
         assert result["valid"] is False
         assert "Skill not found: nonexistent" in result["error"]
 
     @patch("app.core.skills.get_tools")
-    def test_validate_skill_with_missing_tools(self, mock_get_tools):
+    async def test_validate_skill_with_missing_tools(self, mock_get_tools):
         """Test skill validation with missing tools."""
         mock_read = MagicMock()
         mock_read.name = "read"
@@ -368,11 +387,11 @@ class TestSkillRegistry:
         skill = Skill("invalid-skill", config)
         self.registry.register_skill(skill)
 
-        result = self.registry.validate_skill("invalid-skill")
+        result = await self.registry.validate_skill("invalid-skill")
         assert result["valid"] is False
         assert "Tool 'missing_tool' not available" in result["issues"]
 
-    def test_get_skill_dependencies(self):
+    async def test_get_skill_dependencies(self):
         """Test getting skill dependencies."""
         config1 = {"name": "dep1", "tools": ["read"], "dependencies": []}
         config2 = {"name": "dep2", "tools": ["write"], "dependencies": ["dep1"]}
@@ -382,7 +401,7 @@ class TestSkillRegistry:
         self.registry.register_skill(Skill("dep2", config2))
         self.registry.register_skill(Skill("dep3", config3))
 
-        deps = self.registry.get_skill_dependencies("dep3")
+        deps = await self.registry.get_skill_dependencies("dep3")
         assert "dep1" in deps
         assert "dep2" in deps
 
@@ -457,7 +476,7 @@ invalid: yaml: structure: with: invalid: colons: and: syntax
             temp_file_path = f.name
 
         try:
-            with pytest.raises(Exception):
+            with pytest.raises(Exception):  # noqa: B017 — any rejection of malformed YAML is acceptable
                 self.registry.load_skill_from_yaml(temp_file_path)
 
         finally:
@@ -486,7 +505,7 @@ tools: ["read"]
         with pytest.raises(FileNotFoundError):
             self.registry.load_skill_from_yaml("/nonexistent/skill.yaml")
 
-    def test_load_skills_from_directory(self):
+    async def test_load_skills_from_directory(self):
         """Test loading skills from a directory."""
         # Create temporary directory with YAML files
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -513,17 +532,17 @@ tools: ["write"]
             non_yaml_path.write_text("# This is not a skill file")
 
             # Load skills from directory
-            self.registry.load_skills_from_directory(temp_dir)
+            await self.registry.load_skills_from_directory(temp_dir)
 
             # Check that skills were loaded
             assert self.registry.get_skill("skill1") is not None
             assert self.registry.get_skill("skill2") is not None
             assert self.registry.get_skill("README") is None
 
-    def test_load_skills_from_nonexistent_directory(self):
+    async def test_load_skills_from_nonexistent_directory(self):
         """Test loading skills from non-existent directory."""
         # Should not raise an error, just log a warning
-        self.registry.load_skills_from_directory("/nonexistent/directory")
+        await self.registry.load_skills_from_directory("/nonexistent/directory")
         assert len(self.registry.list_skills()) == 0
 
 
@@ -537,63 +556,63 @@ class TestGlobalSkillRegistry:
 
         app.core.skills._skill_registry = None
 
-    def test_get_skill_registry_singleton(self):
+    async def test_get_skill_registry_singleton(self):
         """Test that get_skill_registry returns the same instance."""
-        registry1 = get_skill_registry()
-        registry2 = get_skill_registry()
+        registry1 = await get_skill_registry()
+        registry2 = await get_skill_registry()
 
         assert registry1 is registry2
 
-    def test_initialize_skill_registry(self):
+    async def test_initialize_skill_registry(self):
         """Test initializing skill registry."""
-        registry = initialize_skill_registry()
+        registry = await initialize_skill_registry()
 
         assert registry is not None
         assert len(registry.list_skills()) >= 0  # May have default skills
 
-    def test_list_skills_function(self):
+    async def test_list_skills_function(self):
         """Test global list_skills function."""
-        skills = list_skills()
+        skills = await list_skills()
         assert isinstance(skills, list)
 
-    def test_get_skill_function(self):
+    async def test_get_skill_function(self):
         """Test global get_skill function."""
         # This will return None for non-existent skill
-        skill = get_skill("nonexistent")
+        skill = await get_skill("nonexistent")
         assert skill is None
 
-    def test_activate_skill_function(self):
+    async def test_activate_skill_function(self):
         """Test global activate_skill function."""
         with patch("app.core.skills.get_skill_registry") as mock_get_registry:
-            mock_registry = MagicMock()
+            mock_registry = AsyncMock()
             mock_registry.activate_skill.return_value = ["read", "write"]
             mock_get_registry.return_value = mock_registry
 
-            result = activate_skill("test-skill")
+            result = await activate_skill("test-skill")
 
             assert result == ["read", "write"]
             mock_registry.activate_skill.assert_called_once_with("test-skill")
 
-    def test_deactivate_skill_function(self):
+    async def test_deactivate_skill_function(self):
         """Test global deactivate_skill function."""
         with patch("app.core.skills.get_skill_registry") as mock_get_registry:
-            mock_registry = MagicMock()
+            mock_registry = AsyncMock()
             mock_registry.deactivate_skill.return_value = ["read", "write"]
             mock_get_registry.return_value = mock_registry
 
-            result = deactivate_skill("test-skill")
+            result = await deactivate_skill("test-skill")
 
             assert result == ["read", "write"]
             mock_registry.deactivate_skill.assert_called_once_with("test-skill")
 
-    def test_validate_skill_function(self):
+    async def test_validate_skill_function(self):
         """Test global validate_skill function."""
         with patch("app.core.skills.get_skill_registry") as mock_get_registry:
-            mock_registry = MagicMock()
+            mock_registry = AsyncMock()
             mock_registry.validate_skill.return_value = {"valid": True}
             mock_get_registry.return_value = mock_registry
 
-            result = validate_skill("test-skill")
+            result = await validate_skill("test-skill")
 
             assert result == {"valid": True}
             mock_registry.validate_skill.assert_called_once_with("test-skill")
@@ -618,10 +637,10 @@ class TestSkillIntegration:
 
         shutil.rmtree(self.temp_skills_dir, ignore_errors=True)
 
-    def test_full_skill_lifecycle(self):
+    async def test_full_skill_lifecycle(self):
         """Test complete skill lifecycle."""
         # Initialize registry with temporary directory
-        registry = initialize_skill_registry(self.temp_skills_dir)
+        registry = await initialize_skill_registry(self.temp_skills_dir)
 
         # Create a test skill
         skill_config = {
@@ -658,7 +677,7 @@ class TestSkillIntegration:
         assert integration_skills[0].name == "integration-skill"
 
         # Test validation
-        validation_result = registry.validate_skill("integration-skill")
+        validation_result = await registry.validate_skill("integration-skill")
         assert validation_result["valid"] is True
 
         # Test activation
@@ -670,15 +689,15 @@ class TestSkillIntegration:
             mock_tools = [mock_read, mock_write]
             mock_get_tools.return_value = mock_tools
 
-            with patch.object(registry, "_hook_registry") as mock_hook_registry:
-                activated = registry.activate_skill("integration-skill")
+            with patch.object(registry, "_hook_registry"):
+                activated = await registry.activate_skill("integration-skill")
                 assert "read" in activated
                 assert "write" in activated
                 assert "pre-write" in activated
 
         # Test deactivation
-        with patch.object(registry, "_hook_registry") as mock_hook_registry:
-            deactivated = registry.deactivate_skill("integration-skill")
+        with patch.object(registry, "_hook_registry"):
+            deactivated = await registry.deactivate_skill("integration-skill")
             assert "read" in deactivated
             assert "write" in deactivated
             assert "pre-write" in deactivated
@@ -687,9 +706,9 @@ class TestSkillIntegration:
         registry.unregister_skill("integration-skill")
         assert registry.get_skill("integration-skill") is None
 
-    def test_skill_dependencies_resolution(self):
+    async def test_skill_dependencies_resolution(self):
         """Test skill dependency resolution."""
-        registry = initialize_skill_registry()
+        registry = await initialize_skill_registry()
 
         # Create skills with dependencies
         base_config = {"name": "base", "tools": ["read"], "dependencies": []}
@@ -705,13 +724,13 @@ class TestSkillIntegration:
         assert resolved == ["base", "mid", "top"]
 
         # Test dependency retrieval
-        deps = registry.get_skill_dependencies("top")
+        deps = await registry.get_skill_dependencies("top")
         assert "base" in deps
         assert "mid" in deps
 
-    def test_skill_export(self):
+    async def test_skill_export(self):
         """Test skill export functionality."""
-        registry = initialize_skill_registry()
+        registry = await initialize_skill_registry()
 
         # Create test skills
         for i in range(3):
@@ -733,11 +752,11 @@ class TestSkillIntegration:
         # Verify exported content
         import yaml
 
-        with open(export_file, "r") as f:
+        with open(export_file) as f:
             exported_data = yaml.safe_load(f)
 
-        # Should have 4 skills: the 3 we created + the code-review.yaml
-        assert len(exported_data) == 4
+        # 3 we created + the default app/skills YAML (B-30 bundles included)
+        assert len(exported_data) >= 3
         assert "export-skill-0" in exported_data
         assert "export-skill-1" in exported_data
         assert "export-skill-2" in exported_data

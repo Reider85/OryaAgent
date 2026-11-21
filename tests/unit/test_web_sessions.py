@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-import json
-from datetime import UTC, datetime
-from typing import Any
-
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import app
 from app.core.config import clear_settings_cache
+from app.main import app
 
 client = TestClient(app)
 
@@ -157,7 +153,7 @@ def test_web_session_status_mapping() -> None:
         ("archived", "archived"),
     ]
 
-    for frontend_status, expected_backend_status in test_cases:
+    for frontend_status, _expected_backend_status in test_cases:
         response = client.post(
             "/web/api/sessions",
             json={"name": f"Test {frontend_status} session", "status": frontend_status},

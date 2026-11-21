@@ -58,28 +58,39 @@ def get_tools(session_id: str | None = None) -> list[BaseTool]:
     """
     # Get all available tools
     all_tools = [
-        read, write, edit, bash, grep, glob,
-        oriahs_search, oriahs_index,
-        lsp_hover, lsp_definition, lsp_references,
-        lsp_symbol_search, lsp_rename, lsp_diagnostics, lsp_code_action,
+        read,
+        write,
+        edit,
+        bash,
+        grep,
+        glob,
+        oriahs_search,
+        oriahs_index,
+        lsp_hover,
+        lsp_definition,
+        lsp_references,
+        lsp_symbol_search,
+        lsp_rename,
+        lsp_diagnostics,
+        lsp_code_action,
         ukb_lookup,
-        retrieval_orchestrate
+        retrieval_orchestrate,
     ]
-    
+
     # Apply CapabilityRegistry filtering if session_id is provided
     if session_id:
         from app.core.tools.capability_registry import get_capability_registry
         from app.core.tools.context import TurnContext
-        
+
         registry = get_capability_registry()
-        
+
         # Create context from session state
         # Note: This is a simplified context creation
         # In a real implementation, you'd extract context from the actual session state
         context = TurnContext()
-        
+
         # Apply filtering
         filtered_tools = registry.filter_tools(all_tools, context)
         return filtered_tools
-    
+
     return all_tools

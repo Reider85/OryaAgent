@@ -360,7 +360,7 @@ async def record_usage(
 
 async def integrate_github_actions_monitoring() -> None:
     """Integrate GitHub Actions monitoring with the cost tracking system.
-    
+
     This function bridges the existing cost tracking system with GitHub Actions
     monitoring by:
     1. Sharing Redis backend for both systems
@@ -369,24 +369,24 @@ async def integrate_github_actions_monitoring() -> None:
     """
     from app.core.config import get_settings
     from app.core.github_actions import get_github_actions_monitor
-    
+
     settings = get_settings()
-    
+
     # Only integrate if GitHub Actions monitoring is enabled
     if not settings.github_actions_enabled:
         return
-    
+
     try:
         # Get the GitHub Actions monitor
-        monitor = get_github_actions_monitor()
-        
+        get_github_actions_monitor()
+
         # Integrate with the existing cost tracking system
         # This could include:
         # - Shared Redis backend (already handled by both systems)
         # - Combined budget tracking
         # - Unified cost reporting
-        
+
         logger.info("GitHub Actions monitoring integrated with cost tracking system")
-        
+
     except Exception as exc:
         logger.warning("GitHub Actions integration failed: %s", exc)

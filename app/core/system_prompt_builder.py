@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from app.core.dfc import DFC
 from app.core.capability import get_language_capability_registry
-from app.core.observability.spans import emit_span
+from app.core.dfc import DFC
+from app.core.observability.spans import timed_span
 
 logger = logging.getLogger(__name__)
 
@@ -22,14 +22,15 @@ class SystemPromptBuilder:
     def build_system_prompt(
         self,
         base_prompt: str,
-        tools: List[Any],
-        plan: Dict[str, Any],
+        tools: list[Any],
+        plan: dict[str, Any],
         max_tokens: int = 16000,
     ) -> str:
         """Build system prompt with DFC integration."""
-        with emit_span(
-            "system_prompt.build",
-            {
+        with timed_span(
+            span_type="system_prompt.build",
+            name="system_prompt.build",
+            attributes={
                 "base_prompt_length": len(base_prompt),
                 "tools_count": len(tools),
                 "max_tokens": max_tokens,
@@ -47,15 +48,15 @@ class SystemPromptBuilder:
             if len(system_prompt) > max_tokens:
                 system_prompt = self._truncate_prompt(system_prompt, max_tokens)
 
-            span.set_attribute("final_prompt_length", len(system_prompt))
-            span.set_attribute("dfc_hot_size_tokens", self.dfc._get_hot_size())
-            span.set_attribute("dfc_warm_size_tokens", self.dfc._get_warm_size())
-            span.set_attribute("dfc_cold_size", len(self.dfc.cold))
+            span["final_prompt_length"] = len(system_prompt)
+            span["dfc_hot_size_tokens"] = self.dfc._get_hot_size()
+            span["dfc_warm_size_tokens"] = self.dfc._get_warm_size()
+            span["dfc_cold_size"] = len(self.dfc.cold)
 
             return system_prompt
 
     def _build_complete_prompt(
-        self, base_prompt: str, hot_context: str, tools: List[Any], plan: Dict[str, Any]
+        self, base_prompt: str, hot_context: str, tools: list[Any], plan: dict[str, Any]
     ) -> str:
         """Build complete system prompt."""
 
@@ -131,9 +132,9 @@ class SystemPromptBuilder:
 
         return "\n".join(truncated_lines)
 
-    def _build_language_capability_block(self) -> Optional[str]:
+    def _build_language_capability_block(self) -> str | None:
         """Build language capability block for system prompt (B-30).
-        
+
         Returns:
             Language capability block string or None if no active language
         """
@@ -142,12 +143,12 @@ class SystemPromptBuilder:
             if "language_capability" in self.dfc.hot:
                 capability_info = self.dfc.hot["language_capability"]
                 return capability_info
-            
+
             # Fallback: try to detect language from current context
             # This would ideally come from the session state or context
             # For now, return None (no active language capability)
             return None
-            
+
         except Exception as e:
             logger.warning(f"Failed to build language capability block: {e}")
             return None

@@ -2,14 +2,14 @@
 
 from .dfc import (
     DFC,
-    HeatCache,
-    CompactSummary,
     BackgroundCompactor,
+    CompactSummary,
+    HeatCache,
     get_dfc,
     initialize_dfc,
 )
-from .metrics import DFCMetrics, get_dfc_metrics
 from .integration import DFCIntegration, get_dfc_integration, initialize_dfc_integration
+from .metrics import DFCMetrics, get_dfc_metrics
 
 __all__ = [
     "DFC",

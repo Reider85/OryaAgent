@@ -164,7 +164,10 @@ services:
       oriahs-mcp:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status == 200 else 1)"]
+      # chainlit listens on 8001 inside the container (the old probe hit
+      # :8000 — nothing there — and the container stayed unhealthy forever).
+      # "/" is the same path the start scripts health-wait on.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/', timeout=3).status == 200 else 1)"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -403,7 +406,10 @@ services:
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
     volumes:
       - ./deploy/clickhouse/01_audit_events_hot.sql:/sql/init.sql:ro
-    entrypoint: ["sh", "-c", "clickhouse-client --host clickhouse --user \"$CLICKHOUSE_USER\" --password \"$CLICKHOUSE_PASSWORD\" --multiquery --file /sql/init.sql"]
+    # $$ so compose leaves $CLICKHOUSE_* for the *container* shell: a bare
+    # $VAR is interpolated from the host env (unset → blank "--user ''" and
+    # a "variable is not set" warning on every `compose config`).
+    entrypoint: ["sh", "-c", "clickhouse-client --host clickhouse --user \"$$CLICKHOUSE_USER\" --password \"$$CLICKHOUSE_PASSWORD\" --multiquery --file /sql/init.sql"]
 
 volumes:
   postgres_data:

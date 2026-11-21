@@ -105,10 +105,17 @@ def test_sync_url_normalizes_asyncpg_dsn_styles():
 def test_revision_chain_is_linear_with_single_head():
     script = _script()
     revisions = {rev.revision: rev for rev in script.walk_revisions()}
-    assert set(revisions) == {"0001_init", "0002_session_log_encryption"}
-    assert script.get_heads() == ["0002_session_log_encryption"]
+    assert set(revisions) == {
+        "0001_init",
+        "0002_session_log_encryption",
+        "0003_branch_schema",
+    }
+    assert script.get_heads() == ["0003_branch_schema"]
     assert revisions["0001_init"].down_revision is None
     assert revisions["0002_session_log_encryption"].down_revision == "0001_init"
+    assert (
+        revisions["0003_branch_schema"].down_revision == "0002_session_log_encryption"
+    )
 
 
 def test_sql_files_revisions_and_version_modules_match_1to1():

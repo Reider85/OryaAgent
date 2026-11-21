@@ -1,9 +1,9 @@
-from __future__ import annotations
-
 """Auto-format hooks for various programming languages (B-05).
 
 These hooks automatically format code after write/edit operations.
 """
+
+from __future__ import annotations
 
 import logging
 import subprocess

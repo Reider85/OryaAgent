@@ -87,38 +87,39 @@ def identity_block() -> str:
 
 def tool_descriptions(tools: Sequence[BaseTool] | None) -> str:
     """Render each tool as OpenAI-function JSON (name, description, params).
-    
+
     Enhanced for BETA to group tools by capabilities for better LLM understanding.
     """
     tools = list(tools or [])
     if not tools:
         return "# Available Tools\n(no tools registered)"
-    
+
     # Group tools by capability
     from app.core.tools.triggers import group_tools_by_capability
+
     capability_groups = group_tools_by_capability()
-    
+
     # Create tool-to-capability mapping
     tool_to_capability = {}
     for tool in tools:
-        tool_name = getattr(tool, 'name', '')
+        tool_name = getattr(tool, "name", "")
         if tool_name:
             tool_caps = capability_groups.get(tool.name, [])
             tool_to_capability[tool_name] = tool_caps[0] if tool_caps else "basic"
-    
+
     # Render tools grouped by capability
     rendered = []
     for capability, tool_names in capability_groups.items():
         # Only show tools that are actually available
-        available_tools = [t for t in tools if getattr(t, 'name', '') in tool_names]
+        available_tools = [t for t in tools if getattr(t, "name", "") in tool_names]
         if not available_tools:
             continue
-            
+
         rendered.append(f"## {capability.title()} Tools")
         for tool in available_tools:
             spec = convert_to_openai_function(tool)
             rendered.append(json.dumps(spec, ensure_ascii=False))
-    
+
     return "# Available Tools\n" + "\n".join(rendered)
 
 

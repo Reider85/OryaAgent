@@ -1,15 +1,15 @@
 """Tests for DFC integration."""
 
-import pytest
-import asyncio
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import Mock, patch
 
+import pytest
+
+from app.core.dfc import DFC
 from app.core.dfc.integration import (
     DFCIntegration,
     get_dfc_integration,
     initialize_dfc_integration,
 )
-from app.core.dfc import DFC
 
 
 class TestDFCIntegration:

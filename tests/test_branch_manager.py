@@ -1,13 +1,12 @@
 """Tests for BranchManager merge functionality (B-10)."""
 
-import asyncio
-import pytest
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from app.core.branch_manager import BranchManager
-from app.core.session import SessionManager
 
 
 class TestBranchManagerMerge:
@@ -351,7 +350,7 @@ class TestBranchManagerMerge:
         branch_manager.session_manager.create_turn = AsyncMock()
 
         # Perform merge
-        result = await branch_manager.merge_branches(
+        await branch_manager.merge_branches(
             source_session_id="source-123",
             target_session_id="target-123",
             merge_strategy="append",

@@ -48,9 +48,9 @@ from langgraph.graph.state import CompiledStateGraph
 
 from app.core.config import get_settings
 from app.core.context import trim_messages
-from app.core.memory.extractor import get_memory_extractor
 from app.core.graph import RECOVER_NODE_NAME, build_graph, resume_command
 from app.core.llm import get_llm
+from app.core.memory.extractor import get_memory_extractor
 from app.core.observability.pii import mask_text
 from app.core.observability.sdk import AGENT_ID, AGENT_VERSION
 from app.core.observability.spans import (
@@ -501,7 +501,7 @@ async def _aggregate_turn(
     reply = "".join(reply_parts)
     if not reply:
         reply = await final_answer_text(graph, config)
-    
+
     # Trigger memory extraction after turn completion (B-22)
     try:
         session_id = config.get("configurable", {}).get("thread_id")
@@ -514,7 +514,7 @@ async def _aggregate_turn(
                 logger.debug(f"Triggered memory extraction for session {session_id}")
     except Exception as e:
         logger.error(f"Failed to trigger memory extraction: {e}")
-    
+
     yield (
         "done",
         {

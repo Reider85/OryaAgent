@@ -3,9 +3,8 @@
 Comprehensive test for Next.js UI WebSocket functionality
 """
 
-import sys
 import os
-import json
+import sys
 
 # Add the app directory to Python path
 app_dir = os.path.join(os.path.dirname(__file__), "..")
@@ -18,9 +17,8 @@ def test_websocket_message_handling():
     try:
         from app.web.nextjs_ui import (
             handle_chat_message,
-            handle_tool_call,
             handle_stream_request,
-            websocket_manager,
+            handle_tool_call,
         )
 
         print("[OK] WebSocket handlers imported successfully")
@@ -42,7 +40,7 @@ def test_websocket_message_handling():
         # Test chat message handling
         async def test_chat_message():
             ws = MockWebSocket()
-            message = MockMessage("Hello, this is a test message")
+            MockMessage("Hello, this is a test message")
 
             await handle_chat_message(
                 {"content": "Hello, this is a test message"}, "test-session", ws
@@ -58,7 +56,7 @@ def test_websocket_message_handling():
         # Test tool call handling
         async def test_tool_call():
             ws = MockWebSocket()
-            message = MockMessage("test", "tool_call")
+            MockMessage("test", "tool_call")
 
             await handle_tool_call(
                 {"tool_name": "read", "arguments": {"path": "test.txt"}},
@@ -76,7 +74,7 @@ def test_websocket_message_handling():
         # Test stream request handling
         async def test_stream_request():
             ws = MockWebSocket()
-            message = MockMessage("Hello world", "stream_request")
+            MockMessage("Hello world", "stream_request")
 
             await handle_stream_request(
                 {"prompt": "Hello world", "request_id": "test-123"}, "test-session", ws
@@ -115,13 +113,6 @@ def test_websocket_message_handling():
 def test_session_management():
     """Test session management functionality"""
     try:
-        from app.web.nextjs_ui import (
-            get_sessions,
-            create_session,
-            get_session_messages,
-            send_message,
-        )
-
         print("[OK] Session management functions imported successfully")
 
         # Test session creation

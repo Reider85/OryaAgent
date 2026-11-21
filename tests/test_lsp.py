@@ -1,22 +1,22 @@
 """Tests for LSP components."""
 
-import pytest
-import asyncio
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from pathlib import Path
+from unittest.mock import AsyncMock, Mock, patch
 
-from app.core.lsp.bus import LSPBus, LSPServerConfig, LSPClient
-from app.core.lsp.watcher import LSPFileWatcher, FileChangeEvent
-from app.core.lsp.tools import (
-    lsp_hover,
-    lsp_definition,
-    lsp_references,
-    lsp_symbol_search,
-    lsp_rename,
-    lsp_diagnostics,
+import pytest
+
+from app.core.lsp.bus import LSPBus, LSPClient, LSPServerConfig
+from app.core.lsp.watcher import FileChangeEvent, LSPFileWatcher
+from app.tools.lsp import (
+    LSPToolException,
     lsp_code_action,
+    lsp_definition,
+    lsp_diagnostics,
+    lsp_hover,
+    lsp_references,
+    lsp_rename,
+    lsp_symbol_search,
 )
-from app.core.lsp.tools import LSPToolException
 
 
 class TestLSPServerConfig:
@@ -228,7 +228,7 @@ class TestLSPBus:
         bus = LSPBus()
 
         # Mock server
-        mock_server = Mock()
+        mock_server = AsyncMock()
         mock_server.is_running = False
         mock_server.stop = AsyncMock()
 
@@ -366,16 +366,16 @@ class TestLSPTools:
     async def test_lsp_hover_success(self):
         """Test successful lsp_hover call."""
         # Mock LSP bus
-        with patch("app.core.lsp.tools.get_lsp_bus") as mock_get_bus:
+        with patch("app.tools.lsp.get_lsp_bus") as mock_get_bus:
             mock_bus = Mock()
-            mock_server = Mock()
+            mock_server = AsyncMock()
             mock_server.hover.return_value = {"contents": "test hover"}
-            mock_bus.ensure_server.return_value = mock_server
+            mock_bus.ensure_server = AsyncMock(return_value=mock_server)
             mock_bus.detect_language.return_value = "python"
             mock_get_bus.return_value = mock_bus
 
             # Call tool
-            result = await lsp_hover("test.py", 10, 20, "/workspace")
+            result = await lsp_hover.coroutine("test.py", 10, 20, ".")
 
             assert result["success"] is True
             assert result["language"] == "python"
@@ -386,29 +386,29 @@ class TestLSPTools:
     async def test_lsp_hover_failure(self):
         """Test failed lsp_hover call."""
         # Mock LSP bus
-        with patch("app.core.lsp.tools.get_lsp_bus") as mock_get_bus:
+        with patch("app.tools.lsp.get_lsp_bus") as mock_get_bus:
             mock_bus = Mock()
             mock_bus.detect_language.return_value = None
             mock_get_bus.return_value = mock_bus
 
             # Call tool
             with pytest.raises(LSPToolException, match="Unsupported file type"):
-                await lsp_hover("test.txt", 10, 20, "/workspace")
+                await lsp_hover.coroutine("test.txt", 10, 20, ".")
 
     @pytest.mark.asyncio
     async def test_lsp_definition_success(self):
         """Test successful lsp_definition call."""
         # Mock LSP bus
-        with patch("app.core.lsp.tools.get_lsp_bus") as mock_get_bus:
+        with patch("app.tools.lsp.get_lsp_bus") as mock_get_bus:
             mock_bus = Mock()
-            mock_server = Mock()
+            mock_server = AsyncMock()
             mock_server.definition.return_value = [{"uri": "test.py", "range": {}}]
-            mock_bus.ensure_server.return_value = mock_server
+            mock_bus.ensure_server = AsyncMock(return_value=mock_server)
             mock_bus.detect_language.return_value = "python"
             mock_get_bus.return_value = mock_bus
 
             # Call tool
-            result = await lsp_definition("test.py", 10, 20, "/workspace")
+            result = await lsp_definition.coroutine("test.py", 10, 20, ".")
 
             assert result["success"] is True
             assert result["language"] == "python"
@@ -418,16 +418,16 @@ class TestLSPTools:
     async def test_lsp_references_success(self):
         """Test successful lsp_references call."""
         # Mock LSP bus
-        with patch("app.core.lsp.tools.get_lsp_bus") as mock_get_bus:
+        with patch("app.tools.lsp.get_lsp_bus") as mock_get_bus:
             mock_bus = Mock()
-            mock_server = Mock()
+            mock_server = AsyncMock()
             mock_server.references.return_value = [{"uri": "test.py", "range": {}}]
-            mock_bus.ensure_server.return_value = mock_server
+            mock_bus.ensure_server = AsyncMock(return_value=mock_server)
             mock_bus.detect_language.return_value = "python"
             mock_get_bus.return_value = mock_bus
 
             # Call tool
-            result = await lsp_references("test.py", 10, 20, True, "/workspace")
+            result = await lsp_references.coroutine("test.py", 10, 20, True, ".")
 
             assert result["success"] is True
             assert result["language"] == "python"
@@ -437,18 +437,18 @@ class TestLSPTools:
     async def test_lsp_symbol_search_success(self):
         """Test successful lsp_symbol_search call."""
         # Mock LSP bus
-        with patch("app.core.lsp.tools.get_lsp_bus") as mock_get_bus:
+        with patch("app.tools.lsp.get_lsp_bus") as mock_get_bus:
             mock_bus = Mock()
-            mock_server = Mock()
+            mock_server = AsyncMock()
             mock_server.symbol_search.return_value = [
                 {"name": "test", "kind": "function"}
             ]
-            mock_bus.ensure_server.return_value = mock_server
+            mock_bus.ensure_server = AsyncMock(return_value=mock_server)
             mock_bus.get_supported_languages.return_value = ["python"]
             mock_get_bus.return_value = mock_bus
 
             # Call tool
-            result = await lsp_symbol_search("test", "/workspace")
+            result = await lsp_symbol_search.coroutine("test", ".")
 
             assert result["success"] is True
             assert result["query"] == "test"
@@ -459,16 +459,16 @@ class TestLSPTools:
     async def test_lsp_rename_success(self):
         """Test successful lsp_rename call."""
         # Mock LSP bus
-        with patch("app.core.lsp.tools.get_lsp_bus") as mock_get_bus:
+        with patch("app.tools.lsp.get_lsp_bus") as mock_get_bus:
             mock_bus = Mock()
-            mock_server = Mock()
+            mock_server = AsyncMock()
             mock_server.rename.return_value = {"changes": [{"newName": "new_name"}]}
-            mock_bus.ensure_server.return_value = mock_server
+            mock_bus.ensure_server = AsyncMock(return_value=mock_server)
             mock_bus.detect_language.return_value = "python"
             mock_get_bus.return_value = mock_bus
 
             # Call tool
-            result = await lsp_rename("test.py", 10, 20, "new_name", "/workspace")
+            result = await lsp_rename.coroutine("test.py", 10, 20, "new_name", ".")
 
             assert result["success"] is True
             assert result["language"] == "python"
@@ -479,19 +479,19 @@ class TestLSPTools:
     async def test_lsp_diagnostics_success(self):
         """Test successful lsp_diagnostics call."""
         # Mock LSP bus
-        with patch("app.core.lsp.tools.get_lsp_bus") as mock_get_bus:
+        with patch("app.tools.lsp.get_lsp_bus") as mock_get_bus:
             mock_bus = Mock()
-            mock_server = Mock()
+            mock_server = AsyncMock()
             mock_server.diagnostics.return_value = [
                 {"severity": 1, "message": "Error"},
                 {"severity": 2, "message": "Warning"},
             ]
-            mock_bus.ensure_server.return_value = mock_server
+            mock_bus.ensure_server = AsyncMock(return_value=mock_server)
             mock_bus.detect_language.return_value = "python"
             mock_get_bus.return_value = mock_bus
 
             # Call tool
-            result = await lsp_diagnostics("test.py", "/workspace")
+            result = await lsp_diagnostics.coroutine("test.py", ".")
 
             assert result["success"] is True
             assert result["language"] == "python"
@@ -503,18 +503,18 @@ class TestLSPTools:
     async def test_lsp_code_action_success(self):
         """Test successful lsp_code_action call."""
         # Mock LSP bus
-        with patch("app.core.lsp.tools.get_lsp_bus") as mock_get_bus:
+        with patch("app.tools.lsp.get_lsp_bus") as mock_get_bus:
             mock_bus = Mock()
-            mock_server = Mock()
+            mock_server = AsyncMock()
             mock_server.code_action.return_value = [
                 {"title": "Fix this", "kind": "quickfix"}
             ]
-            mock_bus.ensure_server.return_value = mock_server
+            mock_bus.ensure_server = AsyncMock(return_value=mock_server)
             mock_bus.detect_language.return_value = "python"
             mock_get_bus.return_value = mock_bus
 
             # Call tool
-            result = await lsp_code_action("test.py", 10, 20, "/workspace")
+            result = await lsp_code_action.coroutine("test.py", 10, 20, ".")
 
             assert result["success"] is True
             assert result["language"] == "python"
@@ -527,7 +527,7 @@ class TestLSPMCP:
 
     def test_mcp_server_creation(self):
         """Test MCP server creation."""
-        from app.core.mcp.lsp_mcp import LSPMCPServer
+        from app.mcp.lsp_mcp import LSPMCPServer
 
         server = LSPMCPServer()
 
@@ -539,7 +539,7 @@ class TestLSPMCP:
     @pytest.mark.asyncio
     async def test_mcp_server_initialize(self):
         """Test MCP server initialization."""
-        from app.core.mcp.lsp_mcp import LSPMCPServer
+        from app.mcp.lsp_mcp import LSPMCPServer
 
         server = LSPMCPServer()
 
@@ -550,7 +550,7 @@ class TestLSPMCP:
     @pytest.mark.asyncio
     async def test_mcp_server_list_tools(self):
         """Test MCP server list tools."""
-        from app.core.mcp.lsp_mcp import LSPMCPServer
+        from app.mcp.lsp_mcp import LSPMCPServer
 
         server = LSPMCPServer()
         await server.initialize()
@@ -570,13 +570,13 @@ class TestLSPMCP:
     @pytest.mark.asyncio
     async def test_mcp_server_call_tool(self):
         """Test MCP server call tool."""
-        from app.core.mcp.lsp_mcp import LSPMCPServer
+        from app.mcp.lsp_mcp import LSPMCPServer
 
         server = LSPMCPServer()
         await server.initialize()
 
         # Mock successful tool call
-        with patch("app.core.mcp.lsp_mcp.lsp_hover") as mock_hover:
+        with patch("app.mcp.lsp_mcp.lsp_hover") as mock_hover:
             mock_hover.return_value = {"success": True, "result": "test"}
 
             result = await server.call_tool(
@@ -585,7 +585,7 @@ class TestLSPMCP:
                     "file_path": "test.py",
                     "line": 10,
                     "column": 20,
-                    "workspace": "/workspace",
+                    "workspace": ".",
                 },
             )
 
@@ -597,12 +597,12 @@ class TestLSPMCP:
     @pytest.mark.asyncio
     async def test_mcp_server_health_check(self):
         """Test MCP server health check."""
-        from app.core.mcp.lsp_mcp import LSPMCPServer
+        from app.mcp.lsp_mcp import LSPMCPServer
 
         server = LSPMCPServer()
 
         # Mock LSP bus
-        with patch("app.core.mcp.lsp_mcp.get_lsp_bus") as mock_get_bus:
+        with patch("app.mcp.lsp_mcp.get_lsp_bus") as mock_get_bus:
             mock_bus = Mock()
             mock_bus.get_supported_languages.return_value = ["python", "typescript"]
             mock_get_bus.return_value = mock_bus

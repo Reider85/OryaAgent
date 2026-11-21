@@ -10,15 +10,22 @@
        (отключается флагом -NoDockerStart).
     4. docker compose up -d postgres redis + ожидание pg_isready.
        Хост-порты БД/Redis берутся из POSTGRES_PORT/REDIS_PORT (env или .env),
-       а при их отсутствии — из уже запущенного контейнера (без recreate).
-       Если порт занят посторонним процессом, а явно не задан — подбирается
-       свободный (с +3); явно заданный занятый порт = fail-fast с владельцем.
+       затем из уже запущенного контейнера (без recreate); без контейнера
+       предпочитается дефолт 5432/6379, если он свободен — logs/runtime.env
+       хранит только *запасной* порт прошлого запуска (занятый дефолт) и не
+       пинаст его навсегда. Если порт занят посторонним процессом, а явно не
+       задан — подбирается свободный (с +3); явно заданный занятый порт =
+       fail-fast с владельцем.
     5. uv run python -m app.db.migrate (DATABASE_URL выравнивается под порт БД).
-    6. Фоновый uvicorn  -> logs/api.log  + logs/api.pid
+    6. Фоновый uvicorn с --loop selector -> logs/api.log  + logs/api.pid
+       (ProactorEventLoop на Windows несовместим с psycopg чекпоинтера).
     7. Ожидание GET /health на порту API.
-    8. Фоновый Chainlit -> logs/ui.log   + logs/ui.pid
+    8. Фоновый oriahs-mcp (HTTP :8765) -> logs/mcp.log + logs/mcp.pid —
+       best-effort: занятый порт/таймаут = предупреждение, инструменты
+       oriahs_search/oriahs_index деградируют штатно (ToolException).
+    9. Фоновый Chainlit -> logs/ui.log   + logs/ui.pid
        (ORYA_API_URL указывает на запущенный API).
-    9. Ожидание ответа на порту UI.
+   10. Ожидание ответа на порту UI.
 
   Режим -Stack: вместо шагов 2/5-9 полный контейнерный стек
   `docker compose --profile app --profile observability up -d --build`
@@ -84,10 +91,13 @@ $RuntimeFile = Join-Path $Logs 'runtime.env'
 $LockFile = Join-Path $Logs 'start.ps1.lock'
 $ApiPidFile = Join-Path $Logs 'api.pid'
 $UiPidFile = Join-Path $Logs 'ui.pid'
+$McpPidFile = Join-Path $Logs 'mcp.pid'
 $ApiLog = Join-Path $Logs 'api.log'
 $ApiErrLog = Join-Path $Logs 'api.err.log'
 $UiLog = Join-Path $Logs 'ui.log'
 $UiErrLog = Join-Path $Logs 'ui.err.log'
+$McpLog = Join-Path $Logs 'mcp.log'
+$McpErrLog = Join-Path $Logs 'mcp.err.log'
 
 function Write-Step([string]$Message) {
     Write-Host "==> $Message" -ForegroundColor Cyan
@@ -311,9 +321,11 @@ if ($dockerCode -ne 0) {
 }
 Write-Done "Docker доступен"
 
-# Хост-порты: env > .env > уже запущенный контейнер > дефолт compose.
-# Произведённые значения экспортируются, чтобы `compose up` не пересоздавал
-# существующие контейнеры (и чтобы миграции/API попали в тот же порт).
+# Хост-порты: env > .env > уже запущенный контейнер > (дефолт, если свободен)
+# > запасной порт из logs/runtime.env > скан с +3. Без контейнера дефолт
+# 5432/6379 имеет приоритет над runtime.env: иначе однажды подобранный порт
+# (когда-то занятый дефолт) пинастся навсегда, а `make dev`/ручной uv run с
+# дефолтным DATABASE_URL не достучатся до контейнера на старом порту.
 # Фолбэк: занятый порт, не являющийся нашим контейнером, при непрямом
 # источнике (дефолт/runtime.env) → подбор свободного с +3; при явном
 # источнике (env/.env) → fail-fast с именем владельца.
@@ -325,22 +337,48 @@ if ($env:POSTGRES_PORT) { $PgPort = [int]$env:POSTGRES_PORT; $PgExplicit = $true
 elseif ($envFilePg = Get-EnvFileValue 'POSTGRES_PORT') { $PgPort = [int]$envFilePg; $PgExplicit = $true }
 else {
     $detected = Get-DockerPort 'oryaagent-postgres-1' '5432/tcp'
-    if (-not $detected) { $detected = Get-FileValue $RuntimeFile 'POSTGRES_PORT' }
     if ($detected) {
         $PgPort = [int]$detected
         $env:POSTGRES_PORT = "$PgPort"
-        Write-Step "POSTGRES_PORT не задан — использую порт из запуска/контейнера: $PgPort"
+        Write-Step "POSTGRES_PORT не задан — использую порт контейнера: $PgPort"
+    }
+    else {
+        $remembered = Get-FileValue $RuntimeFile 'POSTGRES_PORT'
+        if (-not (Test-PortBusy 5432)) {
+            if ($remembered -and $remembered -ne '5432') {
+                Write-Step "POSTGRES_PORT: дефолт 5432 свободен — использую его (runtime.env помнил $remembered)"
+            }
+        }
+        elseif ($remembered -and $remembered -ne '5432' -and -not (Test-PortBusy ([int]$remembered))) {
+            $PgPort = [int]$remembered
+            $env:POSTGRES_PORT = "$PgPort"
+            Write-Step "5432 занят — использую порт прошлого запуска из runtime.env: $PgPort"
+        }
+        # Оба заняты / нет воспоминаний: $PgPort остаётся $null → $PgResolved=5432
+        # → Resolve-HostPort подберёт свободный с +3.
     }
 }
 if ($env:REDIS_PORT) { $RedisPort = [int]$env:REDIS_PORT; $RedisExplicit = $true }
 elseif ($envFileRedis = Get-EnvFileValue 'REDIS_PORT') { $RedisPort = [int]$envFileRedis; $RedisExplicit = $true }
 else {
     $detected = Get-DockerPort 'oryaagent-redis-1' '6379/tcp'
-    if (-not $detected) { $detected = Get-FileValue $RuntimeFile 'REDIS_PORT' }
     if ($detected) {
         $RedisPort = [int]$detected
         $env:REDIS_PORT = "$RedisPort"
-        Write-Step "REDIS_PORT не задан — использую порт из запуска/контейнера: $RedisPort"
+        Write-Step "REDIS_PORT не задан — использую порт контейнера: $RedisPort"
+    }
+    else {
+        $remembered = Get-FileValue $RuntimeFile 'REDIS_PORT'
+        if (-not (Test-PortBusy 6379)) {
+            if ($remembered -and $remembered -ne '6379') {
+                Write-Step "REDIS_PORT: дефолт 6379 свободен — использую его (runtime.env помнил $remembered)"
+            }
+        }
+        elseif ($remembered -and $remembered -ne '6379' -and -not (Test-PortBusy ([int]$remembered))) {
+            $RedisPort = [int]$remembered
+            $env:REDIS_PORT = "$RedisPort"
+            Write-Step "6379 занят — использую порт прошлого запуска из runtime.env: $RedisPort"
+        }
     }
 }
 $PgResolved = 5432
@@ -374,9 +412,10 @@ $PgResolved = Resolve-HostPort -Port $PgResolved -Key 'POSTGRES_PORT' `
 $RedisResolved = Resolve-HostPort -Port $RedisResolved -Key 'REDIS_PORT' `
     -Container 'oryaagent-redis-1' -Spec '6379/tcp' -Explicit:$RedisExplicit
 
-# Запоминаем выбранные порты ДО compose up: после `docker compose down`
-# контейнеров нет, но следующий запуск должен поднять их на тех же
-# хост-портах; при падении up выбор тоже сохраняется.
+# Запоминаем выбранные порты ДО compose up: runtime.env — это *запасной*
+# источник для следующего запуска, когда дефолт 5432/6379 занят (иначе
+# однажды подобранный порт пинастся навсегда); при падении up выбор тоже
+# сохраняется. Свободный дефолт всегда важнее воспоминания (см. выше).
 New-Item -ItemType Directory -Force -Path $Logs | Out-Null
 Set-Content -LiteralPath $RuntimeFile `
     -Value "POSTGRES_PORT=$PgResolved`nREDIS_PORT=$RedisResolved" -Encoding ascii
@@ -500,7 +539,15 @@ Remove-Item -LiteralPath $ApiPidFile, $UiPidFile, $ApiLog, $ApiErrLog, $UiLog, $
 $env:PYTHONUNBUFFERED = '1'
 $env:PYTHONIOENCODING = 'utf-8'
 
-$pyArgs = @('-m', 'uvicorn', 'app.main:app', '--port', "$ApiPort")
+# --loop selector: uvicorn на Windows без флага поднимается на
+# ProactorEventLoop, на котором psycopg (LangGraph PostgresSaver) отказывается
+# работать — чекпоинтер деградирует в MemorySaver, session-log шлёт warnings
+# каждые 30с. Тот же флаг использует `make dev`.
+$pyArgs = @(
+    '-m', 'uvicorn', 'app.main:app',
+    '--port', "$ApiPort",
+    '--loop', 'app.core.loop_factory:selector_loop_factory'
+)
 if ($Reload) { $pyArgs += '--reload' }
 
 $apiProc = Start-Process -FilePath $PyExe `
@@ -520,7 +567,36 @@ if (-not (Wait-Http "http://127.0.0.1:$ApiPort/health" 60 "API /health")) {
 }
 Write-Done "API здоров: http://127.0.0.1:$ApiPort/health"
 
-# --- 6. UI (Chainlit) -------------------------------------------------------
+# --- 6. MCP-сервер (oriahs-mcp, HTTP) ---------------------------------------
+# Локальный паритет со стеком: oriahs_search/oriahs_index health-гейтят
+# http://127.0.0.1:8765 (MCP_SERVER_URL по умолчанию). Best-effort: порт
+# занят или сервер не поднялся — предупреждение, не ошибка (инструменты
+# деградируют штатно через ToolException → recover-node).
+Write-Step "Запуск MCP-сервера (oriahs-mcp, 127.0.0.1:8765)"
+if (Test-PortBusy 8765) {
+    Write-Host "!!  Порт 8765 занят — oriahs-mcp не запущен, oriahs_search/oriahs_index деградируют" -ForegroundColor Yellow
+    Remove-Item -LiteralPath $McpPidFile -Force -ErrorAction SilentlyContinue
+}
+else {
+    Remove-Item -LiteralPath $McpPidFile, $McpLog, $McpErrLog -Force -ErrorAction SilentlyContinue
+    $mcpProc = Start-Process -FilePath $PyExe `
+        -ArgumentList @('-m', 'app.mcp.oriahs_mcp') `
+        -WorkingDirectory $Root `
+        -RedirectStandardOutput $McpLog `
+        -RedirectStandardError $McpErrLog `
+        -WindowStyle Hidden `
+        -PassThru
+    Set-Content -LiteralPath $McpPidFile -Value $mcpProc.Id -Encoding ascii
+    Write-Done "MCP pid=$($mcpProc.Id) -> $McpLog"
+    if (Wait-Http "http://127.0.0.1:8765/health" 15 "oriahs-mcp" -Optional) {
+        Write-Done "MCP здоров: http://127.0.0.1:8765/health"
+    }
+    else {
+        Show-LogTail $McpErrLog
+    }
+}
+
+# --- 7. UI (Chainlit) -------------------------------------------------------
 # UI ходит в API по ORYA_API_URL — указываем на только что поднятый API.
 $apiUrl = "http://127.0.0.1:$ApiPort"
 if ($env:ORYA_API_URL -and $env:ORYA_API_URL -ne $apiUrl) {
@@ -554,5 +630,6 @@ Write-Host ""
 Write-Host "OryaAgent запущен" -ForegroundColor Green
 Write-Host "  API : $apiUrl  (health: /health)"
 Write-Host "  UI  : http://127.0.0.1:$UiPort/"
+Write-Host "  MCP : http://127.0.0.1:8765/health (oriahs-mcp, если запущен)"
 Write-Host "  Логи: $Logs"
 Write-Host "  Стоп: scripts\stop.ps1"

@@ -12,7 +12,7 @@ from pathlib import Path
 def validate_python_syntax(file_path):
     """Validate Python syntax of a file."""
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             source = f.read()
 
         # Parse the source code
@@ -57,9 +57,9 @@ def main():
     # Check if HTML template exists
     template_path = base_path / "app/ui/templates/branches/merge.html"
     if template_path.exists():
-        print(f"OK: merge.html template - OK")
+        print("OK: merge.html template - OK")
     else:
-        print(f"ERROR: merge.html template - Not found")
+        print("ERROR: merge.html template - Not found")
         all_valid = False
 
     print("\n" + "=" * 60)

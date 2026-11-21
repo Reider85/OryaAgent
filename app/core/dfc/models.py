@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 @dataclass
@@ -12,8 +12,8 @@ class CompactSummary:
 
     content_hash: str
     summary: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    created_at: Optional[float] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: float | None = None
 
     def __post_init__(self):
         if self.created_at is None:
@@ -31,10 +31,10 @@ class DFCConfig:
     heat_cache_size: int = 4000
     compaction_interval: int = 60  # seconds
     compaction_threshold: int = 100  # items in warm layer
-    cold_layer_max_size: Optional[int] = None  # None = unlimited
+    cold_layer_max_size: int | None = None  # None = unlimited
 
     @classmethod
-    def from_settings(cls, settings: Any) -> "DFCConfig":
+    def from_settings(cls, settings: Any) -> DFCConfig:
         """Create DFCConfig from settings."""
         # In a real implementation, this would read from settings
         return cls()
@@ -44,14 +44,14 @@ class DFCConfig:
 class Plan:
     """Plan dataclass for Tri-Model Pipeline."""
 
-    steps: List[str]
-    criteria: List[str]
-    prefetch_hints: List[str]
+    steps: list[str]
+    criteria: list[str]
+    prefetch_hints: list[str]
     tier: str  # small|large|tournament
     cacheable_prefix: str = ""
     dynamic_suffix: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "steps": self.steps,
@@ -63,7 +63,7 @@ class Plan:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Plan":
+    def from_dict(cls, data: dict[str, Any]) -> Plan:
         """Create from dictionary."""
         return cls(
             steps=data.get("steps", []),
@@ -86,9 +86,9 @@ class DFCStats:
     heat_cache_hits: int = 0
     heat_cache_misses: int = 0
     compaction_count: int = 0
-    last_compaction: Optional[float] = None
+    last_compaction: float | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "hot_size": self.hot_size,

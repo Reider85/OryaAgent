@@ -3,8 +3,6 @@
 Simple test to verify audit_gate core functionality.
 """
 
-import json
-import os
 import sys
 from pathlib import Path
 
@@ -16,9 +14,9 @@ from audit_gate import analyze_audit_results, get_severity_from_cvss
 
 def test_core_functionality():
     """Test core functionality without network calls."""
-    
+
     print("Testing core audit_gate functionality...")
-    
+
     # Test 1: Severity classification
     print("\n=== Test 1: Severity classification ===")
     assert get_severity_from_cvss(9.5) == "CRITICAL"
@@ -27,10 +25,10 @@ def test_core_functionality():
     assert get_severity_from_cvss(2.0) == "LOW"
     assert get_severity_from_cvss(None) == "UNKNOWN"
     print("SUCCESS: Severity classification works correctly")
-    
+
     # Test 2: Analyze audit results with manual CVSS scores
     print("\n=== Test 2: Analyze audit results ===")
-    
+
     # Mock audit data
     mock_audit_data = {
         "results": {
@@ -39,9 +37,7 @@ def test_core_functionality():
                     "vulnerable": True,
                     "id": "CVE-2021-0001",
                     "title": "High severity vulnerability",
-                    "fix": {
-                        "version": "1.1.0"
-                    }
+                    "fix": {"version": "1.1.0"},
                 }
             ],
             "package2": [
@@ -49,32 +45,36 @@ def test_core_functionality():
                     "vulnerable": True,
                     "id": "CVE-2021-0002",
                     "title": "Low severity vulnerability",
-                    "fix": {
-                        "version": "2.0.0"
-                    }
+                    "fix": {"version": "2.0.0"},
                 }
-            ]
+            ],
         }
     }
-    
+
     vulnerabilities = analyze_audit_results(mock_audit_data)
-    
+
     print(f"Found {len(vulnerabilities)} vulnerabilities:")
     for vuln in vulnerabilities:
-        print(f"  - {vuln['package']}: {vuln['cve_id']} (CVSS {vuln['cvss_score']}, {vuln['severity']})")
-    
+        print(
+            f"  - {vuln['package']}: {vuln['cve_id']} (CVSS {vuln['cvss_score']}, {vuln['severity']})"
+        )
+
     # Verify we found the expected vulnerabilities
     assert len(vulnerabilities) == 2
-    assert vuln['package'] == 'package2'  # Last one
-    
+    assert vuln["package"] == "package2"  # Last one
+
     print("SUCCESS: Audit results analysis works correctly")
-    
+
     # Test 3: Check blocking logic
     print("\n=== Test 3: Blocking logic ===")
-    
+
     # Simulate the blocking logic from the main function
-    high_critical = [v for v in vulnerabilities if v["severity"] in ["CRITICAL", "HIGH"] and v["cvss_score"] is not None]
-    
+    high_critical = [
+        v
+        for v in vulnerabilities
+        if v["severity"] in ["CRITICAL", "HIGH"] and v["cvss_score"] is not None
+    ]
+
     if high_critical:
         print("RELEASE BLOCKED: High/critical vulnerabilities found")
         print("This is the expected behavior for high severity vulnerabilities")
@@ -87,40 +87,42 @@ def test_core_functionality():
 def test_file_structure():
     """Test that all required files exist."""
     print("\n=== Test 4: File structure ===")
-    
+
     # Check audit_gate.py exists
     audit_gate_path = Path(__file__).parent / "audit_gate.py"
     assert audit_gate_path.exists(), "audit_gate.py should exist"
-    
+
     # Check issue template exists
-    template_path = Path(__file__).parent.parent / ".github" / "ISSUE_TEMPLATE" / "audit_failure.md"
+    template_path = (
+        Path(__file__).parent.parent / ".github" / "ISSUE_TEMPLATE" / "audit_failure.md"
+    )
     assert template_path.exists(), "audit_failure.md should exist"
-    
+
     # Check CI workflow exists and has been updated
     ci_path = Path(__file__).parent.parent / ".github" / "workflows" / "ci.yml"
     assert ci_path.exists(), "ci.yml should exist"
-    
-    with open(ci_path, 'r', encoding='utf-8') as f:
+
+    with open(ci_path, encoding="utf-8") as f:
         content = f.read()
         assert "Audit (block on high/critical)" in content
         assert "Audit (report all)" in content
         assert "File security issue" in content
         assert "NVD_API_KEY" in content
-    
+
     print("SUCCESS: All required files exist and are properly configured")
 
 
 def main():
     """Run all tests."""
     print("Running audit_gate core functionality tests...")
-    
+
     # Test core functionality
     result1 = test_core_functionality()
-    
+
     # Test file structure
     test_file_structure()
-    
-    print(f"\n=== Results ===")
+
+    print("\n=== Results ===")
     if result1 == 1:  # Expected to block due to high severity
         print("SUCCESS: Core functionality tests passed!")
         print("\nImplementation Summary:")

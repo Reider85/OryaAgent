@@ -6,9 +6,9 @@ Provides a web-based chat interface for OryaAgent sessions.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -36,14 +36,14 @@ class ChatSession(BaseModel):
     id: str
     name: str
     created_at: str
-    messages: List[ChatMessage]
+    messages: list[ChatMessage]
 
 
 class ConnectionManager:
     """Manager for WebSocket connections."""
 
     def __init__(self):
-        self.active_connections: Dict[str, List[WebSocket]] = {}
+        self.active_connections: dict[str, list[WebSocket]] = {}
 
     async def connect(self, websocket: WebSocket, session_id: str):
         """Accept a WebSocket connection."""
@@ -78,7 +78,6 @@ class ChatInterface:
     def __init__(self):
         self.session_manager = SessionManager()
         self.branch_manager = get_branch_manager()
-        self.skill_registry = get_skill_registry()
         self.templates = Jinja2Templates(directory="app/ui/templates")
 
     async def create_session(self, name: str = None) -> str:
@@ -88,11 +87,11 @@ class ChatInterface:
         )
         return session_id
 
-    async def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+    async def get_session(self, session_id: str) -> dict[str, Any] | None:
         """Get session information."""
         return await self.session_manager.get_session(session_id)
 
-    async def get_session_messages(self, session_id: str) -> List[Dict[str, Any]]:
+    async def get_session_messages(self, session_id: str) -> list[dict[str, Any]]:
         """Get messages for a session."""
         turns = await self.session_manager.get_session_turns(session_id)
         messages = []
@@ -108,7 +107,7 @@ class ChatInterface:
                 )
         return messages
 
-    async def send_message(self, session_id: str, message: str) -> Dict[str, Any]:
+    async def send_message(self, session_id: str, message: str) -> dict[str, Any]:
         """Send a message to a session."""
         # This would integrate with the LangGraph agent
         # For now, return a placeholder response
@@ -119,7 +118,7 @@ class ChatInterface:
             "timestamp": "2024-01-01T00:00:00Z",
         }
 
-    async def list_sessions(self) -> List[Dict[str, Any]]:
+    async def list_sessions(self) -> list[dict[str, Any]]:
         """List all sessions."""
         sessions = await self.session_manager.list_sessions()
         return [
@@ -127,17 +126,19 @@ class ChatInterface:
             for s in sessions
         ]
 
-    async def list_skills(self) -> List[Dict[str, Any]]:
+    async def list_skills(self) -> list[dict[str, Any]]:
         """List available skills."""
-        skills = self.skill_registry.list_skills()
+        registry = await get_skill_registry()
+        skills = registry.list_skills()
         return [
             {"name": skill.name, "description": skill.description} for skill in skills
         ]
 
-    async def activate_skill(self, session_id: str, skill_name: str) -> Dict[str, Any]:
+    async def activate_skill(self, session_id: str, skill_name: str) -> dict[str, Any]:
         """Activate a skill for a session."""
         try:
-            result = self.skill_registry.activate_skill(skill_name)
+            registry = await get_skill_registry()
+            result = await registry.activate_skill(skill_name)
             return {"skill": skill_name, "result": result}
         except Exception as e:
             return {"skill": skill_name, "error": str(e)}
@@ -148,7 +149,7 @@ class ChatInterface:
         """Create a branch from a session."""
         return await self.branch_manager.fork_session(session_id, turn_id, branch_name)
 
-    async def list_branches(self, session_id: str) -> List[Dict[str, Any]]:
+    async def list_branches(self, session_id: str) -> list[dict[str, Any]]:
         """List branches for a session."""
         return await self.branch_manager.list_branches(session_id)
 
@@ -241,7 +242,7 @@ async def chat_page(request):
                         body: JSON.stringify({ content: message })
                     });
                     const result = await response.json();
-                    
+
                     // Add response message
                     const responseMessage = document.createElement('div');
                     responseMessage.className = 'mb-4 text-left';
@@ -252,7 +253,7 @@ async def chat_page(request):
                         </div>
                     `;
                     messagesContainer.appendChild(responseMessage);
-                    
+
                     // Scroll to bottom
                     messagesContainer.scrollTop = messagesContainer.scrollHeight;
                 } catch (error) {
@@ -298,7 +299,7 @@ async def get_messages(session_id: str):
 
 
 @router.post("/api/chat/{session_id}/messages")
-async def send_message(session_id: str, message: Dict[str, str]):
+async def send_message(session_id: str, message: dict[str, str]):
     """Send a message to a session."""
     chat_interface = get_chat_interface()
     result = await chat_interface.send_message(session_id, message["content"])

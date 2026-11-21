@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 from app.core.observability.spans import emit_span
 
@@ -20,7 +20,7 @@ class ContextAssembler:
         self,
         base_prompt: str,
         tools: list,
-        plan: Dict[str, Any],
+        plan: dict[str, Any],
         max_tokens: int = 16000,
     ) -> str:
         """Assemble complete system prompt with DFC integration."""
@@ -91,7 +91,7 @@ class ContextAssembler:
 
         return "\n".join(truncated_lines)
 
-    def add_dynamic_suffix(self, prompt: str, context: Dict[str, Any]) -> str:
+    def add_dynamic_suffix(self, prompt: str, context: dict[str, Any]) -> str:
         """Add dynamic suffix to prompt based on context."""
         dynamic_parts = []
 

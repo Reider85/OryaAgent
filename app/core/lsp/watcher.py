@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from app.core.lsp.bus import get_lsp_bus
 from app.tools._validators import validate_path
@@ -37,19 +37,19 @@ class LSPFileWatcher:
         self.max_file_size = max_file_size
 
         # Track watched files
-        self.watched_files: Set[Path] = set()
-        self.file_events: Dict[Path, FileChangeEvent] = {}
+        self.watched_files: set[Path] = set()
+        self.file_events: dict[Path, FileChangeEvent] = {}
 
         # Track LSP servers
-        self.lsp_servers: Dict[str, Any] = {}
+        self.lsp_servers: dict[str, Any] = {}
 
         # Control
         self.is_running = False
-        self._watch_task: Optional[asyncio.Task] = None
-        self._debounce_tasks: Dict[Path, asyncio.Task] = {}
+        self._watch_task: asyncio.Task | None = None
+        self._debounce_tasks: dict[Path, asyncio.Task] = {}
 
         # File system observer (mock implementation)
-        self._observed_paths: Set[Path] = set()
+        self._observed_paths: set[Path] = set()
 
     async def start(self) -> None:
         """Start the file watcher."""
@@ -181,7 +181,7 @@ class LSPFileWatcher:
         except Exception as e:
             logger.error(f"Error handling file event for {event.file_path}: {e}")
 
-    def _detect_language(self, file_path: Path) -> Optional[str]:
+    def _detect_language(self, file_path: Path) -> str | None:
         """Detect language from file extension."""
         lsp_bus = get_lsp_bus()
         return lsp_bus.detect_language(file_path)
@@ -261,11 +261,11 @@ class LSPFileWatcher:
         for file_path in self.watched_files:
             await self.refresh_file(file_path)
 
-    def get_watched_files(self) -> List[str]:
+    def get_watched_files(self) -> list[str]:
         """Get list of watched files."""
         return [str(f) for f in self.watched_files]
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """Get watcher statistics."""
         return {
             "is_running": self.is_running,
@@ -277,7 +277,7 @@ class LSPFileWatcher:
 
 
 # Global file watcher instance
-_file_watcher: Optional[LSPFileWatcher] = None
+_file_watcher: LSPFileWatcher | None = None
 
 
 def get_file_watcher() -> LSPFileWatcher:

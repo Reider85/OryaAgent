@@ -21,7 +21,6 @@ from app.api.skills import router as skills_router
 from app.api.sqlite_store import router as sqlite_store_router
 from app.api.workspace import router as workspace_router
 from app.core.logging_setup import (
-    configure_cli_logging,
     install_file_logger,
     route_uvicorn_logs_to_root,
 )

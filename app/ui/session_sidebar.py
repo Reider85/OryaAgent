@@ -6,9 +6,9 @@ Provides session management functionality with search and filtering.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.core.session import SessionManager
@@ -32,8 +32,8 @@ class SessionInfo(BaseModel):
 class SessionFilter(BaseModel):
     """Session filter model."""
 
-    search: Optional[str] = None
-    status: Optional[str] = None
+    search: str | None = None
+    status: str | None = None
     limit: int = 50
     offset: int = 0
 
@@ -44,7 +44,7 @@ class SessionSidebar:
     def __init__(self):
         self.session_manager = SessionManager()
 
-    async def list_sessions(self, filter: SessionFilter) -> Dict[str, Any]:
+    async def list_sessions(self, filter: SessionFilter) -> dict[str, Any]:
         """List sessions with filtering."""
         try:
             # Get all sessions
@@ -172,7 +172,7 @@ class SessionSidebar:
                 status_code=500, detail=f"Failed to update session name: {str(e)}"
             )
 
-    async def get_session_statistics(self) -> Dict[str, Any]:
+    async def get_session_statistics(self) -> dict[str, Any]:
         """Get session statistics."""
         try:
             sessions = await self.session_manager.list_sessions()
@@ -222,8 +222,8 @@ def get_session_sidebar() -> SessionSidebar:
 
 @router.get("/sessions")
 async def list_sessions(
-    search: Optional[str] = Query(None, description="Search term for session names"),
-    status: Optional[str] = Query(None, description="Filter by status"),
+    search: str | None = Query(None, description="Search term for session names"),
+    status: str | None = Query(None, description="Filter by status"),
     limit: int = Query(
         50, ge=1, le=100, description="Maximum number of sessions to return"
     ),

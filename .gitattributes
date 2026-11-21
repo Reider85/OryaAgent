@@ -1,0 +1,4 @@
+# POSIX shell scripts must stay LF in the working tree: the test suite runs
+# `bash -n scripts/*.sh`, and with core.autocrlf=true a checkout would deliver
+# CRLF and bash fails on `case ... in\r`.
+*.sh text eol=lf

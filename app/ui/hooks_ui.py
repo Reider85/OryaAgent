@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import logging
-from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from app.core.hooks import get_hook_registry, get_hook_executor
+from app.core.hooks import get_hook_executor, get_hook_registry
 from app.core.security import get_current_user
-from app.core.observability.spans import emit_span
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ui/hooks", tags=["hooks-ui"])
@@ -28,7 +25,7 @@ async def hooks_list_ui(
     """Hooks list UI page."""
     try:
         registry = get_hook_registry()
-        executor = get_hook_executor()
+        get_hook_executor()
 
         # Get all registered hooks
         hooks_info = registry.list_hooks()
@@ -153,8 +150,8 @@ async def hooks_detail_ui(
 ):
     """Hooks detail UI page."""
     try:
-        registry = get_hook_registry()
-        executor = get_hook_executor()
+        get_hook_registry()
+        get_hook_executor()
 
         # Get hook information (this would be implemented in a real system)
         # For now, we'll use mock data
@@ -276,7 +273,7 @@ async def hooks_register_post(
                 status_code=400, detail="Hook name, tool name, and type are required"
             )
 
-        registry = get_hook_registry()
+        get_hook_registry()
 
         # In a real implementation, this would register the hook
         # For now, we'll just log it
@@ -307,7 +304,7 @@ async def hooks_unregister_post(
         if not tool_name:
             raise HTTPException(status_code=400, detail="Tool name is required")
 
-        registry = get_hook_registry()
+        get_hook_registry()
 
         # In a real implementation, this would unregister the hooks for the tool
         # For now, we'll just log it

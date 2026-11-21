@@ -1,11 +1,11 @@
 """Test suite for the skills API endpoints."""
 
-import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+import asyncio
+
 from fastapi.testclient import TestClient
 
+from app.core.skills import Skill, get_skill_registry
 from app.main import app
-from app.core.skills import get_skill_registry, Skill
 
 
 class TestSkillsAPI:
@@ -14,7 +14,9 @@ class TestSkillsAPI:
     def setup_method(self):
         """Set up test environment."""
         self.client = TestClient(app)
-        self.registry = get_skill_registry()
+        # get_skill_registry is async (loads YAML on first use); run it in a
+        # private loop — setup_method is sync.
+        self.registry = asyncio.run(get_skill_registry())
 
         # Clear existing skills for testing
         self.registry._skills.clear()
@@ -60,8 +62,8 @@ class TestSkillsAPI:
         self.registry.register_skill(self.test_skill2)
 
         # Set skills as inactive by default for testing
-        self.test_skill1._is_active = False
-        self.test_skill2._is_active = False
+        self.test_skill1.is_active = False
+        self.test_skill2.is_active = False
 
     def teardown_method(self):
         """Clean up test environment."""
@@ -106,7 +108,7 @@ class TestSkillsAPI:
     def test_list_active_skills_only(self):
         """Test listing only active skills."""
         # Activate one skill
-        self.registry.activate_skill("test-skill-1")
+        asyncio.run(self.registry.activate_skill("test-skill-1"))
 
         response = self.client.get("/skills/?active_only=true")
         assert response.status_code == 200
@@ -147,7 +149,7 @@ class TestSkillsAPI:
     def test_deactivate_skill(self):
         """Test deactivating a skill."""
         # First activate the skill
-        self.registry.activate_skill("test-skill-1")
+        asyncio.run(self.registry.activate_skill("test-skill-1"))
 
         response = self.client.post(
             "/skills/activate", json={"skill_name": "test-skill-1", "activate": False}

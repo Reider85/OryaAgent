@@ -3,8 +3,8 @@
 Simple integration test for Next.js UI components
 """
 
-import sys
 import os
+import sys
 
 # Add the app directory to Python path
 app_dir = os.path.join(os.path.dirname(__file__), "..")
@@ -31,7 +31,6 @@ def test_nextjs_ui_routes():
             print(f"  {route}")
 
         # Check for expected routes
-        expected = ["GET /", "GET /sessions", "GET /settings", "GET /tool-calls"]
         found_routes = [
             r for r in routes if any(r.startswith(method) for method in ["GET", "POST"])
         ]
@@ -110,7 +109,7 @@ def test_package_json():
         print("[ERROR] package.json not found")
         return False
 
-    with open(package_path, "r") as f:
+    with open(package_path) as f:
         content = f.read()
         if "next" in content and "react" in content:
             print("[OK] package.json has required dependencies")

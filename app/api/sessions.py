@@ -741,17 +741,20 @@ async def delete_session(session_id: str) -> dict:
     _require_session(row, session_id)
     _session_policies.pop(session_id, None)
     logger.info("session soft-deleted: %s", session_id)
-    
+
     # Trigger final memory extraction on session close (B-22)
     try:
         from app.core.memory.extractor import get_memory_extractor
+
         extractor = await get_memory_extractor()
         # Run final extraction for the entire session
         await extractor.extract_facts(session_id)
         logger.info(f"Final memory extraction completed for session {session_id}")
     except Exception as e:
-        logger.error(f"Failed to perform final memory extraction for session {session_id}: {e}")
-    
+        logger.error(
+            f"Failed to perform final memory extraction for session {session_id}: {e}"
+        )
+
     return {"session_id": session_id, "status": "closed"}
 
 
@@ -863,7 +866,7 @@ class MergeBranchResponse(BaseModel):
     target_session: str
     merge_strategy: str
     merged_turns: int
-    merge_results: List[Dict[str, Any]]
+    merge_results: list[dict[str, Any]]
     conflicts_resolved: int
     merge_id: str
 

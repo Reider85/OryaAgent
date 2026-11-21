@@ -1,19 +1,15 @@
 """Enhanced Next.js UI endpoint with B-15 WebSocket streaming functionality."""
 
-import json
 import logging
-from typing import List, Optional
+import uuid
+from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPBearer
 
-from app.api.sessions import router as sessions_router
-from app.core.auth import get_current_user
-from app.core.config import get_settings
-from app.db.session import get_async_session
-from app.web.websocket_manager import websocket_manager, handle_websocket_connection
-from app.web.streaming_manager import streaming_manager, mock_agent_response_generator
+from app.web.streaming_manager import streaming_manager
+from app.web.websocket_manager import handle_websocket_connection, websocket_manager
 
 logger = logging.getLogger(__name__)
 
@@ -80,12 +76,12 @@ async def get_chat_interface():
                             'Content-Type': 'application/json',
                         },
                     });
-                    
+
                     if (response.ok) {
                         const data = await response.json();
                         sessionId = data.id;
                         userId = 'demo_user';
-                        
+
                         // Connect to WebSocket
                         connectWebSocket();
                     } else {
@@ -115,14 +111,14 @@ async def get_chat_interface():
                 ws.onclose = function(event) {
                     console.log('WebSocket disconnected');
                     updateStatus('disconnected', 'Disconnected');
-                    
+
                     // Attempt to reconnect
                     if (reconnectAttempts < maxReconnectAttempts) {
                         reconnectAttempts++;
                         const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
                         console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttempts})`);
                         updateStatus('reconnecting', `Reconnecting... (${reconnectAttempts}/${maxReconnectAttempts})`);
-                        
+
                         setTimeout(() => {
                             connectWebSocket();
                         }, delay);
@@ -140,11 +136,11 @@ async def get_chat_interface():
             // Handle WebSocket messages
             function handleWebSocketMessage(message) {
                 console.log('Received message:', message);
-                
+
                 const chatContainer = document.getElementById('chat-container');
                 const messageDiv = document.createElement('div');
                 messageDiv.className = `message ${message.type}-message`;
-                
+
                 let content = '';
                 switch (message.type) {
                     case 'user':
@@ -168,7 +164,7 @@ async def get_chat_interface():
                     default:
                         content = `<strong>Message:</strong> ${JSON.stringify(message)}`;
                 }
-                
+
                 messageDiv.innerHTML = content;
                 chatContainer.appendChild(messageDiv);
                 chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -178,7 +174,7 @@ async def get_chat_interface():
             async function sendMessage() {
                 const input = document.getElementById('message-input');
                 const message = input.value.trim();
-                
+
                 if (message && ws && ws.readyState === WebSocket.OPEN) {
                     // Send user message
                     const userMessage = {
@@ -188,12 +184,12 @@ async def get_chat_interface():
                         timestamp: new Date().toISOString(),
                         session_id: sessionId
                     };
-                    
+
                     ws.send(JSON.stringify(userMessage));
-                    
+
                     // Clear input
                     input.value = '';
-                    
+
                     // Simulate agent response
                     simulateAgentResponse(message);
                 }
@@ -204,7 +200,7 @@ async def get_chat_interface():
                 if (!ws || ws.readyState !== WebSocket.OPEN) {
                     return;
                 }
-                
+
                 // Send assistant message
                 const assistantMessage = {
                     id: Date.now().toString(),
@@ -213,7 +209,7 @@ async def get_chat_interface():
                     timestamp: new Date().toISOString(),
                     session_id: sessionId
                 };
-                
+
                 ws.send(JSON.stringify(assistantMessage));
             }
 
@@ -285,7 +281,7 @@ async def get_sessions_interface():
             function displaySessions(sessions) {
                 const sessionList = document.getElementById('session-list');
                 sessionList.innerHTML = '';
-                
+
                 sessions.forEach(session => {
                     const sessionItem = document.createElement('div');
                     sessionItem.className = 'session-item';
@@ -307,7 +303,7 @@ async def get_sessions_interface():
                             'Content-Type': 'application/json',
                         },
                     });
-                    
+
                     if (response.ok) {
                         loadSessions();
                     }
@@ -348,7 +344,7 @@ async def get_settings_interface():
     <body>
         <div class="container">
             <h1>Settings</h1>
-            
+
             <div class="settings-group">
                 <h2>WebSocket Settings</h2>
                 <div class="setting-item">
@@ -364,7 +360,7 @@ async def get_settings_interface():
                     <input type="number" id="reconnect-delay" value="3000" min="1000" max="10000" />
                 </div>
             </div>
-            
+
             <div class="settings-group">
                 <h2>Streaming Settings</h2>
                 <div class="setting-item">
@@ -376,7 +372,7 @@ async def get_settings_interface():
                     <input type="number" id="max-stream-duration" value="300" min="60" max="3600" />
                 </div>
             </div>
-            
+
             <div class="settings-group">
                 <h2>General Settings</h2>
                 <div class="setting-item">
@@ -397,7 +393,7 @@ async def get_settings_interface():
                     </select>
                 </div>
             </div>
-            
+
             <button onclick="saveSettings()">Save Settings</button>
         </div>
 
@@ -412,13 +408,13 @@ async def get_settings_interface():
                     log_level: document.getElementById('log-level').value,
                     theme: document.getElementById('theme').value,
                 };
-                
+
                 // Save to localStorage
                 localStorage.setItem('orya_settings', JSON.stringify(settings));
-                
+
                 alert('Settings saved successfully!');
             }
-            
+
             // Load settings on page load
             window.addEventListener('load', function() {
                 const savedSettings = localStorage.getItem('orya_settings');
@@ -464,7 +460,7 @@ async def create_session():
     # For now, return mock data
     import uuid
     from datetime import datetime
-    
+
     session_id = str(uuid.uuid4())
     return {
         "id": session_id,
@@ -492,7 +488,7 @@ async def get_session_messages(session_id: str):
                 "role": "assistant",
                 "content": "I'm doing well, thank you for asking!",
                 "timestamp": "2024-01-15T10:01:00Z",
-            }
+            },
         ]
     }
 
@@ -515,7 +511,7 @@ async def send_message_to_session(session_id: str, message: dict):
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
     """WebSocket endpoint for real-time communication."""
     await websocket.accept()
-    
+
     try:
         # Handle WebSocket connection
         await handle_websocket_connection(websocket, session_id, "demo_user")
@@ -532,22 +528,22 @@ async def health_check():
     try:
         # Check WebSocket manager health
         ws_health = await websocket_manager.health_check()
-        
+
         # Check streaming manager health
         streaming_health = await streaming_manager.health_check()
-        
+
         # Overall health status
         overall_status = "healthy"
         issues = []
-        
+
         if ws_health["status"] != "healthy":
             overall_status = "degraded"
             issues.extend(ws_health["issues"])
-            
+
         if streaming_health["status"] != "healthy":
             overall_status = "degraded"
             issues.extend(streaming_health["issues"])
-            
+
         return {
             "status": overall_status,
             "issues": issues,

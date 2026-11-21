@@ -1,7 +1,6 @@
 """Tests for oriahs_index tool (B-03)."""
 
 import json
-import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -11,9 +10,9 @@ import pytest
 from langchain_core.tools import ToolException
 
 from app.tools.oriahs_index import (
-    oriahs_index,
     _get_git_ignored_files,
     _should_index_file,
+    oriahs_index,
 )
 
 

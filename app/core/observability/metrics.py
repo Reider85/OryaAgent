@@ -94,6 +94,12 @@ class MetricCollector:
         key = (name, tuple(sorted(labels.items()))) if labels else (name, ())
         self._counters[key] = self._counters.get(key, 0) + value
 
+    def increment_counter(
+        self, name: str, labels: dict[str, str] | None = None, value: int = 1
+    ):
+        """Alias of :meth:`counter_inc` (name used by hooks + retrieval)."""
+        self.counter_inc(name, labels, value)
+
     def gauge_set(self, name: str, value: float, labels: dict[str, str] | None = None):
         """Set a gauge metric."""
         key = (name, tuple(sorted(labels.items()))) if labels else (name, ())
@@ -305,6 +311,7 @@ MEMORY_EXTRACTION_METRICS = {
         "labels": ["session_id"],
     },
 }
+
 
 # Helper functions for memory extraction metrics
 def increment_memory_extraction(status: str, session_id: str):

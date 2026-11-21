@@ -1,10 +1,11 @@
 """Tests for UKB Router (B-27)."""
 
-import pytest
 from unittest.mock import AsyncMock, patch
 
-from app.core.ukb.router import get_ukb_router, RetrievedChunk
+import pytest
+
 from app.core.ukb.config import UKBConfig
+from app.core.ukb.router import RetrievedChunk, get_ukb_router
 
 
 class TestRetrievedChunk:
@@ -93,10 +94,10 @@ class TestUKBRouter:
         chunk1 = RetrievedChunk("same content", "lsp", score=0.9)
         chunk2 = RetrievedChunk("same content", "memory", score=0.8)
         chunk3 = RetrievedChunk("different content", "lsp", score=0.7)
-        
+
         results = [chunk1, chunk2, chunk3]
         merged = router._merge_and_dedup(results)
-        
+
         # Should have 2 unique chunks (chunk1 and chunk3, chunk2 is duplicate of chunk1)
         assert len(merged) == 2
 
@@ -108,7 +109,7 @@ class TestUKBRouter:
             RetrievedChunk("content B", "memory", score=0.7),
             RetrievedChunk("content C", "lsp", score=0.8),
         ]
-        
+
         # Test top_k filtering
         filtered = router._filter_and_rank(results, top_k=2)
         assert len(filtered) == 2
@@ -119,16 +120,16 @@ class TestUKBRouter:
         """Test caching functionality."""
         query = "test query"
         capability = "lsp.def"
-        
+
         # First call should populate cache
         results1 = await router.lookup(query, capability=capability)
         cache_key = router._generate_cache_key(query, capability, None)
-        
+
         assert cache_key in router._cache
-        
+
         # Second call should use cache
         results2 = await router.lookup(query, capability=capability, use_cache=True)
-        
+
         # Results should be the same
         assert len(results1) == len(results2)
 
@@ -137,7 +138,7 @@ class TestUKBRouter:
         key1 = router._generate_cache_key("query1", "lsp.def", {"filter": "value"})
         key2 = router._generate_cache_key("query1", "lsp.def", {"filter": "value"})
         key3 = router._generate_cache_key("query2", "lsp.def", {"filter": "value"})
-        
+
         assert key1 == key2  # Same parameters, same key
         assert key1 != key3  # Different query, different key
 
@@ -159,7 +160,7 @@ class TestUKBRouter:
     async def test_namespace_lookup_metrics(self, router):
         """Test namespace lookup metrics."""
         await router.lookup("test", capability="lsp.def")
-        
+
         metrics = router.get_metrics()
         assert metrics["namespace_lookups"]["lsp"] >= 1
 
@@ -172,15 +173,19 @@ class TestUKBRouter:
     @pytest.mark.asyncio
     async def test_lsp_namespace_integration(self, router):
         """Test LSP namespace integration with real MCP."""
-        with patch('app.mcp.lsp_mcp.get_lsp_mcp_server') as mock_get_server:
+        with patch("app.mcp.lsp_mcp.get_lsp_mcp_server") as mock_get_server:
             mock_server = AsyncMock()
             mock_server.call_tool.return_value = {
-                "content": [{"text": '[{"content": "LSP result", "source": "lsp", "score": 0.8, "metadata": {"file": "test.py", "capability": "definition"}}]'}]
+                "content": [
+                    {
+                        "text": '[{"content": "LSP result", "source": "lsp", "score": 0.8, "metadata": {"file": "test.py", "capability": "definition"}}]'
+                    }
+                ]
             }
             mock_get_server.return_value = mock_server
-            
+
             results = await router._lsp_namespace("test query", "lsp.def")
-            
+
             assert len(results) == 1
             assert results[0].content == "LSP result"
             assert results[0].source == "lsp"
@@ -218,10 +223,10 @@ class TestUKBIntegration:
     async def test_tool_integration(self):
         """Test UKB tool integration."""
         from app.tools.ukb import ukb_lookup
-        
+
         results = await ukb_lookup._arun("test query")
         assert isinstance(results, list)
-        
+
         # Test with capability
         results = await ukb_lookup._arun("test query", capability="lsp.def")
         assert isinstance(results, list)
@@ -229,7 +234,7 @@ class TestUKBIntegration:
     def test_mcp_server_initialization(self):
         """Test MCP server initialization."""
         from app.mcp.ukb_mcp import get_ukb_mcp_server
-        
+
         server = get_ukb_mcp_server()
         assert server.name == "ukb-mcp"
         assert "ukb.lookup" in server.tools
@@ -238,14 +243,13 @@ class TestUKBIntegration:
     async def test_mcp_tool_call(self):
         """Test MCP tool call."""
         from app.mcp.ukb_mcp import get_ukb_mcp_server
-        
+
         server = get_ukb_mcp_server()
         await server.initialize()
-        
+
         result = await server.call_tool(
-            "ukb.lookup",
-            {"query": "test query", "capability": "lsp.def"}
+            "ukb.lookup", {"query": "test query", "capability": "lsp.def"}
         )
-        
+
         assert "content" in result
         assert isinstance(result["content"], list)

@@ -1,7 +1,6 @@
 """Memory management UI endpoints for B-16."""
 
-import json
-from typing import List, Optional, Dict, Any
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -9,36 +8,55 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from app.api.memory import (
+    MemoryRequest as ApiMemoryRequest,
+)
+from app.api.memory import (
+    SearchQuery,
+    add_memory_endpoint,
+    forget_memory_endpoint,
+    get_memory_stats_endpoint,
     list_memories_endpoint,
     search_memories_endpoint,
-    get_memory_stats_endpoint,
-    forget_memory_endpoint,
-    add_memory_endpoint,
 )
 from app.core.security import get_current_user
-from app.core.memory.sqlitestore import get_sqlite_store
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/web/templates")
 
 
 class MemoryRequest(BaseModel):
+    """Body of POST /api/memory/remember — matches the memory.html JS
+    (``{session_id, content, metadata}``; session_id rides in the body, not
+    as a query parameter)."""
+
+    session_id: str
     content: str
-    metadata: Dict[str, Any] = {}
+    metadata: dict[str, Any] = {}
+
+
+class MemorySearchRequest(BaseModel):
+    """Body of POST /api/memory/search — same JSON-body contract."""
+
+    query: str
+    session_id: str
+    limit: int = 10
 
 
 class MemoryEditRequest(BaseModel):
     content: str
-    metadata: Dict[str, Any] = {}
+    metadata: dict[str, Any] = {}
 
 
 @router.get("/memory", response_class=HTMLResponse)
-async def memory_management_page(request: Request, current_user: str = Depends(get_current_user)):
+async def memory_management_page(
+    request: Request, current_user: str = Depends(get_current_user)
+):
     """Memory management page with list, edit, delete functionality."""
-    return templates.TemplateResponse("memory.html", {
-        "request": request,
-        "user": current_user,
-    })
+    return templates.TemplateResponse(
+        request,
+        "memory.html",
+        {"user": current_user},
+    )
 
 
 @router.get("/api/memory/list")
@@ -75,17 +93,14 @@ async def get_memory_stats(
 
 @router.post("/api/memory/search")
 async def search_memories(
-    query: str,
-    session_id: str,
-    limit: int = 10,
+    body: MemorySearchRequest,
     current_user: str = Depends(get_current_user),
 ):
-    """Search memories using FTS5."""
+    """Search memories using FTS5 (JSON body, per memory.html + tests)."""
     try:
         memories = await search_memories_endpoint(
-            session_id=session_id,
-            query=query,
-            limit=limit,
+            request=SearchQuery(query=body.query, limit=body.limit),
+            session_id=body.session_id,
         )
         return {"memories": memories}
     except Exception as e:
@@ -95,17 +110,17 @@ async def search_memories(
 @router.post("/api/memory/remember")
 async def add_memory(
     request: MemoryRequest,
-    session_id: str,
     current_user: str = Depends(get_current_user),
 ):
-    """Add a new memory."""
+    """Add a new memory (session_id comes in the JSON body)."""
     try:
-        memory_id = await add_memory_endpoint(
-            session_id=session_id,
-            content=request.content,
-            metadata=request.metadata,
+        memory = await add_memory_endpoint(
+            request=ApiMemoryRequest(
+                content=request.content, metadata=request.metadata
+            ),
+            session_id=request.session_id,
         )
-        return {"id": memory_id, "message": "Memory added successfully"}
+        return {"id": memory.id, "message": "Memory added successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

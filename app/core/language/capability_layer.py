@@ -2,19 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from typing import Any, Dict, List, Optional, Union, Callable
-from enum import Enum
 from dataclasses import dataclass, field
-from pathlib import Path
+from enum import Enum
+from typing import Any
 
-from app.core.observability.spans import emit_span
 from app.core.capability.registry import (
     get_capability_registry,
-    Capability,
-    CapabilityType,
 )
+from app.core.observability.spans import emit_span
 from app.core.retrieval.orchestrator import get_retrieval_orchestrator
 
 logger = logging.getLogger(__name__)
@@ -68,13 +64,13 @@ class SkillBundle:
     name: str
     language: Language
     task_type: TaskType
-    skills: List[str]
-    capabilities: List[str]
-    config: Dict[str, Any] = field(default_factory=dict)
+    skills: list[str]
+    capabilities: list[str]
+    config: dict[str, Any] = field(default_factory=dict)
     priority: int = 0
     enabled: bool = True
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "id": self.id,
@@ -95,13 +91,13 @@ class AgentProgram:
 
     language: Language
     task_type: TaskType
-    skill_bundles: List[SkillBundle]
-    capabilities: List[str]
-    config: Dict[str, Any] = field(default_factory=dict)
+    skill_bundles: list[SkillBundle]
+    capabilities: list[str]
+    config: dict[str, Any] = field(default_factory=dict)
     max_iterations: int = 10
     timeout: int = 300
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "language": self.language.value,
@@ -118,8 +114,8 @@ class LanguageCapabilityLayer:
     """Per-language capability layer with agent_program and skill-bundles."""
 
     def __init__(self):
-        self.agent_programs: Dict[str, AgentProgram] = {}
-        self.skill_bundles: Dict[str, SkillBundle] = {}
+        self.agent_programs: dict[str, AgentProgram] = {}
+        self.skill_bundles: dict[str, SkillBundle] = {}
 
         # Initialize capability registry
         self.capability_registry = get_capability_registry()
@@ -443,15 +439,15 @@ class LanguageCapabilityLayer:
             logger.error(f"Failed to unregister skill bundle {skill_bundle_id}: {e}")
             return False
 
-    def get_skill_bundle(self, skill_bundle_id: str) -> Optional[SkillBundle]:
+    def get_skill_bundle(self, skill_bundle_id: str) -> SkillBundle | None:
         """Get a skill bundle by ID."""
         return self.skill_bundles.get(skill_bundle_id)
 
     def get_skill_bundles(
         self,
         language: Language,
-        task_type: Optional[TaskType] = None,
-    ) -> List[SkillBundle]:
+        task_type: TaskType | None = None,
+    ) -> list[SkillBundle]:
         """Get skill bundles by language and task type."""
         results = []
 
@@ -480,12 +476,12 @@ class LanguageCapabilityLayer:
         self,
         language: Language,
         task_type: TaskType,
-    ) -> Optional[AgentProgram]:
+    ) -> AgentProgram | None:
         """Get an agent program by language and task type."""
         key = f"{language.value}_{task_type.value}"
         return self.agent_programs.get(key)
 
-    def get_available_languages(self) -> List[Language]:
+    def get_available_languages(self) -> list[Language]:
         """Get list of available languages."""
         languages = set()
 
@@ -494,7 +490,7 @@ class LanguageCapabilityLayer:
 
         return list(languages)
 
-    def get_available_task_types(self, language: Language) -> List[TaskType]:
+    def get_available_task_types(self, language: Language) -> list[TaskType]:
         """Get list of available task types for a language."""
         task_types = set()
 
@@ -509,9 +505,9 @@ class LanguageCapabilityLayer:
         language: Language,
         task: str,
         task_type: TaskType,
-        context: Optional[Dict[str, Any]] = None,
-        config_overrides: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        context: dict[str, Any] | None = None,
+        config_overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Execute an agent program for a specific language and task.
 
         Args:
@@ -564,9 +560,9 @@ class LanguageCapabilityLayer:
         self,
         task: str,
         agent_program: AgentProgram,
-        skill_bundles: List[SkillBundle],
-        context: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        skill_bundles: list[SkillBundle],
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
         """Execute a task using skill bundles."""
         try:
             # Initialize task context
@@ -615,8 +611,8 @@ class LanguageCapabilityLayer:
     async def _execute_skill_bundle(
         self,
         skill_bundle: SkillBundle,
-        task_context: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        task_context: dict[str, Any],
+    ) -> dict[str, Any]:
         """Execute a skill bundle."""
         try:
             # Prepare skill context
@@ -665,8 +661,8 @@ class LanguageCapabilityLayer:
     async def _execute_skill(
         self,
         skill: str,
-        skill_context: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        skill_context: dict[str, Any],
+    ) -> dict[str, Any]:
         """Execute a single skill."""
         # Mock skill execution
         skill_functions = {
@@ -698,7 +694,7 @@ class LanguageCapabilityLayer:
                 "success": True,
             }
 
-    def _combine_results(self, results: List[Dict[str, Any]]) -> str:
+    def _combine_results(self, results: list[dict[str, Any]]) -> str:
         """Combine skill bundle results into a single output."""
         outputs = []
         for result in results:
@@ -711,21 +707,21 @@ class LanguageCapabilityLayer:
         return "\n\n".join(outputs)
 
     # Mock skill implementations
-    async def _mock_code_generation(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def _mock_code_generation(self, context: dict[str, Any]) -> dict[str, Any]:
         return {
             "skill": "code_generation",
             "result": f"Generated code for: {context['task']}",
             "success": True,
         }
 
-    async def _mock_code_analysis(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def _mock_code_analysis(self, context: dict[str, Any]) -> dict[str, Any]:
         return {
             "skill": "code_analysis",
             "result": f"Analyzed code for: {context['task']}",
             "success": True,
         }
 
-    async def _mock_error_analysis(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def _mock_error_analysis(self, context: dict[str, Any]) -> dict[str, Any]:
         return {
             "skill": "error_analysis",
             "result": f"Analyzed errors for: {context['task']}",
@@ -733,22 +729,22 @@ class LanguageCapabilityLayer:
         }
 
     async def _mock_pattern_recognition(
-        self, context: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, context: dict[str, Any]
+    ) -> dict[str, Any]:
         return {
             "skill": "pattern_recognition",
             "result": f"Recognized patterns in: {context['task']}",
             "success": True,
         }
 
-    async def _mock_test_generation(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def _mock_test_generation(self, context: dict[str, Any]) -> dict[str, Any]:
         return {
             "skill": "test_generation",
             "result": f"Generated tests for: {context['task']}",
             "success": True,
         }
 
-    async def _mock_type_inference(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def _mock_type_inference(self, context: dict[str, Any]) -> dict[str, Any]:
         return {
             "skill": "type_inference",
             "result": f"Inferred types for: {context['task']}",
@@ -756,8 +752,8 @@ class LanguageCapabilityLayer:
         }
 
     async def _mock_interface_generation(
-        self, context: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, context: dict[str, Any]
+    ) -> dict[str, Any]:
         return {
             "skill": "interface_generation",
             "result": f"Generated interfaces for: {context['task']}",
@@ -765,15 +761,15 @@ class LanguageCapabilityLayer:
         }
 
     async def _mock_typescript_analysis(
-        self, context: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, context: dict[str, Any]
+    ) -> dict[str, Any]:
         return {
             "skill": "typescript_analysis",
             "result": f"Analyzed TypeScript code for: {context['task']}",
             "success": True,
         }
 
-    async def _mock_type_safety_check(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def _mock_type_safety_check(self, context: dict[str, Any]) -> dict[str, Any]:
         return {
             "skill": "type_safety_check",
             "result": f"Checked type safety for: {context['task']}",
@@ -781,8 +777,8 @@ class LanguageCapabilityLayer:
         }
 
     async def _mock_react_best_practices(
-        self, context: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, context: dict[str, Any]
+    ) -> dict[str, Any]:
         return {
             "skill": "react_best_practices",
             "result": f"Applied React best practices to: {context['task']}",
@@ -790,8 +786,8 @@ class LanguageCapabilityLayer:
         }
 
     async def _mock_rust_code_generation(
-        self, context: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, context: dict[str, Any]
+    ) -> dict[str, Any]:
         return {
             "skill": "rust_code_generation",
             "result": f"Generated Rust code for: {context['task']}",
@@ -799,15 +795,15 @@ class LanguageCapabilityLayer:
         }
 
     async def _mock_borrow_checker_aware(
-        self, context: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, context: dict[str, Any]
+    ) -> dict[str, Any]:
         return {
             "skill": "borrow_checker_aware",
             "result": f"Made code borrow-checker aware for: {context['task']}",
             "success": True,
         }
 
-    async def _mock_lifetime_analysis(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def _mock_lifetime_analysis(self, context: dict[str, Any]) -> dict[str, Any]:
         return {
             "skill": "lifetime_analysis",
             "result": f"Analyzed lifetimes for: {context['task']}",
@@ -815,15 +811,15 @@ class LanguageCapabilityLayer:
         }
 
     async def _mock_rust_error_analysis(
-        self, context: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, context: dict[str, Any]
+    ) -> dict[str, Any]:
         return {
             "skill": "rust_error_analysis",
             "result": f"Analyzed Rust errors for: {context['task']}",
             "success": True,
         }
 
-    async def _mock_ownership_analysis(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def _mock_ownership_analysis(self, context: dict[str, Any]) -> dict[str, Any]:
         return {
             "skill": "ownership_analysis",
             "result": f"Analyzed ownership for: {context['task']}",
@@ -831,15 +827,15 @@ class LanguageCapabilityLayer:
         }
 
     async def _mock_borrow_checker_help(
-        self, context: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, context: dict[str, Any]
+    ) -> dict[str, Any]:
         return {
             "skill": "borrow_checker_help",
             "result": f"Provided borrow checker help for: {context['task']}",
             "success": True,
         }
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """Get layer statistics."""
         return {
             "total_agent_programs": len(self.agent_programs),
@@ -851,7 +847,7 @@ class LanguageCapabilityLayer:
             },
         }
 
-    async def health_check(self) -> Dict[str, Any]:
+    async def health_check(self) -> dict[str, Any]:
         """Perform health check."""
         try:
             stats = self.get_statistics()
@@ -881,7 +877,7 @@ class LanguageCapabilityLayer:
 
 
 # Global language capability layer instance
-_language_capability_layer: Optional[LanguageCapabilityLayer] = None
+_language_capability_layer: LanguageCapabilityLayer | None = None
 
 
 def get_language_capability_layer() -> LanguageCapabilityLayer:

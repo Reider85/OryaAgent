@@ -5,20 +5,12 @@ and integration with session management.
 """
 
 import asyncio
-import json
+
 import pytest
-import uuid
-from datetime import datetime, timedelta
-from httpx import AsyncClient
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from fastapi.testclient import TestClient
 
 from app.api.sessions import router
-from app.core.branch_manager import BranchManager, get_branch_manager
-from app.core.memory.md_store import MDStore
-from app.core.session import SessionManager
-from app.db.session_log import create_session, get_session, list_sessions, log_message
-from fastapi.testclient import TestClient
+from app.db.session_log import create_session, get_session, log_message
 
 
 class TestBranchingIntegration:

@@ -2,22 +2,20 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.core.lsp.bus import get_lsp_bus
-from app.core.lsp.tools import (
-    lsp_hover,
-    lsp_definition,
-    lsp_references,
-    lsp_symbol_search,
-    lsp_rename,
-    lsp_diagnostics,
+from app.tools._validators import validate_path
+from app.tools.lsp import (
     lsp_code_action,
+    lsp_definition,
+    lsp_diagnostics,
+    lsp_hover,
+    lsp_references,
+    lsp_rename,
+    lsp_symbol_search,
 )
-from app.core.tools._validators import validate_path
 
 logger = logging.getLogger(__name__)
 
@@ -44,13 +42,13 @@ class LSPMCPServer:
         self.initialized = True
         logger.info("LSP MCP server initialized")
 
-    async def list_tools(self) -> List[Dict[str, Any]]:
+    async def list_tools(self) -> list[dict[str, Any]]:
         """List available tools."""
         tools = []
 
         for tool_name, tool_func in self.tools.items():
             # Get tool schema from function
-            schema = getattr(tool_func, "__annotations__", {})
+            getattr(tool_func, "__annotations__", {})
 
             tools.append(
                 {
@@ -99,8 +97,8 @@ class LSPMCPServer:
         return tools
 
     async def call_tool(
-        self, tool_name: str, arguments: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, tool_name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """Call an LSP tool."""
         if not self.initialized:
             raise RuntimeError("LSP MCP server not initialized")
@@ -161,7 +159,7 @@ class LSPMCPServer:
                 },
             }
 
-    async def get_server_info(self) -> Dict[str, Any]:
+    async def get_server_info(self) -> dict[str, Any]:
         """Get server information."""
         return {
             "name": self.name,
@@ -170,7 +168,7 @@ class LSPMCPServer:
             "initialized": self.initialized,
         }
 
-    async def health_check(self) -> Dict[str, Any]:
+    async def health_check(self) -> dict[str, Any]:
         """Perform health check."""
         try:
             # Check LSP bus
@@ -210,7 +208,7 @@ class LSPMCPHandler:
     def __init__(self):
         self.server = LSPMCPServer()
 
-    async def handle_initialize(self) -> Dict[str, Any]:
+    async def handle_initialize(self) -> dict[str, Any]:
         """Handle initialize request."""
         await self.server.initialize()
 
@@ -227,27 +225,27 @@ class LSPMCPHandler:
             },
         }
 
-    async def handle_list_tools(self) -> List[Dict[str, Any]]:
+    async def handle_list_tools(self) -> list[dict[str, Any]]:
         """Handle list tools request."""
         return await self.server.list_tools()
 
     async def handle_call_tool(
-        self, tool_name: str, arguments: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, tool_name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """Handle call tool request."""
         return await self.server.call_tool(tool_name, arguments)
 
-    async def handle_server_info(self) -> Dict[str, Any]:
+    async def handle_server_info(self) -> dict[str, Any]:
         """Handle server info request."""
         return await self.server.get_server_info()
 
-    async def handle_health_check(self) -> Dict[str, Any]:
+    async def handle_health_check(self) -> dict[str, Any]:
         """Handle health check request."""
         return await self.server.health_check()
 
 
 # Global MCP handler instance
-_lsp_mcp_handler: Optional[LSPMCPHandler] = None
+_lsp_mcp_handler: LSPMCPHandler | None = None
 
 
 def get_lsp_mcp_handler() -> LSPMCPHandler:

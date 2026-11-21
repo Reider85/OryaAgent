@@ -5,16 +5,14 @@ Provides visualization of tool calls in a user-friendly interface.
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.core.observability.spans import get_span_buffer
 from app.core.session import SessionManager
 
 logger = logging.getLogger(__name__)
@@ -27,14 +25,14 @@ class ToolCallModel(BaseModel):
 
     id: str
     name: str
-    arguments: Dict[str, Any]
+    arguments: dict[str, Any]
     start_time: str
-    end_time: Optional[str] = None
-    duration_ms: Optional[float] = None
+    end_time: str | None = None
+    duration_ms: float | None = None
     status: str = "running"
-    result: Optional[Any] = None
-    error: Optional[str] = None
-    children: List["ToolCallModel"] = []
+    result: Any | None = None
+    error: str | None = None
+    children: list[ToolCallModel] = []
 
 
 class VisualizationNode:
@@ -52,7 +50,7 @@ class VisualizationNode:
         self.error = tool_call.error
         self.children = [VisualizationNode(child) for child in tool_call.children]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
             "id": self.id,
@@ -74,7 +72,7 @@ class ToolCallVisualizer:
     def __init__(self):
         self.session_manager = SessionManager()
 
-    async def get_session_tool_calls(self, session_id: str) -> List[ToolCallModel]:
+    async def get_session_tool_calls(self, session_id: str) -> list[ToolCallModel]:
         """Get tool calls for a session."""
         try:
             # Get turns from session
@@ -106,7 +104,7 @@ class ToolCallVisualizer:
                 status_code=500, detail=f"Failed to get session tool calls: {str(e)}"
             )
 
-    async def get_tool_call_tree(self, session_id: str) -> List[Dict[str, Any]]:
+    async def get_tool_call_tree(self, session_id: str) -> list[dict[str, Any]]:
         """Get tool calls as a tree structure."""
         try:
             tool_calls = await self.get_session_tool_calls(session_id)
@@ -141,7 +139,7 @@ class ToolCallVisualizer:
 
     async def get_tool_call_details(
         self, session_id: str, tool_call_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get detailed information about a specific tool call."""
         try:
             tool_calls = await self.get_session_tool_calls(session_id)
@@ -160,7 +158,7 @@ class ToolCallVisualizer:
                 status_code=500, detail=f"Failed to get tool call details: {str(e)}"
             )
 
-    async def get_tool_call_statistics(self, session_id: str) -> Dict[str, Any]:
+    async def get_tool_call_statistics(self, session_id: str) -> dict[str, Any]:
         """Get statistics about tool calls in a session."""
         try:
             tool_calls = await self.get_session_tool_calls(session_id)
@@ -210,7 +208,7 @@ class ToolCallVisualizer:
 
     async def search_tool_calls(
         self, session_id: str, query: str
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Search tool calls by name or arguments."""
         try:
             tool_calls = await self.get_session_tool_calls(session_id)
@@ -241,7 +239,7 @@ class ToolCallVisualizer:
                 status_code=500, detail=f"Failed to search tool calls: {str(e)}"
             )
 
-    def format_tool_call_for_display(self, tool_call: Dict[str, Any]) -> Dict[str, Any]:
+    def format_tool_call_for_display(self, tool_call: dict[str, Any]) -> dict[str, Any]:
         """Format tool call for display with human-readable information."""
         try:
             # Format arguments for display

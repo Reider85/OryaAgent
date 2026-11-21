@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+
 from prometheus_client import Counter, Gauge, Histogram
 
 logger = logging.getLogger(__name__)
@@ -114,7 +114,7 @@ class DFCMetrics:
 
 
 # Global metrics instance
-_dfc_metrics: Optional[DFCMetrics] = None
+_dfc_metrics: DFCMetrics | None = None
 
 
 def get_dfc_metrics() -> DFCMetrics:

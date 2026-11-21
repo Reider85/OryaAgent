@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 from app.core.retrieval.strategies.base import (
+    STRATEGY_REGISTRY,
     BaseStrategy,
-    NoneStrategy,
-    StandardStrategy,
-    TopicContinuationStrategy,
-    SpeculativePrefetchStrategy,
-    ExplicitRecallStrategy,
     CodeLookupStrategy,
     DegradedStrategy,
-    STRATEGY_REGISTRY,
-    get_strategy,
+    ExplicitRecallStrategy,
+    NoneStrategy,
+    SpeculativePrefetchStrategy,
+    StandardStrategy,
+    TopicContinuationStrategy,
     get_available_strategies,
+    get_strategy,
 )
 
 __all__ = [

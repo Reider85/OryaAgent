@@ -8,10 +8,9 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from app.core.memory.md_store import get_md_store
@@ -27,8 +26,8 @@ class MemoryExportModel(BaseModel):
 
     timestamp: str
     version: str
-    l0_files: Dict[str, str]
-    l1_files: List[Dict[str, Any]]
+    l0_files: dict[str, str]
+    l1_files: list[dict[str, Any]]
 
 
 class MemoryImportModel(BaseModel):
@@ -102,7 +101,7 @@ class MemoryImportExport:
 
     async def import_memory_data(
         self, import_data: MemoryImportModel
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Import memory data from JSON format."""
         try:
             if import_data.validate_only:
@@ -201,7 +200,7 @@ class MemoryImportExport:
 
     async def import_from_file(
         self, file: UploadFile, merge_mode: str = "overwrite"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Import memory data from uploaded file."""
         try:
             # Read file content
@@ -246,7 +245,7 @@ class MemoryImportExport:
                 status_code=500, detail=f"Failed to export to file: {str(e)}"
             )
 
-    async def _validate_import_data(self, source_data: str) -> Dict[str, Any]:
+    async def _validate_import_data(self, source_data: str) -> dict[str, Any]:
         """Validate import data without actually importing."""
         try:
             if isinstance(source_data, str):
@@ -295,7 +294,7 @@ class MemoryImportExport:
         except Exception as e:
             return {"valid": False, "errors": [f"Validation failed: {str(e)}"]}
 
-    def _validate_export_structure(self, data: Dict[str, Any]) -> bool:
+    def _validate_export_structure(self, data: dict[str, Any]) -> bool:
         """Validate export data structure."""
         required_keys = {"timestamp", "version", "l0_files", "l1_files"}
 

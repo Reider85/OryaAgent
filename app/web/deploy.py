@@ -5,9 +5,8 @@ This script sets up the complete Next.js Web UI implementation
 """
 
 import os
-import sys
 import subprocess
-import shutil
+import sys
 from pathlib import Path
 
 
@@ -17,8 +16,8 @@ def check_dependencies():
 
     # Check Python dependencies
     try:
-        import fastapi
-        import uvicorn
+        import fastapi  # noqa: F401
+        import uvicorn  # noqa: F401
 
         print("[OK] Python dependencies available")
     except ImportError as e:

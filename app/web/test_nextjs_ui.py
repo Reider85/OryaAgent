@@ -4,10 +4,9 @@ Test script for Next.js Web UI (B-11)
 """
 
 import asyncio
-import requests
 import json
-import time
-from typing import Dict, Any
+
+import requests
 
 BASE_URL = "http://localhost:8000"
 

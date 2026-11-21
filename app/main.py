@@ -20,18 +20,17 @@ from app.api.sessions import router as sessions_router
 from app.api.skills import router as skills_router
 from app.api.sqlite_store import router as sqlite_store_router
 from app.api.workspace import router as workspace_router
-from app.web.web_sessions import router as web_sessions_router
-from app.web.memory_ui import router as memory_ui_router
+from app.core.logging_setup import (
+    install_file_logger,
+    route_uvicorn_logs_to_root,
+)
 
 # Import UI routers
 from app.ui.branch_manager_ui import router as branch_manager_ui_router
 from app.ui.hooks_ui import router as hooks_ui_router
 from app.ui.skills_ui import router as skills_ui_router
-from app.core.logging_setup import (
-    configure_cli_logging,
-    install_file_logger,
-    route_uvicorn_logs_to_root,
-)
+from app.web.memory_ui import router as memory_ui_router
+from app.web.web_sessions import router as web_sessions_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -80,16 +79,29 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     ``LLM_POOL_HEALTH_INTERVAL`` seconds (0 disables it; tests pin 0) and
     shutdown closes every pooled client.
     """
-    from app.core.auth.rate_limiter import close_rate_limiter, init_rate_limiter
+    from app.core.auth.rate_limit import close_rate_limiter, init_rate_limiter
     from app.core.cache import close_cache, init_cache
     from app.core.config import get_settings
-    from app.core.cost_tracker import close_cost_store, init_cost_store, integrate_github_actions_monitoring
-    from app.core.github_actions import close_github_actions_monitor, init_github_actions_monitor
-    from app.core.hybrid_runner_router import close_hybrid_runner_router, init_hybrid_runner_router
-    from app.core.local_runner_health import close_local_runner_health, init_local_runner_health
+    from app.core.cost_tracker import (
+        close_cost_store,
+        init_cost_store,
+        integrate_github_actions_monitoring,
+    )
+    from app.core.github_actions import (
+        close_github_actions_monitor,
+        init_github_actions_monitor,
+    )
+    from app.core.hybrid_runner_router import (
+        close_hybrid_runner_router,
+        init_hybrid_runner_router,
+    )
     from app.core.llm.connection_pool import (
         get_connection_pool,
         pool_health_worker,
+    )
+    from app.core.local_runner_health import (
+        close_local_runner_health,
+        init_local_runner_health,
     )
     from app.core.memory.compactor import compaction_worker
     from app.core.observability.langfuse import init_exporter, shutdown_exporter
@@ -104,7 +116,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await init_cost_store()
     init_exporter()
     init_observability_sdk()
-    await init_github_actions_monitor()
+    init_github_actions_monitor()
     init_hybrid_runner_router()
     init_local_runner_health()
     await integrate_github_actions_monitoring()
@@ -222,6 +234,15 @@ def main() -> None:
         help="Auto-fix obvious problems (auth secret, permissions.yml)",
     )
 
+    auth_parser = sub.add_parser("auth", help="Auth commands (A-08)")
+    auth_sub = auth_parser.add_subparsers(dest="auth_command")
+    auth_token = auth_sub.add_parser(
+        "token", help="Mint a JWT for a user (prints the token)"
+    )
+    auth_token.add_argument(
+        "--user", required=True, help="Subject id to encode as the JWT sub claim"
+    )
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -231,19 +252,35 @@ def main() -> None:
         from app.core.importers import import_config
 
         import_config(args.source)
+    elif args.command == "auth":
+        if args.auth_command == "token":
+            from app.core.auth import create_token
+
+            print(create_token(args.user))
+        else:
+            auth_parser.print_help()
     elif args.command == "db":
+        # apply_migrations/downgrade/current_revision are async (they run the
+        # sync Alembic machinery via asyncio.to_thread) — calling them without
+        # await made `orya db migrate` a silent no-op (the compose api command
+        # relies on it to schema a fresh database).
         if args.db_command == "migrate":
             from app.db.migrate import apply_migrations
 
-            apply_migrations()
+            applied = asyncio.run(apply_migrations())
+            if applied:
+                print(f"Applied migrations: {', '.join(applied)}")
+            else:
+                print("No pending migrations.")
         elif args.db_command == "downgrade":
-            from app.db.migrate import downgrade_migration
+            from app.db.migrate import downgrade
 
-            downgrade_migration(args.revision)
+            asyncio.run(downgrade(args.revision))
         elif args.db_command == "current":
-            from app.db.migrate import print_current_revision
+            from app.db.migrate import current_revision
 
-            print_current_revision()
+            revision = asyncio.run(current_revision())
+            print(revision or "No migrations applied (baseline)")
     elif args.command == "config":
         if args.config_command == "show":
             from app.core.config_cli import print_settings

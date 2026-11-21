@@ -51,6 +51,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from fastapi import HTTPException, Request
+
 from app.core.config import get_settings
 from app.core.observability.spans import note_incident
 
@@ -381,11 +383,19 @@ def sanitize_untrusted(
     return framed
 
 
-def get_current_user(request) -> str:
+def get_current_user(request: Request) -> str:
     """Get the current user from the request state.
 
-    This function extracts the user ID from the request state after authentication.
-    The AuthMiddleware stores the user ID in request.state.user_id.
+    The AuthMiddleware stamps ``request.state.user_id`` from the bearer JWT.
+    ``request`` must be annotated as ``Request`` — FastAPI injects by
+    annotation, an unannotated parameter is parsed as a required *query*
+    parameter and every guarded endpoint answers 422.
+
+    With ``ORYA_AUTH_ENABLED=false`` (default kill-switch off) no identity is
+    ever stamped, so the dependency falls back to ``"anonymous"`` instead of
+    raising: UI pages, hooks and the memory API must stay usable in dev
+    (``tests/test_memory_ui.py``), while auth-enabled deployments still get a
+    hard 401 for unauthenticated requests.
 
     Args:
         request: FastAPI Request object
@@ -394,10 +404,11 @@ def get_current_user(request) -> str:
         str: The current user's ID
 
     Raises:
-        HTTPException: If no user is found in the request state
+        HTTPException: 401 when auth is enabled and no identity is present
     """
-    if not hasattr(request, "state") or not hasattr(request.state, "user_id"):
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    return request.state.user_id
+    user_id = getattr(request.state, "user_id", None)
+    if user_id:
+        return str(user_id)
+    if not get_settings().auth_enabled:
+        return "anonymous"
+    raise HTTPException(status_code=401, detail="Not authenticated")

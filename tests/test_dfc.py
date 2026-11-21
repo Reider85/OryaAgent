@@ -1,27 +1,39 @@
 """Tests for DFC (Document-based File Cache) components."""
 
 import pytest
-import asyncio
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-from pathlib import Path
-import tempfile
-import os
 
-from app.core.dfc.dfc import (
-    get_dfc,
-    initialize_dfc,
+# Legacy pre-refactor API: the B-24 rewrite replaced DFCLayer/HeatLayer/
+# Hot/Warm/Cold/Ice + Document/CacheEntry with the current DFC + HeatCache
+# model (app/core/dfc/), and no production symbol in this file's import
+# list exists anymore. The current API is covered by test_dfc_basic.py,
+# test_dfc_heat_cache.py, test_dfc_background_compactor.py and
+# test_dfc_integration.py — this file is retained for the original spec
+# trace but must not import the removed names (it aborted collection for
+# the whole suite).
+pytest.skip(
+    "legacy pre-B-24 DFC API (DFCLayer/HeatLayer/... removed); "
+    "current API covered by test_dfc_basic/heat_cache/background_compactor/integration",
+    allow_module_level=True,
+)
+
+import asyncio  # noqa: E402
+from unittest.mock import AsyncMock, Mock  # noqa: E402
+
+from app.core.dfc.dfc import (  # noqa: E402
     DFC,
-    DFCLayer,
-    HeatLayer,
-    HotLayer,
-    WarmLayer,
-    ColdLayer,
-    IceLayer,
     BackgroundCompactor,
-    Document,
-    DocumentMetadata,
     CacheEntry,
     CacheStats,
+    ColdLayer,
+    DFCLayer,
+    Document,
+    DocumentMetadata,
+    HeatLayer,
+    HotLayer,
+    IceLayer,
+    WarmLayer,
+    get_dfc,
+    initialize_dfc,
 )
 
 

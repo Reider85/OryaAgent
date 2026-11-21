@@ -9,13 +9,13 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from app.core.branch_manager import BranchManager
-from app.core.db import asyncpg
 from app.core.memory.md_store import get_md_store
-from app.core.observability.spans import emit_span
+from app.core.observability.spans import timed_span
 from app.core.session import SessionManager
+from app.db import get_asyncpg_pool
 
 logger = logging.getLogger(__name__)
 
@@ -28,14 +28,18 @@ class BranchMerger:
         self.session_manager = SessionManager()
         self.md_store = get_md_store()
 
-    @timed_span(span_type="branch.merge", name="branch.merge", attributes={"operation": "merge_branches"})
+    @timed_span(
+        span_type="branch.merge",
+        name="branch.merge",
+        attributes={"operation": "merge_branches"},
+    )
     async def merge_branches(
         self,
         parent_session_id: str,
         branch_session_id: str,
         merge_strategy: str = "auto",
         conflict_resolution: str = "parent_wins",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Merge a branch back into the parent session.
 
         Args:
@@ -117,8 +121,8 @@ class BranchMerger:
             raise ValueError(f"Failed to merge branches: {str(e)}")
 
     async def _find_fork_point(
-        self, parent_turns: List[Dict], branch_turns: List[Dict]
-    ) -> Optional[Dict[str, Any]]:
+        self, parent_turns: list[dict], branch_turns: list[dict]
+    ) -> dict[str, Any] | None:
         """Find the fork point between parent and branch turns."""
         try:
             # Get the parent turn ID from branch metadata
@@ -145,10 +149,10 @@ class BranchMerger:
 
     async def _analyze_differences(
         self,
-        parent_turns: List[Dict],
-        branch_turns: List[Dict],
-        fork_point: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        parent_turns: list[dict],
+        branch_turns: list[dict],
+        fork_point: dict[str, Any],
+    ) -> dict[str, Any]:
         """Analyze differences between parent and branch after fork point."""
         try:
             parent_fork_index = next(
@@ -174,8 +178,8 @@ class BranchMerger:
             }
 
             # Analyze each turn
-            for i, (parent_turn, branch_turn) in enumerate(
-                zip(parent_new_turns, branch_new_turns)
+            for _i, (parent_turn, branch_turn) in enumerate(
+                zip(parent_new_turns, branch_new_turns, strict=False)
             ):
                 if parent_turn["messages"] != branch_turn["messages"]:
                     differences["conflicts"].append(
@@ -202,10 +206,10 @@ class BranchMerger:
         self,
         parent_session_id: str,
         branch_session_id: str,
-        fork_point: Dict[str, Any],
-        differences: Dict[str, Any],
+        fork_point: dict[str, Any],
+        differences: dict[str, Any],
         conflict_resolution: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Perform automatic merge of branches."""
         try:
             merge_result = {
@@ -259,9 +263,9 @@ class BranchMerger:
         self,
         parent_session_id: str,
         branch_session_id: str,
-        fork_point: Dict[str, Any],
-        differences: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        fork_point: dict[str, Any],
+        differences: dict[str, Any],
+    ) -> dict[str, Any]:
         """Preserve branch turns and append to parent."""
         try:
             merge_result = {
@@ -302,7 +306,7 @@ class BranchMerger:
             logger.error(f"Failed to preserve branch merge: {e}")
             raise ValueError(f"Failed to preserve branch merge: {str(e)}")
 
-    async def _add_turn_to_session(self, session_id: str, turn: Dict[str, Any]) -> None:
+    async def _add_turn_to_session(self, session_id: str, turn: dict[str, Any]) -> None:
         """Add a turn to a session."""
         try:
             new_turn = {
@@ -372,7 +376,7 @@ class BranchMerger:
         self,
         parent_session_id: str,
         branch_session_id: str,
-        merge_result: Dict[str, Any],
+        merge_result: dict[str, Any],
     ) -> None:
         """Update metadata after merge."""
         try:
@@ -383,7 +387,8 @@ class BranchMerger:
                     updated_at = $2
                 WHERE id = $3
             """
-            async with asyncpg.get_pool().acquire() as conn:
+            pool = await get_asyncpg_pool()
+            async with pool.acquire() as conn:
                 await conn.execute(
                     update_query,
                     {
@@ -399,7 +404,7 @@ class BranchMerger:
             logger.error(f"Failed to update merge metadata: {e}")
             # Don't raise this as it's not critical
 
-    async def list_merge_history(self, session_id: str) -> List[Dict[str, Any]]:
+    async def list_merge_history(self, session_id: str) -> list[dict[str, Any]]:
         """List merge history for a session."""
         try:
             query = """
@@ -409,7 +414,8 @@ class BranchMerger:
                 AND metadata ? 'last_merged'
                 ORDER BY updated_at DESC
             """
-            async with asyncpg.get_pool().acquire() as conn:
+            pool = await get_asyncpg_pool()
+            async with pool.acquire() as conn:
                 records = await conn.fetch(query, session_id)
 
             return [record["metadata"] for record in records]

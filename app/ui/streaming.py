@@ -10,7 +10,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
@@ -29,15 +29,15 @@ class StreamingMessage(BaseModel):
     data: Any
     timestamp: str
     session_id: str
-    turn_id: Optional[str] = None
+    turn_id: str | None = None
 
 
 class ConnectionManager:
     """Manager for WebSocket connections."""
 
     def __init__(self):
-        self.active_connections: Dict[str, List[WebSocket]] = {}
-        self.session_streams: Dict[str, asyncio.Queue] = {}
+        self.active_connections: dict[str, list[WebSocket]] = {}
+        self.session_streams: dict[str, asyncio.Queue] = {}
 
     async def connect(self, websocket: WebSocket, session_id: str):
         """Accept a WebSocket connection."""
@@ -67,7 +67,7 @@ class ConnectionManager:
                     logger.error(f"Failed to send message to WebSocket: {e}")
 
     async def stream_to_session(
-        self, session_id: str, stream_data: List[Dict[str, Any]]
+        self, session_id: str, stream_data: list[dict[str, Any]]
     ):
         """Stream data to all connections in a session."""
         if session_id in self.session_streams:
@@ -161,7 +161,7 @@ class StreamingManager:
             logger.error(f"Failed to stream token: {e}")
 
     async def stream_tool_start(
-        self, session_id: str, turn_id: str, tool_name: str, arguments: Dict[str, Any]
+        self, session_id: str, turn_id: str, tool_name: str, arguments: dict[str, Any]
     ):
         """Stream tool start event."""
         try:
@@ -248,7 +248,7 @@ class StreamingManager:
         turns = await self.session_manager.get_session_turns(session_id)
         return len(turns) + 1
 
-    async def get_active_streams(self) -> List[Dict[str, Any]]:
+    async def get_active_streams(self) -> list[dict[str, Any]]:
         """Get list of active streams."""
         try:
             active_streams = []
@@ -318,7 +318,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
 
 
 @router.post("/stream/{session_id}/start")
-async def start_stream(session_id: str, message: Dict[str, str]):
+async def start_stream(session_id: str, message: dict[str, str]):
     """Start a new stream for a session."""
     streaming_manager = get_streaming_manager()
     turn_id = await streaming_manager.start_stream(session_id, message["message"])
@@ -326,7 +326,7 @@ async def start_stream(session_id: str, message: Dict[str, str]):
 
 
 @router.post("/stream/{session_id}/{turn_id}/token")
-async def stream_token(session_id: str, turn_id: str, token: Dict[str, str]):
+async def stream_token(session_id: str, turn_id: str, token: dict[str, str]):
     """Stream a token to the session."""
     streaming_manager = get_streaming_manager()
     await streaming_manager.stream_token(session_id, turn_id, token["token"])
@@ -334,7 +334,7 @@ async def stream_token(session_id: str, turn_id: str, token: Dict[str, str]):
 
 
 @router.post("/stream/{session_id}/{turn_id}/tool/start")
-async def stream_tool_start(session_id: str, turn_id: str, tool_data: Dict[str, Any]):
+async def stream_tool_start(session_id: str, turn_id: str, tool_data: dict[str, Any]):
     """Stream tool start event."""
     streaming_manager = get_streaming_manager()
     await streaming_manager.stream_tool_start(
@@ -344,7 +344,7 @@ async def stream_tool_start(session_id: str, turn_id: str, tool_data: Dict[str, 
 
 
 @router.post("/stream/{session_id}/{turn_id}/tool/end")
-async def stream_tool_end(session_id: str, turn_id: str, tool_data: Dict[str, Any]):
+async def stream_tool_end(session_id: str, turn_id: str, tool_data: dict[str, Any]):
     """Stream tool end event."""
     streaming_manager = get_streaming_manager()
     await streaming_manager.stream_tool_end(
@@ -355,7 +355,7 @@ async def stream_tool_end(session_id: str, turn_id: str, tool_data: Dict[str, An
 
 @router.post("/stream/{session_id}/{turn_id}/interrupt")
 async def stream_interrupt(
-    session_id: str, turn_id: str, interrupt_data: Dict[str, str]
+    session_id: str, turn_id: str, interrupt_data: dict[str, str]
 ):
     """Stream interrupt event."""
     streaming_manager = get_streaming_manager()
@@ -366,7 +366,7 @@ async def stream_interrupt(
 
 
 @router.post("/stream/{session_id}/{turn_id}/error")
-async def stream_error(session_id: str, turn_id: str, error_data: Dict[str, str]):
+async def stream_error(session_id: str, turn_id: str, error_data: dict[str, str]):
     """Stream error event."""
     streaming_manager = get_streaming_manager()
     await streaming_manager.stream_error(session_id, turn_id, error_data["error"])
@@ -374,7 +374,7 @@ async def stream_error(session_id: str, turn_id: str, error_data: Dict[str, str]
 
 
 @router.post("/stream/{session_id}/{turn_id}/complete")
-async def stream_complete(session_id: str, turn_id: str, complete_data: Dict[str, str]):
+async def stream_complete(session_id: str, turn_id: str, complete_data: dict[str, str]):
     """Stream complete event."""
     streaming_manager = get_streaming_manager()
     await streaming_manager.stream_complete(

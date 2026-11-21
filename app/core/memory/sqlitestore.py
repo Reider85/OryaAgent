@@ -8,19 +8,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import sqlite3
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import aiosqlite
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-
-from app.core.observability.spans import emit_span
-from app.core.security import session_id_from_config
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +33,7 @@ class SQLiteStore:
         self.db_path = Path(db_path)
         self.encryption_key = encryption_key
         self.key_derivation_iterations = key_derivation_iterations
-        self._fernet: Optional[Fernet] = None
+        self._fernet: Fernet | None = None
         self._initialized = False
         self._lock = asyncio.Lock()
 
@@ -112,7 +108,7 @@ class SQLiteStore:
 
             # Create triggers to keep FTS table synchronized
             await db.execute("""
-                CREATE TRIGGER IF NOT EXISTS memories_ai 
+                CREATE TRIGGER IF NOT EXISTS memories_ai
                 AFTER INSERT ON memories BEGIN
                     INSERT INTO memories_fts(id, session_id, content, metadata, content_rowid)
                     VALUES (new.id, new.session_id, new.content, new.metadata, new.rowid);
@@ -120,14 +116,14 @@ class SQLiteStore:
             """)
 
             await db.execute("""
-                CREATE TRIGGER IF NOT EXISTS memories_ad 
+                CREATE TRIGGER IF NOT EXISTS memories_ad
                 AFTER DELETE ON memories BEGIN
                     DELETE FROM memories_fts WHERE id = old.id;
                 END
             """)
 
             await db.execute("""
-                CREATE TRIGGER IF NOT EXISTS memories_au 
+                CREATE TRIGGER IF NOT EXISTS memories_au
                 AFTER UPDATE ON memories BEGIN
                     DELETE FROM memories_fts WHERE id = old.id;
                     INSERT INTO memories_fts(id, session_id, content, metadata, content_rowid)
@@ -176,8 +172,8 @@ class SQLiteStore:
         self,
         session_id: str,
         content: str,
-        metadata: Optional[Dict[str, Any]] = None,
-        expires_in_hours: Optional[int] = None,
+        metadata: dict[str, Any] | None = None,
+        expires_in_hours: int | None = None,
     ) -> str:
         """Add a memory to the store."""
         await self.initialize()
@@ -211,7 +207,7 @@ class SQLiteStore:
         logger.debug(f"Added memory {memory_id} for session {session_id}")
         return memory_id
 
-    async def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
+    async def get_memory(self, memory_id: str) -> dict[str, Any] | None:
         """Get a memory by ID."""
         await self.initialize()
 
@@ -246,21 +242,25 @@ class SQLiteStore:
         query: str,
         limit: int = 10,
         offset: int = 0,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Search memories using FTS5."""
         await self.initialize()
 
         async with aiosqlite.connect(self.db_path) as db:
-            # Use FTS5 for full-text search
+            # FTS5: bm25() is a *function* evaluated over the FTS table in the
+            # SELECT list — the previous query JOINed it as a table
+            # (``LEFT JOIN bm25(...)``) and SQLite answered
+            # ``no such table: bm25`` on every search. bm25() ranks are
+            # "smaller is better", so ASC returns the most relevant first.
             cursor = await db.execute(
                 """
-                SELECT m.id, m.session_id, m.content, m.metadata, m.created_at, m.updated_at, m.expires_at,
-                       bm.rank
-                FROM memories m
-                JOIN memories_fts fts ON m.id = fts.id
-                LEFT JOIN bm25(fts, content, metadata) AS bm ON 1=1
-                WHERE m.session_id = ? AND fts MATCH ?
-                ORDER BY bm.rank DESC
+                SELECT m.id, m.session_id, m.content, m.metadata, m.created_at,
+                       m.updated_at, m.expires_at,
+                       bm25(memories_fts) AS rank
+                FROM memories_fts
+                JOIN memories m ON m.id = memories_fts.id
+                WHERE memories_fts.session_id = ? AND memories_fts MATCH ?
+                ORDER BY rank ASC
                 LIMIT ? OFFSET ?
                 """,
                 (session_id, query, limit, offset),
@@ -299,7 +299,7 @@ class SQLiteStore:
         self,
         old_memory_id: str,
         new_content: str,
-        new_metadata: Optional[Dict[str, Any]] = None,
+        new_metadata: dict[str, Any] | None = None,
     ) -> str:
         """Supersede an old memory with new content."""
         await self.initialize()
@@ -328,7 +328,7 @@ class SQLiteStore:
         offset: int = 0,
         order_by: str = "created_at",
         order_dir: str = "DESC",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """List memories for a session."""
         await self.initialize()
 
@@ -363,7 +363,7 @@ class SQLiteStore:
 
             return results
 
-    async def export_memories(self, session_id: str) -> Dict[str, Any]:
+    async def export_memories(self, session_id: str) -> dict[str, Any]:
         """Export all memories for a session."""
         memories = await self.list_memories(session_id, limit=10000)
 
@@ -374,7 +374,7 @@ class SQLiteStore:
             "memories": memories,
         }
 
-    async def import_memories(self, session_id: str, data: Dict[str, Any]) -> int:
+    async def import_memories(self, session_id: str, data: dict[str, Any]) -> int:
         """Import memories for a session."""
         if "memories" not in data:
             raise ValueError("Invalid import data: missing 'memories' field")
@@ -406,7 +406,7 @@ class SQLiteStore:
             await db.commit()
             return cursor.rowcount
 
-    async def get_memory_stats(self, session_id: str) -> Dict[str, Any]:
+    async def get_memory_stats(self, session_id: str) -> dict[str, Any]:
         """Get memory statistics for a session."""
         await self.initialize()
 
@@ -446,7 +446,7 @@ class SQLiteStore:
                 "average_content_length": int(avg_length[0]) if avg_length[0] else 0,
             }
 
-    async def add_skill_metadata(self, skill_data: Dict[str, Any]) -> None:
+    async def add_skill_metadata(self, skill_data: dict[str, Any]) -> None:
         """Add skill metadata to the store."""
         await self.initialize()
 
@@ -501,7 +501,7 @@ class SQLiteStore:
             )
             await db.commit()
 
-    async def get_skills_metadata(self) -> List[Dict[str, Any]]:
+    async def get_skills_metadata(self) -> list[dict[str, Any]]:
         """Get all skills metadata."""
         await self.initialize()
 
@@ -520,14 +520,14 @@ class SQLiteStore:
 
             return skills
 
-    async def get_skill_dependencies(self, skill_name: str) -> List[Dict[str, Any]]:
+    async def get_skill_dependencies(self, skill_name: str) -> list[dict[str, Any]]:
         """Get skill dependencies."""
         await self.initialize()
 
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """
-                SELECT value FROM memory_metadata 
+                SELECT value FROM memory_metadata
                 WHERE key LIKE 'skill:%' AND key NOT LIKE '%:active' AND key NOT LIKE '%:validation'
                 AND value LIKE '%dependencies%'
                 """

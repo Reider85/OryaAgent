@@ -1,11 +1,12 @@
 """Tests for DFC BackgroundCompactor component."""
 
-import pytest
 import asyncio
-from unittest.mock import Mock, patch, AsyncMock
+from unittest.mock import AsyncMock, Mock, patch
 
-from app.core.dfc.background_compactor import BackgroundCompactor
+import pytest
+
 from app.core.dfc import DFC, CompactSummary
+from app.core.dfc.background_compactor import BackgroundCompactor
 
 
 class TestBackgroundCompactor:

@@ -8,7 +8,6 @@ from __future__ import annotations
 import logging
 import subprocess
 from pathlib import Path
-from typing import Any
 
 from app.core.hooks import HookContext, HookResult, PostToolHook, get_hook_registry
 from app.tools._validators import validate_path
@@ -103,7 +102,7 @@ class AutoLintHook(PostToolHook):
                 message=f"{result.message}\nAuto-lint warning: {str(e)}",
             )
 
-    async def _lint_file(self, file_path: Path) -> "LintResult":
+    async def _lint_file(self, file_path: Path) -> LintResult:
         """Lint a specific file and return the result."""
         cmd = self.lint_command.format(file_path=str(file_path))
 

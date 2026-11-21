@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from typing import Any, Dict, List, Optional, Union, Callable
-from enum import Enum
 from dataclasses import dataclass, field
-from pathlib import Path
-
-from app.core.observability.spans import emit_span
+from enum import Enum
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -45,15 +41,15 @@ class Capability:
     name: str
     type: CapabilityType
     description: str
-    language: Optional[str] = None
+    language: str | None = None
     status: CapabilityStatus = CapabilityStatus.ACTIVE
     version: str = "1.0.0"
-    dependencies: List[str] = field(default_factory=list)
-    tags: List[str] = field(default_factory=list)
-    config: Dict[str, Any] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    dependencies: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+    config: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "id": self.id,
@@ -75,11 +71,11 @@ class LanguageCapability:
     """Represents language-specific capabilities."""
 
     language: str
-    capabilities: List[Capability]
-    default_capabilities: List[str] = field(default_factory=list)
-    required_capabilities: List[str] = field(default_factory=list)
+    capabilities: list[Capability]
+    default_capabilities: list[str] = field(default_factory=list)
+    required_capabilities: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "language": self.language,
@@ -94,22 +90,22 @@ class CapabilityRegistry:
 
     def __init__(self):
         # Global capabilities
-        self.capabilities: Dict[str, Capability] = {}
+        self.capabilities: dict[str, Capability] = {}
 
         # Language-specific capabilities
-        self.language_capabilities: Dict[str, LanguageCapability] = {}
+        self.language_capabilities: dict[str, LanguageCapability] = {}
 
         # Capability type indexes
-        self.type_index: Dict[CapabilityType, List[str]] = {}
+        self.type_index: dict[CapabilityType, list[str]] = {}
 
         # Language index
-        self.language_index: Dict[str, List[str]] = {}
+        self.language_index: dict[str, list[str]] = {}
 
         # Tag index
-        self.tag_index: Dict[str, List[str]] = {}
+        self.tag_index: dict[str, list[str]] = {}
 
         # Status index
-        self.status_index: Dict[CapabilityStatus, List[str]] = {}
+        self.status_index: dict[CapabilityStatus, list[str]] = {}
 
         # Load built-in capabilities
         self._load_built_in_capabilities()
@@ -378,9 +374,9 @@ class CapabilityRegistry:
     def register_language(
         self,
         language: str,
-        capabilities: List[Capability],
-        default_capabilities: Optional[List[str]] = None,
-        required_capabilities: Optional[List[str]] = None,
+        capabilities: list[Capability],
+        default_capabilities: list[str] | None = None,
+        required_capabilities: list[str] | None = None,
     ) -> bool:
         """Register language-specific capabilities."""
         try:
@@ -413,13 +409,13 @@ class CapabilityRegistry:
             logger.error(f"Failed to register language {language}: {e}")
             return False
 
-    def get_capability(self, capability_id: str) -> Optional[Capability]:
+    def get_capability(self, capability_id: str) -> Capability | None:
         """Get a capability by ID."""
         return self.capabilities.get(capability_id)
 
     def get_capabilities_by_type(
         self, capability_type: CapabilityType
-    ) -> List[Capability]:
+    ) -> list[Capability]:
         """Get capabilities by type."""
         capability_ids = self.type_index.get(capability_type, [])
         return [
@@ -428,7 +424,7 @@ class CapabilityRegistry:
             if cap_id in self.capabilities
         ]
 
-    def get_capabilities_by_language(self, language: str) -> List[Capability]:
+    def get_capabilities_by_language(self, language: str) -> list[Capability]:
         """Get capabilities by language."""
         if language not in self.language_capabilities:
             return []
@@ -436,7 +432,7 @@ class CapabilityRegistry:
         lang_cap = self.language_capabilities[language]
         return lang_cap.capabilities
 
-    def get_capabilities_by_tag(self, tag: str) -> List[Capability]:
+    def get_capabilities_by_tag(self, tag: str) -> list[Capability]:
         """Get capabilities by tag."""
         capability_ids = self.tag_index.get(tag, [])
         return [
@@ -445,7 +441,7 @@ class CapabilityRegistry:
             if cap_id in self.capabilities
         ]
 
-    def get_capabilities_by_status(self, status: CapabilityStatus) -> List[Capability]:
+    def get_capabilities_by_status(self, status: CapabilityStatus) -> list[Capability]:
         """Get capabilities by status."""
         capability_ids = self.status_index.get(status, [])
         return [
@@ -457,11 +453,11 @@ class CapabilityRegistry:
     def search_capabilities(
         self,
         query: str,
-        capability_type: Optional[CapabilityType] = None,
-        language: Optional[str] = None,
-        tags: Optional[List[str]] = None,
-        status: Optional[CapabilityStatus] = None,
-    ) -> List[Capability]:
+        capability_type: CapabilityType | None = None,
+        language: str | None = None,
+        tags: list[str] | None = None,
+        status: CapabilityStatus | None = None,
+    ) -> list[Capability]:
         """Search capabilities."""
         results = []
 
@@ -499,7 +495,7 @@ class CapabilityRegistry:
 
         return results
 
-    def get_default_capabilities(self, language: str) -> List[Capability]:
+    def get_default_capabilities(self, language: str) -> list[Capability]:
         """Get default capabilities for a language."""
         if language not in self.language_capabilities:
             return []
@@ -513,7 +509,7 @@ class CapabilityRegistry:
             if cap_id in self.capabilities
         ]
 
-    def get_required_capabilities(self, language: str) -> List[Capability]:
+    def get_required_capabilities(self, language: str) -> list[Capability]:
         """Get required capabilities for a language."""
         if language not in self.language_capabilities:
             return []
@@ -527,7 +523,7 @@ class CapabilityRegistry:
             if cap_id in self.capabilities
         ]
 
-    def get_capability_dependencies(self, capability_id: str) -> List[Capability]:
+    def get_capability_dependencies(self, capability_id: str) -> list[Capability]:
         """Get dependencies for a capability."""
         capability = self.get_capability(capability_id)
         if not capability:
@@ -541,7 +537,7 @@ class CapabilityRegistry:
 
         return dependencies
 
-    def check_capability_requirements(self, language: str) -> Dict[str, Any]:
+    def check_capability_requirements(self, language: str) -> dict[str, Any]:
         """Check if required capabilities are available for a language."""
         if language not in self.language_capabilities:
             return {"status": "error", "message": f"Language {language} not found"}
@@ -621,7 +617,7 @@ class CapabilityRegistry:
         ):
             self.status_index[capability.status].remove(capability.id)
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """Get registry statistics."""
         return {
             "total_capabilities": len(self.capabilities),
@@ -638,7 +634,7 @@ class CapabilityRegistry:
             "tags": list(self.tag_index.keys()),
         }
 
-    async def health_check(self) -> Dict[str, Any]:
+    async def health_check(self) -> dict[str, Any]:
         """Perform health check."""
         try:
             # Check basic registry
@@ -665,7 +661,7 @@ class CapabilityRegistry:
 
 
 # Global capability registry instance
-_capability_registry: Optional[CapabilityRegistry] = None
+_capability_registry: CapabilityRegistry | None = None
 
 
 def get_capability_registry() -> CapabilityRegistry:

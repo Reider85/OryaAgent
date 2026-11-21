@@ -3,12 +3,12 @@
 Tests the core branch creation, management, and merging functionality.
 """
 
-import asyncio
-import pytest
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from app.core.branch_manager import BranchManager, get_branch_manager
 from app.core.memory.md_store import MDStore
@@ -171,7 +171,7 @@ class TestBranchManager:
         mock_md_store.get_session_memory_dir.return_value = sample_memory_dir
 
         # Test fork without turn_id
-        branch_id = await branch_manager.fork_session(session_id=sample_session["id"])
+        await branch_manager.fork_session(session_id=sample_session["id"])
 
         # Verify latest turn was used
         mock_session_manager.get_turn.assert_called_once_with(
@@ -256,9 +256,7 @@ class TestBranchManager:
         assert call_args[1]["turn_number"] == sample_turns[0]["turn_number"]
 
     @pytest.mark.asyncio
-    async def test_copy_memory_files(
-        self, branch_manager, mock_md_store, tmp_path
-    ):
+    async def test_copy_memory_files(self, branch_manager, mock_md_store, tmp_path):
         """Test memory file copying functionality."""
         # Setup mocks
         branch_manager.md_store = mock_md_store
@@ -266,16 +264,32 @@ class TestBranchManager:
         parent_session_id = str(uuid.uuid4())
         branch_session_id = str(uuid.uuid4())
 
-        # Mock memory directories
+        # Source memory dir with the five L0 files + branch target dir
+        # (the original draft referenced never-created `sample_memory_dir` /
+        # `mock_get_dir` and called the pre-rename `_copy_memory_files`).
         parent_memory_dir = tmp_path / "parent_memory"
         branch_memory_dir = tmp_path / "branch_memory"
-        branch_memory_dir.mkdir()
-        mock_get_dir.side_effect = lambda sid: (
-            sample_memory_dir if sid == parent_session_id else branch_memory_dir
-        )
+        parent_memory_dir.mkdir()
+        for file_name in [
+            "PROJECT.md",
+            "LEARNED.md",
+            "PREFERENCES.md",
+            "FACTS.md",
+            "DECISIONS.md",
+        ]:
+            (parent_memory_dir / file_name).write_text(
+                f"# {file_name} sample\n", encoding="utf-8"
+            )
+
+        def _dir_for(session_id: str):
+            if session_id == parent_session_id:
+                return parent_memory_dir
+            return branch_memory_dir
+
+        mock_md_store.get_session_memory_dir.side_effect = _dir_for
 
         # Test copy memory files
-        await branch_manager._copy_memory_files(
+        await branch_manager._copy_memory_files_optimized(
             parent_session_id, branch_session_id
         )
 
@@ -283,14 +297,14 @@ class TestBranchManager:
         for file_name in [
             "PROJECT.md",
             "LEARNED.md",
-                "PREFERENCES.md",
-                "FACTS.md",
-                "DECISIONS.md",
-            ]:
-                source_file = sample_memory_dir / file_name
-                target_file = branch_memory_dir / file_name
-                assert target_file.exists()
-                assert target_file.read_text() == source_file.read_text()
+            "PREFERENCES.md",
+            "FACTS.md",
+            "DECISIONS.md",
+        ]:
+            source_file = parent_memory_dir / file_name
+            target_file = branch_memory_dir / file_name
+            assert target_file.exists()
+            assert target_file.read_text() == source_file.read_text()
 
     @pytest.mark.asyncio
     async def test_list_branches(self, branch_manager, mock_session_manager):

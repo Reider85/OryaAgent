@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any
 
 from app.core.observability.spans import current_turn_trace_id
 from app.core.sqlite_store import get_sqlite_store
@@ -23,12 +22,12 @@ def _add_hook_execution(entry: dict[str, Any]) -> None:
 
 
 async def _filter_hook_executions(
-    session_id: Optional[str] = None,
-    tool_name: Optional[str] = None,
-    hook_name: Optional[str] = None,
-    hook_type: Optional[str] = None,
-    success: Optional[bool] = None,
-    hours: Optional[int] = None,
+    session_id: str | None = None,
+    tool_name: str | None = None,
+    hook_name: str | None = None,
+    hook_type: str | None = None,
+    success: bool | None = None,
+    hours: int | None = None,
 ) -> list[dict[str, Any]]:
     """Filter hook execution history based on criteria."""
     store = get_sqlite_store()
@@ -57,9 +56,9 @@ async def record_hook_execution(
     hook_name: str,
     hook_type: str,
     success: bool,
-    message: Optional[str] = None,
-    duration_ms: Optional[float] = None,
-    turn_id: Optional[str] = None,
+    message: str | None = None,
+    duration_ms: float | None = None,
+    turn_id: str | None = None,
 ) -> None:
     """Record a hook execution in the audit log.
 
@@ -84,11 +83,11 @@ async def record_hook_execution(
 
 
 async def get_hook_executions(
-    session_id: Optional[str] = None,
-    tool_name: Optional[str] = None,
-    hook_name: Optional[str] = None,
-    hook_type: Optional[str] = None,
-    success: Optional[bool] = None,
+    session_id: str | None = None,
+    tool_name: str | None = None,
+    hook_name: str | None = None,
+    hook_type: str | None = None,
+    success: bool | None = None,
     hours: int = 24,
     limit: int = 100,
     offset: int = 0,
@@ -171,7 +170,7 @@ async def get_hook_statistics(hours: int = 24) -> dict[str, Any]:
     }
 
 
-async def get_hook_execution(execution_id: str) -> Optional[dict[str, Any]]:
+async def get_hook_execution(execution_id: str) -> dict[str, Any] | None:
     """Get a specific hook execution by ID."""
     store = get_sqlite_store()
     result = await store.get_hook_execution(execution_id)

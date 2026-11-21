@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from collections import OrderedDict
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +17,7 @@ class HeatCache:
         self.hits = 0
         self.misses = 0
 
-    def get(self, key: str) -> Optional[str]:
+    def get(self, key: str) -> str | None:
         """Get value from heat cache."""
         if key in self.cache:
             self.cache.move_to_end(key)

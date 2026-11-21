@@ -5,21 +5,19 @@ Extracts facts from memory using batch LLM processing after N messages.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import time
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
+from app.core import config as app_config
+from app.core.llm.factory import get_llm
+from app.core.memory.md_store import get_md_store
+from app.core.memory.prompts import MEMORY_EXTRACTION_PROMPT
 from app.core.memory.sqlitestore import get_sqlite_store
 from app.core.observability.metrics import MemoryExtractionMetricsContext
 from app.core.observability.spans import emit_span
-from app.core.memory.md_store import get_md_store
-from app.core.memory.prompts import MEMORY_EXTRACTION_PROMPT
-from app.core.llm.factory import get_llm
-from app.core import config as app_config
-from app.tools._validators import validate_path
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +37,7 @@ class MemoryExtractor:
         self._sqlite_store = None
         self._md_store = None
         self._extracting = False
-        self._last_extraction_time: Dict[str, float] = {}
+        self._last_extraction_time: dict[str, float] = {}
 
     async def initialize(self) -> None:
         """Initialize the extractor with required stores."""
@@ -65,7 +63,7 @@ class MemoryExtractor:
         message_count = len(messages_file.read_text(encoding="utf-8").split("\n"))
         return message_count >= self.batch_size
 
-    async def extract_facts(self, session_id: str) -> List[Dict[str, Any]]:
+    async def extract_facts(self, session_id: str) -> list[dict[str, Any]]:
         """Extract facts from session messages using LLM."""
         if not self._sqlite_store or not self._md_store:
             await self.initialize()
@@ -111,8 +109,8 @@ class MemoryExtractor:
             self._extracting = False
 
     async def _extract_with_llm(
-        self, session_id: str, messages: List[str]
-    ) -> List[Dict[str, Any]]:
+        self, session_id: str, messages: list[str]
+    ) -> list[dict[str, Any]]:
         """Extract facts using LLM."""
         if not messages:
             return []
@@ -121,21 +119,23 @@ class MemoryExtractor:
             # Get the memory extractor model from settings
             settings = app_config.get_settings()
             extractor_model = settings.llm_memory_extractor_model
-            
+
             logger.debug(f"Extractor model: {extractor_model}")
-            
+
             # Get LLM instance
             try:
-                llm = get_llm(provider=extractor_model.split("-")[0], model=extractor_model)
+                llm = get_llm(
+                    provider=extractor_model.split("-")[0], model=extractor_model
+                )
                 logger.debug(f"Successfully got LLM for {extractor_model}")
             except Exception as e:
                 logger.error(f"Failed to get LLM: {e}")
                 raise
-            
+
             # Prepare messages for the prompt
             messages_text = "\n".join(f"- {msg}" for msg in messages if msg.strip())
             logger.debug(f"Messages text: {messages_text}")
-            
+
             # Format the extraction prompt
             try:
                 prompt = MEMORY_EXTRACTION_PROMPT.format(messages=messages_text)
@@ -144,34 +144,39 @@ class MemoryExtractor:
                 logger.error(f"Failed to format prompt: {e}")
                 logger.error(f"Messages text: {messages_text}")
                 raise
-            
+
             # Create the message for the LLM
             from langchain_core.messages import HumanMessage
+
             llm_message = HumanMessage(content=prompt)
-            
+
             # Call the LLM
-            with emit_span("memory.extract", {"memory.extract.method": "llm_call"}) as span:
+            with emit_span(
+                "memory.extract", {"memory.extract.method": "llm_call"}
+            ) as span:
                 response = await llm.ainvoke([llm_message])
                 span.set_attribute("memory.extract.llm_model", extractor_model)
-                
+
                 # Parse the response
                 response_text = response.content
                 extracted_items = self._parse_extraction_response(response_text)
-                
+
                 # Process and score the extracted items
                 processed_items = []
                 for item in extracted_items:
-                    processed_item = self._process_extracted_item(item, session_id, len(messages))
+                    processed_item = self._process_extracted_item(
+                        item, session_id, len(messages)
+                    )
                     processed_items.append(processed_item)
-                
+
                 return processed_items
-                
+
         except Exception as e:
             logger.error(f"LLM extraction failed for session {session_id}: {e}")
             # Fallback to simple extraction
             return await self._fallback_extraction(session_id, messages)
-    
-    def _parse_extraction_response(self, response_text: str) -> List[Dict[str, Any]]:
+
+    def _parse_extraction_response(self, response_text: str) -> list[dict[str, Any]]:
         """Parse the LLM response and extract structured items."""
         try:
             # Try to parse JSON from response
@@ -183,97 +188,137 @@ class MemoryExtractor:
             else:
                 raise ValueError("Invalid response format")
         except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse JSON response ({e}), falling back to text parsing")
+            logger.warning(
+                f"Failed to parse JSON response ({e}), falling back to text parsing"
+            )
             # Fallback: create items from response text
             return [{"content": response_text.strip(), "type": "fact"}]
         except Exception as e:
             logger.error(f"Error parsing extraction response: {e}")
             # Fallback: create items from response text
             return [{"content": response_text.strip(), "type": "fact"}]
-    
-    def _process_extracted_item(self, item: Dict[str, Any], session_id: str, message_count: int) -> Dict[str, Any]:
+
+    def _process_extracted_item(
+        self, item: dict[str, Any], session_id: str, message_count: int
+    ) -> dict[str, Any]:
         """Process an extracted item with confidence scoring and metadata."""
         # Ensure required fields
         processed_item = {
-            "id": item.get("id", f"fact_{int(time.time() * 1000)}_{hash(str(item)) % 10000}"),
+            "id": item.get(
+                "id", f"fact_{int(time.time() * 1000)}_{hash(str(item)) % 10000}"
+            ),
             "session_id": session_id,
             "content": item.get("content", ""),
             "type": item.get("type", "fact"),
-"extracted_at": datetime.now(timezone.utc).isoformat(),
-            "confidence": item.get("confidence", self._calculate_confidence(item.get("content", ""), item.get("type", "fact"))),
-            "source_message_index": min(item.get("source_message_index", 0), message_count - 1),
+            "extracted_at": datetime.now(UTC).isoformat(),
+            "confidence": item.get(
+                "confidence",
+                self._calculate_confidence(
+                    item.get("content", ""), item.get("type", "fact")
+                ),
+            ),
+            "source_message_index": min(
+                item.get("source_message_index", 0), message_count - 1
+            ),
             "project": item.get("project", "default"),
             "supersede_id": item.get("supersede_id"),
             "needs_review": item.get("needs_review", False),
         }
-        
+
         return processed_item
-    
+
     def _calculate_confidence(self, content: str, content_type: str) -> float:
         """Calculate confidence score based on content and explicit mentions."""
         content_lower = content.lower()
-        
+
         # Explicit user mentions get highest confidence
         explicit_indicators = [
-            "remember that", "i want", "i prefer", "let's decide", "make sure to",
-            "important:", "note:", "reminder:", "don't forget", "always",
-            "never", "must", "should", "will", "going to"
+            "remember that",
+            "i want",
+            "i prefer",
+            "let's decide",
+            "make sure to",
+            "important:",
+            "note:",
+            "reminder:",
+            "don't forget",
+            "always",
+            "never",
+            "must",
+            "should",
+            "will",
+            "going to",
         ]
-        
+
         for indicator in explicit_indicators:
             if indicator in content_lower:
                 return 0.95
-        
+
         # High-confidence inferred items
         high_confidence_types = ["decision", "preference"]
         if content_type in high_confidence_types:
             return 0.8
-        
+
         # Check for action items or clear facts
-        action_indicators = ["todo", "task", "fix", "implement", "add", "create", "update", "delete"]
+        action_indicators = [
+            "todo",
+            "task",
+            "fix",
+            "implement",
+            "add",
+            "create",
+            "update",
+            "delete",
+        ]
         if any(indicator in content_lower for indicator in action_indicators):
             return 0.8
-        
+
         # Default confidence for unclear content
         return 0.5
-    
-    async def _fallback_extraction(self, session_id: str, messages: List[str]) -> List[Dict[str, Any]]:
+
+    async def _fallback_extraction(
+        self, session_id: str, messages: list[str]
+    ) -> list[dict[str, Any]]:
         """Fallback extraction when LLM fails."""
         facts = []
-        
+
         for i, message in enumerate(messages):
             if not message.strip():
                 continue
-            
+
             # Simple fact extraction as fallback
             fact = {
                 "id": f"fact_{int(time.time() * 1000)}_{i}",
                 "session_id": session_id,
                 "content": message,
                 "type": "fact",
-"extracted_at": datetime.now(timezone.utc).isoformat(),
+                "extracted_at": datetime.now(UTC).isoformat(),
                 "confidence": 0.5,  # Lower confidence for fallback
                 "source_message_index": i,
                 "project": "default",
                 "supersede_id": None,
                 "needs_review": True,  # Mark as needing review
             }
-            
+
             facts.append(fact)
-        
+
         return facts
 
-    async def _store_facts(self, session_id: str, facts: List[Dict[str, Any]]) -> None:
+    async def _store_facts(self, session_id: str, facts: list[dict[str, Any]]) -> None:
         """Store extracted facts in the SQLite store with deduplication."""
         for fact in facts:
             try:
                 # Check for duplicates before storing
                 duplicate_check = await self._check_for_duplicate(session_id, fact)
-                
+
                 if duplicate_check["should_supersede"]:
                     # Supersede the existing item
-                    await self._supersede_existing_fact(session_id, fact, duplicate_check["supersede_id"])
-                    logger.info(f"Superseded existing fact {duplicate_check['supersede_id']} with {fact['id']}")
+                    await self._supersede_existing_fact(
+                        session_id, fact, duplicate_check["supersede_id"]
+                    )
+                    logger.info(
+                        f"Superseded existing fact {duplicate_check['supersede_id']} with {fact['id']}"
+                    )
                 elif not duplicate_check["is_duplicate"]:
                     # Store new fact
                     await self._sqlite_store.add_memory(
@@ -285,114 +330,180 @@ class MemoryExtractor:
                     logger.debug(f"Stored new fact {fact['id']}")
                 else:
                     logger.debug(f"Fact {fact['id']} is duplicate, skipping")
-                    
+
             except Exception as e:
                 logger.error(f"Failed to store fact {fact.get('id', 'unknown')}: {e}")
-    
-    async def _check_for_duplicate(self, session_id: str, fact: Dict[str, Any]) -> Dict[str, Any]:
+
+    async def _check_for_duplicate(
+        self, session_id: str, fact: dict[str, Any]
+    ) -> dict[str, Any]:
         """Check if a fact already exists or is similar to existing ones."""
         try:
             # Search for similar facts using FTS5
             search_terms = self._extract_search_terms(fact["content"])
             search_query = " OR ".join(search_terms)
-            
+
             existing_facts = await self._sqlite_store.search_memories(
                 session_id,
                 search_query,
                 limit=10,
             )
-            
+
             best_match = None
             best_similarity = 0.0
-            
+
             for existing_fact in existing_facts:
-                similarity = self._calculate_similarity(fact["content"], existing_fact["content"])
+                similarity = self._calculate_similarity(
+                    fact["content"], existing_fact["content"]
+                )
                 if similarity > best_similarity:
                     best_similarity = similarity
                     best_match = existing_fact
-            
+
             # Determine if we should supersede or skip
             if best_similarity > 0.8:
                 return {
                     "is_duplicate": True,
                     "should_supersede": True,
                     "supersede_id": best_match["id"],
-                    "similarity": best_similarity
+                    "similarity": best_similarity,
                 }
             elif best_similarity > 0.6:
                 return {
                     "is_duplicate": False,
                     "should_supersede": False,
                     "supersede_id": None,
-                    "similarity": best_similarity
+                    "similarity": best_similarity,
                 }
             else:
                 return {
                     "is_duplicate": False,
                     "should_supersede": False,
                     "supersede_id": None,
-                    "similarity": best_similarity
+                    "similarity": best_similarity,
                 }
-                
+
         except Exception as e:
             logger.error(f"Error checking for duplicates: {e}")
             return {
                 "is_duplicate": False,
                 "should_supersede": False,
                 "supersede_id": None,
-                "similarity": 0.0
+                "similarity": 0.0,
             }
-    
-    def _extract_search_terms(self, content: str) -> List[str]:
+
+    def _extract_search_terms(self, content: str) -> list[str]:
         """Extract meaningful search terms from content for FTS5."""
         # Simple approach: split into words and filter out common terms
         import re
-        words = re.findall(r'\b\w+\b', content.lower())
-        
+
+        words = re.findall(r"\b\w+\b", content.lower())
+
         # Filter out very common words and short terms
-        stop_words = {"the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by", "is", "are", "was", "were", "be", "been", "have", "has", "had", "do", "does", "did", "will", "would", "could", "should", "may", "might", "can", "this", "that", "these", "those", "it", "its", "they", "them", "their", "what", "which", "who", "when", "where", "why", "how", "not", "no", "yes", "true", "false"}
-        
-        meaningful_terms = [word for word in words if len(word) > 2 and word not in stop_words]
-        
+        stop_words = {
+            "the",
+            "a",
+            "an",
+            "and",
+            "or",
+            "but",
+            "in",
+            "on",
+            "at",
+            "to",
+            "for",
+            "of",
+            "with",
+            "by",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "have",
+            "has",
+            "had",
+            "do",
+            "does",
+            "did",
+            "will",
+            "would",
+            "could",
+            "should",
+            "may",
+            "might",
+            "can",
+            "this",
+            "that",
+            "these",
+            "those",
+            "it",
+            "its",
+            "they",
+            "them",
+            "their",
+            "what",
+            "which",
+            "who",
+            "when",
+            "where",
+            "why",
+            "how",
+            "not",
+            "no",
+            "yes",
+            "true",
+            "false",
+        }
+
+        meaningful_terms = [
+            word for word in words if len(word) > 2 and word not in stop_words
+        ]
+
         # Return unique terms
         return list(set(meaningful_terms))
-    
+
     def _calculate_similarity(self, text1: str, text2: str) -> float:
         """Calculate similarity between two texts."""
         import re
-        
+
         # Simple word-based similarity
-        words1 = set(re.findall(r'\b\w+\b', text1.lower()))
-        words2 = set(re.findall(r'\b\w+\b', text2.lower()))
-        
+        words1 = set(re.findall(r"\b\w+\b", text1.lower()))
+        words2 = set(re.findall(r"\b\w+\b", text2.lower()))
+
         if not words1 or not words2:
             return 0.0
-        
+
         intersection = words1.intersection(words2)
         union = words1.union(words2)
-        
+
         # Jaccard similarity
         similarity = len(intersection) / len(union)
         return similarity
-    
-    async def _supersede_existing_fact(self, session_id: str, new_fact: Dict[str, Any], existing_fact_id: str) -> None:
+
+    async def _supersede_existing_fact(
+        self, session_id: str, new_fact: dict[str, Any], existing_fact_id: str
+    ) -> None:
         """Supersede an existing fact with a new one."""
         try:
             # Mark the existing fact as superseded
             await self._sqlite_store.supersede_memory(
-                session_id,
-                existing_fact_id,
-                {"superseded_by": new_fact["id"]}
+                session_id, existing_fact_id, {"superseded_by": new_fact["id"]}
             )
-            
+
             # Store the new fact
             await self._sqlite_store.add_memory(
                 session_id,
                 json.dumps(new_fact, ensure_ascii=False),
-                {"type": "extracted_fact", "fact_id": new_fact["id"], "superseded": existing_fact_id},
+                {
+                    "type": "extracted_fact",
+                    "fact_id": new_fact["id"],
+                    "superseded": existing_fact_id,
+                },
                 expires_in_hours=24 * 7,
             )
-            
+
         except Exception as e:
             logger.error(f"Failed to supersede fact {existing_fact_id}: {e}")
             # If superseding fails, just store the new fact normally
@@ -405,7 +516,7 @@ class MemoryExtractor:
 
     async def get_extracted_facts(
         self, session_id: str, limit: int = 50
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get extracted facts for a session."""
         if not self._sqlite_store:
             await self.initialize()
@@ -419,7 +530,7 @@ class MemoryExtractor:
 
         return facts_data
 
-    async def get_extraction_stats(self, session_id: str) -> Dict[str, Any]:
+    async def get_extraction_stats(self, session_id: str) -> dict[str, Any]:
         """Get extraction statistics for a session."""
         if not self._sqlite_store:
             await self.initialize()
@@ -479,7 +590,7 @@ async def initialize_memory_extractor(
     return _memory_extractor
 
 
-async def extract_facts_for_session(session_id: str) -> List[Dict[str, Any]]:
+async def extract_facts_for_session(session_id: str) -> list[dict[str, Any]]:
     """Extract facts for a specific session."""
     extractor = await get_memory_extractor()
     return await extractor.extract_facts(session_id)

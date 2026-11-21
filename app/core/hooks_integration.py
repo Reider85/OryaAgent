@@ -7,13 +7,12 @@ ensuring all tool calls go through pre and post hooks as specified in B-04.
 from __future__ import annotations
 
 import logging
-import time
 from typing import Any
 
 from langchain_core.tools import BaseTool
 from langgraph.prebuilt import ToolNode
 
-from app.core.hooks import get_hook_executor, HookResult
+from app.core.hooks import HookResult, get_hook_executor
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +96,18 @@ class HooksIntegratedToolNode:
                     tool_name, tool_args, tool_id, state
                 )
 
+                # A failed execution must surface as an error ToolMessage:
+                # previously it fell through to _combine_results, which
+                # appended None and langgraph rejected the node update with
+                # "Expected dict, got [None]" (every tool turn died).
+                if not tool_result.success:
+                    results.append(
+                        self._create_error_result(
+                            tool_name, tool_id, tool_result.message
+                        )
+                    )
+                    continue
+
                 # Execute post-hooks
                 post_hook_result = await self.hook_executor.execute_post_hooks(
                     session_id=state.get("session_id", ""),
@@ -156,8 +167,14 @@ class HooksIntegratedToolNode:
                 )(),
             ]
 
-            # Execute the tool through the original ToolNode
+            # Execute the tool through the original ToolNode.
+            # langgraph's ToolNode.ainvoke returns {"messages": [...]} on
+            # current versions and a bare list on older ones — normalize,
+            # otherwise iterating a dict yields the keys, no ToolMessage
+            # matches and every call dies with "Tool result not found".
             raw_results = await self.tool_node.ainvoke(temp_state)
+            if isinstance(raw_results, dict):
+                raw_results = raw_results.get("messages") or []
 
             # Extract the result for this specific tool call
             tool_result = None

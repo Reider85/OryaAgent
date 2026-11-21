@@ -1,15 +1,14 @@
 """Tests for UKB Router components."""
 
+from unittest.mock import patch
+
 import pytest
-import asyncio
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-from pathlib import Path
 
 from app.core.ukb.router import (
+    RetrievedChunk,
+    UKBRouter,
     get_ukb_router,
     initialize_ukb_router,
-    UKBRouter,
-    RetrievedChunk,
 )
 
 

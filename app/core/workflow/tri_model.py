@@ -6,9 +6,9 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
-from app.core.observability.spans import emit_span, timed_span
+from app.core.observability.spans import timed_span
 
 logger = logging.getLogger(__name__)
 
@@ -17,20 +17,20 @@ logger = logging.getLogger(__name__)
 class Plan:
     """Plan dataclass for Tri-Model Pipeline."""
 
-    steps: List[str]
-    criteria: List[str]
-    prefetch_hints: List[str]
+    steps: list[str]
+    criteria: list[str]
+    prefetch_hints: list[str]
     tier: str  # small|large|tournament
     cacheable_prefix: str = ""
     dynamic_suffix: str = ""
-    session_id: Optional[str] = None
-    created_at: Optional[float] = None
+    session_id: str | None = None
+    created_at: float | None = None
 
     def __post_init__(self):
         if self.created_at is None:
             self.created_at = time.time()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "steps": self.steps,
@@ -44,7 +44,7 @@ class Plan:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Plan":
+    def from_dict(cls, data: dict[str, Any]) -> Plan:
         """Create from dictionary."""
         return cls(
             steps=data.get("steps", []),
@@ -65,11 +65,11 @@ class Verdict:
     verdict: str  # pass|fail|replan
     message: str = ""
     confidence: float = 1.0
-    failed_criteria: List[str] = field(default_factory=list)
-    execution_diff: Optional[str] = None
+    failed_criteria: list[str] = field(default_factory=list)
+    execution_diff: str | None = None
     test_duration_ms: float = 0.0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "verdict": self.verdict,
@@ -86,7 +86,7 @@ class TurnResult:
     """Result of a turn in Tri-Model Pipeline."""
 
     plan: Plan
-    execution_result: Dict[str, Any]
+    execution_result: dict[str, Any]
     verdict: Verdict
     replan_count: int = 0
     total_duration_ms: float = 0.0
@@ -94,7 +94,7 @@ class TurnResult:
     execution_duration_ms: float = 0.0
     test_duration_ms: float = 0.0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "plan": self.plan.to_dict(),
@@ -141,10 +141,10 @@ class TriModelPipeline:
 
     async def execute_turn(
         self,
-        session_state: Dict[str, Any],
-        tools: List[Any],
+        session_state: dict[str, Any],
+        tools: list[Any],
         task: str,
-        context: Dict[str, Any] = None,
+        context: dict[str, Any] = None,
     ) -> TurnResult:
         """Execute a single turn with Tri-Model Pipeline."""
         start_time = time.time()
@@ -245,10 +245,10 @@ class TriModelPipeline:
 
     async def _plan_step(
         self,
-        session_state: Dict[str, Any],
-        tools: List[Any],
+        session_state: dict[str, Any],
+        tools: list[Any],
         task: str,
-        context: Dict[str, Any],
+        context: dict[str, Any],
     ) -> Plan:
         """Execute planning step."""
         with timed_span(
@@ -287,10 +287,10 @@ class TriModelPipeline:
     async def _execute_step(
         self,
         plan: Plan,
-        session_state: Dict[str, Any],
-        tools: List[Any],
-        context: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        session_state: dict[str, Any],
+        tools: list[Any],
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
         """Execute planning step."""
         with timed_span(
             span_type="tri_model",
@@ -322,9 +322,9 @@ class TriModelPipeline:
     async def _test_step(
         self,
         plan: Plan,
-        execution_result: Dict[str, Any],
-        session_state: Dict[str, Any],
-        context: Dict[str, Any],
+        execution_result: dict[str, Any],
+        session_state: dict[str, Any],
+        context: dict[str, Any],
     ) -> Verdict:
         """Execute testing step."""
         with timed_span(
@@ -357,10 +357,10 @@ class TriModelPipeline:
     async def _replan(
         self,
         turn_result: TurnResult,
-        session_state: Dict[str, Any],
-        tools: List[Any],
+        session_state: dict[str, Any],
+        tools: list[Any],
         task: str,
-        context: Dict[str, Any],
+        context: dict[str, Any],
     ) -> TurnResult:
         """Handle replanning."""
         with timed_span(
@@ -371,6 +371,7 @@ class TriModelPipeline:
                 "session_id": session_state.get("session_id"),
             },
         ) as span:
+            start_time = time.time()
             logger.info(f"Replanning turn (attempt {turn_result.replan_count + 1})")
 
             # Update plan with feedback
@@ -412,10 +413,10 @@ class TriModelPipeline:
 
     def _build_planner_prompt(
         self,
-        session_state: Dict[str, Any],
-        tools: List[Any],
+        session_state: dict[str, Any],
+        tools: list[Any],
         task: str,
-        context: Dict[str, Any],
+        context: dict[str, Any],
     ) -> str:
         """Build prompt for planner model."""
         return f"""You are a planning assistant. Break down the following task into executable steps:
@@ -447,9 +448,9 @@ Return your plan in JSON format:
     def _build_executor_prompt(
         self,
         plan: Plan,
-        session_state: Dict[str, Any],
-        tools: List[Any],
-        context: Dict[str, Any],
+        session_state: dict[str, Any],
+        tools: list[Any],
+        context: dict[str, Any],
     ) -> str:
         """Build prompt for executor model."""
         return f"""You are an execution assistant. Execute the following plan:
@@ -475,9 +476,9 @@ Execute the plan using the available tools and return the results."""
     def _build_tester_prompt(
         self,
         plan: Plan,
-        execution_result: Dict[str, Any],
-        session_state: Dict[str, Any],
-        context: Dict[str, Any],
+        execution_result: dict[str, Any],
+        session_state: dict[str, Any],
+        context: dict[str, Any],
     ) -> str:
         """Build prompt for tester model."""
         return f"""You are a testing assistant. Evaluate the execution results against the plan criteria:
@@ -516,7 +517,7 @@ Return your verdict in JSON format:
                 tier="small",
             )
 
-    def _parse_execution_response(self, response: str) -> Dict[str, Any]:
+    def _parse_execution_response(self, response: str) -> dict[str, Any]:
         """Parse execution response into result dict."""
         import json
 
@@ -556,7 +557,7 @@ Return your verdict in JSON format:
         self,
         original_plan: Plan,
         verdict: Verdict,
-        execution_result: Dict[str, Any],
+        execution_result: dict[str, Any],
     ) -> Plan:
         """Update plan for replanning based on verdict."""
         # Create updated plan with feedback
@@ -581,7 +582,7 @@ Return your verdict in JSON format:
             dynamic_suffix=original_plan.dynamic_suffix,
         )
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """Get pipeline statistics."""
         total = self.total_turns
         pass_rate = (self.passed_turns / total) if total > 0 else 0

@@ -75,9 +75,15 @@ def test_api_runs_migrations_then_uvicorn():
 
 
 def test_api_and_chainlit_share_one_image():
+    """One image, built once: api builds it, chainlit reuses the tag.
+
+    The default tag is env-overridable (``ORYA_IMAGE``) — the invariant is
+    that both services reference the *same* image and only ``api`` carries
+    the ``build`` section, so `up --build` produces the tag chainlit runs.
+    """
     services = _services()
-    assert services["api"]["image"] == "orya-agent:local"
-    assert services["chainlit"]["image"] == "orya-agent:local"
+    assert services["api"]["image"] == services["chainlit"]["image"]
+    assert "orya-agent" in services["api"]["image"], services["api"]["image"]
     assert "build" in services["api"]
     assert "build" not in services["chainlit"]
 
@@ -113,6 +119,13 @@ def test_healthchecks_defined():
         assert "healthcheck" in _services()[name], f"{name} must have a healthcheck"
 
 
+def test_chainlit_healthcheck_probes_its_own_port():
+    """chainlit listens on 8001 in-container — the old :8000 probe left the
+    container unhealthy forever."""
+    test_cmd = " ".join(_services()["chainlit"]["healthcheck"]["test"])
+    assert ":8001/" in test_cmd, test_cmd
+
+
 def test_sampler_proxy_builds_from_sibling_repo_and_forwards_to_langfuse():
     service = _services()["sampler-proxy"]
     build = service["build"]
@@ -135,7 +148,13 @@ def test_langfuse_uses_v3_stack_and_shared_postgres():
     assert (
         environment["LANGFUSE_INIT_ORG_ID"] == "${LANGFUSE_INIT_ORG_ID:-org-orya-agent}"
     )
-    assert _services()["langfuse-worker"]["image"] == "langfuse/langfuse-worker:3"
+    # Dependabot bumps the langfuse images in lockstep — assert the worker
+    # stays on the official repo AND tracks the web image's tag instead of
+    # pinning a version that every bump redoes.
+    web_image = _services()["langfuse"]["image"]
+    worker_image = _services()["langfuse-worker"]["image"]
+    assert worker_image.startswith("langfuse/langfuse-worker:")
+    assert worker_image.rsplit(":", 1)[-1] == web_image.rsplit(":", 1)[-1]
 
 
 def test_db_init_creates_langfuse_database_idempotently():
@@ -206,8 +225,9 @@ def test_prometheus_service():
     assert "profiles" in service
     assert "observability" in service["profiles"]
 
-    # Should use the official prometheus image
-    assert service["image"] == "prom/prometheus:v3.4.2"
+    # Should use the official prometheus image (tag pinned by dependabot —
+    # assert the repo, not the version, so bumps don't redden the suite)
+    assert service["image"].startswith("prom/prometheus:")
 
     # Should restart unless stopped
     assert service.get("restart") == "unless-stopped"

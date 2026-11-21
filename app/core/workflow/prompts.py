@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -15,8 +14,8 @@ class PlannerPrompt:
     def build_prompt(
         task: str,
         context: str = "",
-        available_tools: List[str] = None,
-        session_history: List[str] = None,
+        available_tools: list[str] = None,
+        session_history: list[str] = None,
         max_steps: int = 5,
     ) -> str:
         """Build planning prompt."""
@@ -76,8 +75,8 @@ class TesterPrompt:
 
     @staticmethod
     def build_prompt(
-        plan: Dict,
-        execution_result: Dict,
+        plan: dict,
+        execution_result: dict,
         session_context: str = "",
         run_tests: bool = False,  # False in BETA, True in PROD
     ) -> str:
@@ -149,9 +148,9 @@ class ReplannerPrompt:
 
     @staticmethod
     def build_prompt(
-        original_plan: Dict,
-        verdict: Dict,
-        execution_result: Dict,
+        original_plan: dict,
+        verdict: dict,
+        execution_result: dict,
         session_context: str = "",
     ) -> str:
         """Build replanning prompt."""
@@ -174,7 +173,7 @@ Confidence: {verdict.get("confidence", 0)}"""
         session_text = (
             f"""Session Context:
 {session_context}"""
-            if session_text
+            if session_context
             else ""
         )
 

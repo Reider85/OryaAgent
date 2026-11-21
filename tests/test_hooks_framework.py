@@ -1,25 +1,25 @@
 """Tests for hooks framework (B-04)."""
 
 import asyncio
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.core.hooks import (
     BaseHook,
+    FunctionPostToolHook,
+    FunctionPreToolHook,
     HookContext,
     HookExecutor,
     HookRegistry,
     HookResult,
     PostToolHook,
     PreToolHook,
-    FunctionPostToolHook,
-    FunctionPreToolHook,
-    get_hook_registry,
     get_hook_executor,
-    pre_tool_hook,
+    get_hook_registry,
     post_tool_hook,
-    pre_tool_hook_for_all_tools,
     post_tool_hook_for_all_tools,
+    pre_tool_hook,
+    pre_tool_hook_for_all_tools,
 )
 
 

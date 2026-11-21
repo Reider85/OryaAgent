@@ -15,7 +15,7 @@ from .program import agent_program
 
 __all__ = [
     "LanguageCapability",
-    "LanguageCapabilityRegistry", 
+    "LanguageCapabilityRegistry",
     "get_language_capability_registry",
     "reset_language_capability_registry",
     "agent_program",

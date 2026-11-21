@@ -3,23 +3,23 @@
 from __future__ import annotations
 
 from app.core.tools.capability_registry import (
+    CapabilityRegistry,
     get_capability_registry,
     reset_capability_registry,
-    CapabilityRegistry,
 )
 from app.core.tools.context import TurnContext
 from app.core.tools.triggers import (
-    create_triggers,
-    get_trigger_for_tool,
-    get_tool_capabilities,
-    group_tools_by_capability,
     LSP_LANGUAGES,
+    create_triggers,
+    get_tool_capabilities,
+    get_trigger_for_tool,
+    group_tools_by_capability,
 )
 from app.tools import bash, edit, glob, grep, read, write
 
 __all__ = [
     "get_capability_registry",
-    "reset_capability_registry", 
+    "reset_capability_registry",
     "CapabilityRegistry",
     "TurnContext",
     "create_triggers",
@@ -31,10 +31,16 @@ __all__ = [
 ]
 
 
-def get_tools():
-    """Get all available tools in the order they should be used.
-    
-    Returns:
-        List of all available tools in the canonical order.
+def get_tools(session_id: str | None = None) -> list:
+    """Get all available tools in the canonical M-12 order.
+
+    Returns the registry in the architectural-invariant order
+    ``[read, write, edit, bash, grep, glob]`` (AGENTS.md #3 — the graph, the
+    system-prompt builder and the UI all consume this list).
+
+    ``session_id`` is reserved for per-session filtering (M-13+/BETA
+    ``CapabilityRegistry``) and intentionally unused here: the agent loop
+    calls ``get_tools(thread_id)`` (``app/core/agent.py``), so the parameter
+    must exist even while the list stays global.
     """
     return [read, write, edit, bash, grep, glob]

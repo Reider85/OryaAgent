@@ -40,10 +40,18 @@ glob_module = importlib.import_module("app.tools.glob")
 grep_module = importlib.import_module("app.tools.grep")
 lsp_module = importlib.import_module("app.tools.lsp")
 
+# B-29/B-30 canonical registry (AGENTS.md architectural invariant #3 —
+# ``app/core/tools/__init__.py::get_tools`` returns exactly these six in
+# this order; the B-26-era list additionally carried oriahs_search + the
+# lsp_* tools, which the capability-registry refactor retired from the
+# global registry).
 EXPECTED_NAMES = [
-    "read", "write", "edit", "bash", "grep", "glob", "oriahs_search",
-    "lsp_hover", "lsp_definition", "lsp_references", "lsp_symbol_search", 
-    "lsp_rename", "lsp_diagnostics", "lsp_code_action"
+    "read",
+    "write",
+    "edit",
+    "bash",
+    "grep",
+    "glob",
 ]
 
 EXPECTED_REQUIRED_ARGS = {
@@ -53,14 +61,6 @@ EXPECTED_REQUIRED_ARGS = {
     "bash": {"command"},
     "grep": {"pattern"},
     "glob": {"pattern"},
-    "oriahs_search": {"query"},
-    "lsp_hover": {"file_path", "line", "column"},
-    "lsp_definition": {"file_path", "line", "column"},
-    "lsp_references": {"file_path", "line", "column"},
-    "lsp_symbol_search": {"query"},
-    "lsp_rename": {"file_path", "line", "column", "new_name"},
-    "lsp_diagnostics": {"file_path"},
-    "lsp_code_action": {"file_path", "line", "column"},
 }
 
 

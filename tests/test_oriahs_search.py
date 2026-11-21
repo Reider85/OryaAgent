@@ -1,6 +1,6 @@
 """Unit tests for oriahs_search tool (B-02)."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -260,7 +260,7 @@ class TestMCPClient:
 
         # Mock successful response
         with patch.object(client._http_client, "get") as mock_get:
-            mock_response = AsyncMock()
+            mock_response = MagicMock()
             mock_response.status_code = 200
             mock_get.return_value = mock_response
 
@@ -288,7 +288,7 @@ class TestMCPClient:
         client = MCPClient(config)
 
         with patch.object(client._http_client, "post") as mock_post:
-            mock_response = AsyncMock()
+            mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {"content": [{"test": "data"}]}
             mock_post.return_value = mock_response

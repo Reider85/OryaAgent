@@ -20,17 +20,15 @@ from app.api.sessions import router as sessions_router
 from app.api.skills import router as skills_router
 from app.api.sqlite_store import router as sqlite_store_router
 from app.api.workspace import router as workspace_router
-from app.web.web_sessions import router as web_sessions_router
+from app.core.logging_setup import (
+    configure_cli_logging,
+)
 
 # Import UI routers
 from app.ui.branch_manager_ui import router as branch_manager_ui_router
 from app.ui.hooks_ui import router as hooks_ui_router
 from app.ui.skills_ui import router as skills_ui_router
-from app.core.logging_setup import (
-    configure_cli_logging,
-    install_file_logger,
-    route_uvicorn_logs_to_root,
-)
+from app.web.web_sessions import router as web_sessions_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -79,21 +77,29 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     ``LLM_POOL_HEALTH_INTERVAL`` seconds (0 disables it; tests pin 0) and
     shutdown closes every pooled client.
     """
-from app.core.auth.rate_limit import close_rate_limiter, init_rate_limiter
-from app.core.cache import close_cache, init_cache
-from app.config import get_settings
-from app.core.cost_tracker import close_cost_store, init_cost_store, integrate_github_actions_monitoring
-from app.core.github_actions import close_github_actions_monitor, init_github_actions_monitor
-from app.core.hybrid_runner_router import close_hybrid_runner_router, init_hybrid_runner_router
-from app.core.local_runner_health import close_local_runner_health, init_local_runner_health
-from app.core.llm.connection_pool import (
-    get_connection_pool,
-    pool_health_worker,
-)
-from app.core.memory.compactor import compaction_worker
-from app.core.observability.langfuse import init_exporter, shutdown_exporter
-from app.core.observability.sdk import init_observability_sdk
-from app.db.session_log import projection_worker
+    from app.core.auth.rate_limit import close_rate_limiter
+    from app.core.cache import close_cache
+    from app.core.config import get_settings
+    from app.core.cost_tracker import (
+        close_cost_store,
+    )
+    from app.core.github_actions import (
+        close_github_actions_monitor,
+    )
+    from app.core.hybrid_runner_router import (
+        close_hybrid_runner_router,
+    )
+    from app.core.llm.connection_pool import (
+        get_connection_pool,
+        pool_health_worker,
+    )
+    from app.core.local_runner_health import (
+        close_local_runner_health,
+    )
+    from app.core.memory.compactor import compaction_worker
+    from app.core.observability.langfuse import shutdown_exporter
+    from app.db.session_log import projection_worker
+
     task = asyncio.create_task(projection_worker())
     interval = get_settings().memory_compact_interval_s
     compact_task: asyncio.Task | None = None

@@ -146,7 +146,7 @@
 - **Cache LRU + Redis tuning (A-07)** — `ORYA_CACHE_MAX_ENTRIES`, `ORYA_CACHE_TTL_SECONDS`, `allkeys-lru` on the Redis side.
 - **Smoke tests v2 (A-08)** — canonical M-18 tasks driven by a scripted fake model, always run.
 - **README v2 deploy guide (A-09)** — env-var reference + README-anchor test in `tests/unit/test_readme.py`.
-- **Docker Compose v2 (A-10)** — profile-driven stack (`app` = api+chainlit, `observability` = Langfuse v3 + sampler-proxy).
+- **Docker Compose v2 (A-10)** — profile-driven stack (`app` = api+chainlit, `observability` = Langfuse + sampler-proxy).
 - **Alembic migrations (A-11)** — `alembic/versions/NNNN_name.py` wrappers over `app/db/migrations/*.sql`; `orya db migrate | downgrade | current`.
 - **Settings v2 (A-12)** — `ORYA_ENV=prod` fail-fast requires auth + rate-limit + non-wildcard CORS; `orya config show | check` prints redacted effective settings with per-field source.
 - **CostAwareRouter (A-13)** — per-identity daily USD budget, **degrade at 70 %, warn at 90 %, 429 at 100 %**; emits a `budget` SSE frame; kill-switch `ORYA_COST_ROUTER_ENABLED`; fallback model `ORYA_COST_ROUTER_FALLBACK_MODEL`.
@@ -162,7 +162,7 @@
 
 - **Chainlit UI** on `:8001`, a pure `httpx` client of the FastAPI API — never builds or drives a graph.
 - **`orya` CLI** — `import`, `db migrate|downgrade|current`, `auth token`, `config show|check`.
-- **One-command start** (`scripts/start.sh` / `start.ps1`) — `uv sync` → `docker compose up -d postgres redis` → `orya db migrate` → API on `:8000` → Chainlit on `:8001`, with health-gated waits and log files in `logs/`; auto-starts a down Docker daemon, falls back to a free DB/Redis host port when the default is taken, and `--stack`/`-Stack` brings up the full containerized stack (app + observability) instead.
+- **One-command start** (`scripts/start.sh` / `start.ps1`) — `uv sync` → `docker compose up -d postgres redis` → `orya db migrate` → API on `:8000` → oriahs-mcp on `:8765` (best-effort) → Chainlit on `:8001`, with health-gated waits and log files in `logs/` (plus `logs/mcp.log`); auto-starts a down Docker daemon, falls back to a free DB/Redis host port when the default is taken, and `--stack`/`-Stack` brings up the full containerized stack (app + observability) instead.
 - **Ruff** lint+format gate (`make lint` / `make format`), `asyncio_mode=auto` pytest.
 
 ---
@@ -172,7 +172,7 @@
 ### Prerequisites
 
 - **Python 3.11+** (3.12 is the repo venv; 3.13/3.14 supported — pin 3.12 with `uv python pin 3.12` if langchain compatibility complains).
-- **Docker & Docker Compose** (for PostgreSQL 16 and Redis 7).
+- **Docker & Docker Compose** (for PostgreSQL 16 and Redis 8).
 - **ripgrep** binary on PATH (hard dependency of `grep` / `glob` tools).
 - **[uv](https://docs.astral.sh/uv/)** for dependency management.
 
@@ -183,7 +183,7 @@ git clone https://github.com/Reider85/OryaAgent.git
 cd OryaAgent
 uv sync                                    # install deps (Python 3.12 venv)
 docker compose up -d                       # postgres + redis (stateful infra only)
-make dev                                   # FastAPI on :8000 (--reload)
+make dev                                   # FastAPI on :8000 (--reload, selector event loop)
 make ui                                    # Chainlit UI on :8001 (separate terminal)
 curl http://localhost:8000/health          # → {"status":"ok", ...}
 ```
@@ -212,19 +212,19 @@ docker pull ghcr.io/reider85/orya-agent:v7.0.0
 docker run --rm -p 8000:8000 -p 8001:8001 ghcr.io/reider85/orya-agent:v7.0.0
 ```
 
-The script runs the full bring-up (`uv sync` → `docker compose up -d postgres redis` → `orya db migrate` → API → Chainlit), waits on `/health` at each stage, and writes `logs/runtime.env`, `logs/api.log`, `logs/ui.log` (plus `.err.log` twins). Flags: `--skip-sync`, `--reload`, `--stack`, `--no-docker-start` (PowerShell: `-SkipSync`, `-Reload`, `-Stack`, `-NoDockerStart`).
+The script runs the full bring-up (`uv sync` → `docker compose up -d postgres redis` → `orya db migrate` → API → oriahs-mcp → Chainlit), waits on `/health` at each stage, and writes `logs/runtime.env`, `logs/api.log`, `logs/mcp.log`, `logs/ui.log` (plus `.err.log` twins). Flags: `--skip-sync`, `--reload`, `--stack`, `--no-docker-start` (PowerShell: `-SkipSync`, `-Reload`, `-Stack`, `-NoDockerStart`).
 
 - **Auto-start Docker** — if the daemon is down, the script launches Docker Desktop (Windows/macOS) or `systemctl start docker` (Linux) and waits up to 120 s; disable with `--no-docker-start`.
 - **DB/Redis port fallback** — a busy `POSTGRES_PORT`/`REDIS_PORT` that is *not* explicitly configured picks a free port from `+3` and records it in `logs/runtime.env`; an explicitly configured busy port fails fast with the owning process named.
 - **`--stack`** (`-Stack`) — full containerized stack instead of local processes: `docker compose --profile app --profile observability up -d --build` (degrades to the `app` profile when `../OryaObservability` is absent), then health-waits API/UI strictly and Langfuse best-effort. `uv sync`, migrations and PID files are skipped — the `api` container runs `orya db migrate` itself.
 
-Stop with `scripts/stop.sh` / `stop.ps1`: kills local API/UI by PID tree, then `docker compose --profile app --profile observability down` (the **whole** stack — postgres/redis + api/chainlit + langfuse/observability, volume kept; parity with `make stack-down`), sweeps leftover port listeners, and removes stale `start.*.lock` files. `--skip-docker` (`-SkipDocker`) leaves containers alone.
+Stop with `scripts/stop.sh` / `stop.ps1`: kills local API/UI/oriahs-mcp by PID tree (`logs/api.pid`, `logs/ui.pid`, `logs/mcp.pid`), then `docker compose --profile app --profile observability down` (the **whole** stack — postgres/redis + api/chainlit + langfuse/observability, volume kept; parity with `make stack-down`), sweeps leftover port listeners, and removes stale `start.*.lock` files. `--skip-docker` (`-SkipDocker`) leaves containers alone.
 
 ### Make targets
 
 | Target | Effect |
 | --- | --- |
-| `make dev` | `uv run uvicorn app.main:app --reload --port 8000` |
+| `make dev` | `uv run uvicorn app.main:app --reload --port 8000 --loop app.core.loop_factory:selector_loop_factory` |
 | `make ui` | `uv run chainlit run app/ui/chainlit_app.py --port 8001` |
 | `make test` | `uv run pytest` (~60 s; many conditional skips without infra) |
 | `make lint` | `ruff check .` + `ruff format --check .` |
@@ -804,9 +804,9 @@ Current migrations:
 
 | Profile | Services |
 | --- | --- |
-| *(default)* | `postgres` (16) · `redis` (7, `allkeys-lru`) |
+| *(default)* | `postgres` (16) · `redis` (8, `allkeys-lru`) |
 | `app` | `api` (`deploy/Dockerfile`) · `chainlit` |
-| `observability` | `langfuse` (v3) · `langfuse-worker` · `clickhouse` (26.9) · `minio` · `prometheus` (v3.4.2) · `sampler-proxy` (builds from sibling `../OryaObservability`) · `db-init` · `clickhouse-obs-init` |
+| `observability` | `langfuse` (4.80.0) · `langfuse-worker` · `clickhouse` (26.9) · `minio` · `prometheus` (v3.16.0) · `sampler-proxy` (builds from sibling `../OryaObservability`) · `db-init` · `clickhouse-obs-init` |
 
 ```bash
 # 1. stateful infra only (default Quick Start)
@@ -972,6 +972,20 @@ anthropic SDK gets its vendored `httpx2` fork), stamps `tcp.pool_hit` /
 | `ORYA_MEMORY_DIR` | Directory for the six MD files |
 | `ORYA_MEMORY_COMPACT_INTERVAL_SECONDS` | Compactor pass interval (`0` = off) |
 
+### GitHub Actions hybrid runner (M-31) & memory extractor (B-22)
+
+| Variable | Default | Notes |
+|---|---|---|
+| `GITHUB_ACTIONS_ENABLED` | `false` | Master switch for the hybrid-runner monitor (same kill-switch stance as A-00/A-01: off keeps startup zero-cost). |
+| `GITHUB_ACTIONS_DEFAULT_MINUTES` | `2000` | Monthly minute budget assumed for workflows without an explicit budget. |
+| `GITHUB_ACTIONS_SWITCH_THRESHOLD` | `0.9` | Usage ratio at which a workflow switches runners. |
+| `GITHUB_ACTIONS_HEALTH_INTERVAL` | `30` | Seconds between workflow health/budget probes. |
+| `GITHUB_ACTIONS_WORKFLOWS` | - | Workflow budget entries consumed by `GitHubActionsCostStore` (JSON list). |
+| `LOCAL_RUNNERS_ENABLED` | `false` | Allow self-hosted (local) runners as the hybrid-routing target. |
+| `ORYA_LLM_MEMORY_EXTRACTOR_MODEL` | `claude-haiku` | Model used by the B-22 batch memory extractor. |
+| `ORYA_MEMORY_EXTRACTOR_BATCH_SIZE` | `10` | Messages buffered before a batch extraction runs. |
+| `ORYA_MEMORY_EXTRACTOR_CONFIDENCE_THRESHOLD` | `0.7` | Minimum confidence for an extracted memory to be persisted. |
+| `ORYA_MEMORY_EXTRACTOR_INTERVAL_MINUTES` | `10` | Fallback interval for flushing the extractor batch. |
 ### Sessions / session-log (M-14 / A-05 / A-06)
 
 | Var | Effect |

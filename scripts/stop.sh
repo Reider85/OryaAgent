@@ -2,13 +2,14 @@
 #
 # Полная остановка OryaAgent (POSIX / Linux / macOS, а также Git Bash на Windows).
 #
-#   1. Останавливает API и UI по PID-файлам (logs/api.pid, logs/ui.pid):
-#      на Windows — taskkill /T (дерево процессов, покрывает uvicorn reloader
-#      и дочерние процессы chainlit), на POSIX — TERM с дожигом KILL.
+#   1. Останавливает API, UI и oriahs-mcp по PID-файлам
+#      (logs/api.pid, logs/ui.pid, logs/mcp.pid): на Windows — taskkill /T
+#      (дерево процессов, покрывает uvicorn reloader и дочерние процессы
+#      chainlit), на POSIX — TERM с дожигом KILL.
 #   2. docker compose --profile app --profile observability down — снимает
 #      ВЕСЬ стек: postgres/redis + api/chainlit + langfuse и observability
 #      (паритет с make stack-down; volume postgres_data сохраняется).
-#   3. Подстраховка: слушатели портов 8000/8001 — python/uv/chainlit/node;
+#   3. Подстраховка: слушатели портов 8000/8001/8765 — python/uv/chainlit/node;
 #      docker-слушатели репортятся, но не убиваются.
 #   4. Удаление stale lock-файлов start.*.lock (pid мёртв) и PID-файлов.
 #
@@ -26,7 +27,7 @@ API_PORT="${API_PORT:-8000}"
 UI_PORT="${CHAINLIT_PORT:-8001}"
 
 LOGS="$ROOT/logs"
-PID_FILES=("API:$LOGS/api.pid" "UI:$LOGS/ui.pid")
+PID_FILES=("API:$LOGS/api.pid" "UI:$LOGS/ui.pid" "MCP:$LOGS/mcp.pid")
 SKIP_DOCKER=0
 
 case "$(uname -s 2>/dev/null)" in
@@ -160,7 +161,7 @@ fi
 # --- 3. Подстраховка: порты ---------------------------------------------------
 # Идёт ПОСЛЕ compose down: контейнерные слушатели уже освобождены,
 # здесь добиваются только локальные процессы.
-for port in "$API_PORT" "$UI_PORT"; do
+for port in "$API_PORT" "$UI_PORT" 8765; do
     for owner_pid in $(port_pids "$port"); do
         case "$owner_pid" in
             '' | *[!0-9]*) continue ;;

@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING
 from app.core.observability.spans import emit_span
 
 if TYPE_CHECKING:
+    from app.core.dfc.dfc import CompactSummary
+
     from .dfc import DFC
 
 logger = logging.getLogger(__name__)
@@ -18,7 +20,7 @@ logger = logging.getLogger(__name__)
 class BackgroundCompactor:
     """Background compactor for WARM→COLD transitions."""
 
-    def __init__(self, dfc: "DFC"):
+    def __init__(self, dfc: DFC):
         self.dfc = dfc
         self.compaction_interval = 60  # 1 minute
         self.last_compaction = 0
@@ -75,7 +77,7 @@ class BackgroundCompactor:
 
             # Create summaries
             for key, value in items:
-                content_hash = self._generate_content_hash(key, value)
+                self._generate_content_hash(key, value)
                 summary = self._create_summary(key, value)
 
                 # Add to COLD layer
@@ -98,7 +100,7 @@ class BackgroundCompactor:
         content = f"{key}:{value}"
         return hashlib.sha256(content.encode()).hexdigest()
 
-    def _create_summary(self, key: str, value: str) -> "CompactSummary":
+    def _create_summary(self, key: str, value: str) -> CompactSummary:
         """Create compact summary for COLD layer."""
         from .dfc import CompactSummary
 

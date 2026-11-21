@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
-from app.core.dfc import DFC, get_dfc, initialize_dfc
+from app.core.dfc import DFC, get_dfc
 from app.core.dfc.metrics import get_dfc_metrics
 from app.core.observability.spans import emit_span
 
@@ -20,7 +20,7 @@ class DFCIntegration:
         self.metrics = get_dfc_metrics()
 
     async def initialize_from_session(
-        self, session_id: str, session_state: Dict[str, Any]
+        self, session_id: str, session_state: dict[str, Any]
     ) -> None:
         """Initialize DFC from session state."""
         emit_span(
@@ -79,7 +79,7 @@ class DFCIntegration:
 
         logger.debug(f"Promoted memory item {memory_item.id} to HOT layer")
 
-    def get_context_for_prompt(self, plan: Dict[str, Any]) -> str:
+    def get_context_for_prompt(self, plan: dict[str, Any]) -> str:
         """Get context for system prompt building."""
         emit_span(
             span_type="dfc.get_context_for_prompt",
@@ -99,7 +99,7 @@ class DFCIntegration:
 
         return hot_context
 
-    async def create_session_snapshot(self, session_id: str) -> Dict[str, Any]:
+    async def create_session_snapshot(self, session_id: str) -> dict[str, Any]:
         """Create snapshot of DFC state for session."""
         emit_span(
             span_type="dfc.create_session_snapshot",
@@ -129,7 +129,7 @@ class DFCIntegration:
 
         return snapshot_data
 
-    def _load_session_history(self, session_state: Dict[str, Any]) -> None:
+    def _load_session_history(self, session_state: dict[str, Any]) -> None:
         """Load session history into DFC layers."""
         # In a real implementation, this would load from session store
         # For now, we'll use mock data
@@ -166,7 +166,7 @@ class DFCIntegration:
 
 
 # Global integration instance
-_dfc_integration: Optional[DFCIntegration] = None
+_dfc_integration: DFCIntegration | None = None
 
 
 def get_dfc_integration() -> DFCIntegration:

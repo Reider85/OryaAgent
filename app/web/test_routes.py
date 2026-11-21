@@ -3,8 +3,8 @@
 Simple test to verify Next.js UI routes are properly defined
 """
 
-import sys
 import os
+import sys
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -28,7 +28,6 @@ def test_nextjs_routes():
             print(f"  {route}")
 
         # Check specific routes
-        expected_routes = ["GET /", "GET /sessions", "GET /settings", "GET /tool-calls"]
 
         found_routes = [
             r for r in routes if any(r.startswith(method) for method in ["GET", "POST"])

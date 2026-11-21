@@ -5,45 +5,46 @@ code intelligence with sub-ms latency and 100-500 tokens per operation.
 
 Components:
 - LSPBus: Per-language LSP-server manager
-- LSPClient: JSON-RPC client for LSP communication  
+- LSPClient: JSON-RPC client for LSP communication
 - LSPFileWatcher: Real-time file change detection
 - 7 LSP tools: hover, definition, references, symbol_search, rename, diagnostics, code_action
 """
 
 from .bus import (
     LSPBus,
-    LSPServerConfig, 
     LSPClient,
+    LSPServerConfig,
     get_lsp_bus,
     initialize_lsp_bus,
 )
 from .config import (
-    LanguageLSPConfig,
     LANGUAGE_LSP_CONFIGS,
-    get_language_lsp_config,
-    get_supported_languages,
+    LanguageLSPConfig,
     detect_language_from_file,
-    get_file_extensions_for_language,
     get_build_command_for_language,
-    get_test_command_for_language,
-    get_lint_command_for_language,
+    get_file_extensions_for_language,
     get_format_command_for_language,
+    get_language_lsp_config,
+    get_lint_command_for_language,
+    get_supported_languages,
+    get_test_command_for_language,
 )
 from .watcher import (
     LSPFileWatcher,
     get_file_watcher,
     initialize_file_watcher,
 )
+
 try:
     from app.tools.lsp import (
-        lsp_hover,
-        lsp_definition,
-        lsp_references,
-        lsp_symbol_search,
-        lsp_rename,
-        lsp_diagnostics,
-        lsp_code_action,
         LSPToolException,
+        lsp_code_action,
+        lsp_definition,
+        lsp_diagnostics,
+        lsp_hover,
+        lsp_references,
+        lsp_rename,
+        lsp_symbol_search,
     )
 except ImportError:
     # Handle circular import during testing
@@ -59,11 +60,10 @@ except ImportError:
 __all__ = [
     # Core LSP components
     "LSPBus",
-    "LSPServerConfig", 
+    "LSPServerConfig",
     "LSPClient",
     "get_lsp_bus",
     "initialize_lsp_bus",
-    
     # Per-language LSP configurations
     "LanguageLSPConfig",
     "LANGUAGE_LSP_CONFIGS",
@@ -75,15 +75,13 @@ __all__ = [
     "get_test_command_for_language",
     "get_lint_command_for_language",
     "get_format_command_for_language",
-    
     # File watcher
     "LSPFileWatcher",
     "get_file_watcher",
     "initialize_file_watcher",
-    
     # LSP tools
     "lsp_hover",
-    "lsp_definition", 
+    "lsp_definition",
     "lsp_references",
     "lsp_symbol_search",
     "lsp_rename",

@@ -12,9 +12,7 @@ from pathlib import Path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from app.core.sqlite_store import get_sqlite_store
-from app.core.skills import get_skill_registry
-from app.core.hooks_audit import get_hook_executions, get_hook_statistics
+from app.core.sqlite_store import get_sqlite_store  # noqa: E402
 
 
 async def test_sqlite_store():

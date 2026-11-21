@@ -145,14 +145,6 @@ class SkillRegistry:
         """List all skill names."""
         return list(self._skills.keys())
 
-    def get_skills_by_category(self, category: str) -> list[Skill]:
-        """Get skills by category."""
-        return [skill for skill in self._skills.values() if skill.category == category]
-
-    def get_skills_by_tag(self, tag: str) -> list[Skill]:
-        """Get skills by tag."""
-        return [skill for skill in self._skills.values() if tag in skill.tags]
-
     async def load_skills_from_directory(
         self, directory: str | Path | None = None
     ) -> None:
@@ -321,40 +313,47 @@ class SkillRegistry:
         if not skill:
             return []
 
-        # Try to get from store first
+        # Store first (persisted YAML skills); an EMPTY result is not
+        # authoritative — skills registered at runtime via register_skill()
+        # never reach the store, so fall through to the in-memory walk
+        # instead of reporting "no dependencies" for them.
         try:
             store = get_sqlite_store()
             deps = await store.get_skill_dependencies(skill_name)
-            return [dep["dependency_name"] for dep in deps]
+            if deps:
+                return [dep["dependency_name"] for dep in deps]
         except Exception:
-            # Fallback to in-memory calculation
-            dependencies = []
-            for dep in skill.dependencies:
-                dependencies.append(dep)
-                dependencies.extend(await self.get_skill_dependencies(dep))
+            pass
 
-            return dependencies
+        dependencies = []
+        for dep in skill.dependencies:
+            dependencies.append(dep)
+            dependencies.extend(await self.get_skill_dependencies(dep))
+
+        return dependencies
 
     def resolve_skill_dependencies(self, skill_name: str) -> list[str]:
-        """Resolve skill dependencies in order."""
-        visited = set()
-        resolved = []
+        """Resolve skill dependencies in order.
 
-        async def visit(skill_name: str):
-            if skill_name in visited:
+        Purely synchronous over the in-memory registry: this must also run
+        inside active event loops (chainlit handlers, async tests) — the old
+        ``asyncio.run(visit(...))`` raised "cannot be called from a running
+        event loop" there.
+        """
+        visited: set[str] = set()
+        resolved: list[str] = []
+
+        def visit(name: str) -> None:
+            if name in visited:
                 return
-            visited.add(skill_name)
-
-            skill = self.get_skill(skill_name)
+            visited.add(name)
+            skill = self.get_skill(name)
             if skill:
                 for dep in skill.dependencies:
-                    await visit(dep)
-                resolved.append(skill_name)
+                    visit(dep)
+                resolved.append(name)
 
-        # Run async function
-        import asyncio
-
-        asyncio.run(visit(skill_name))
+        visit(skill_name)
         return resolved
 
     def export_skills(self, output_file: str | Path) -> None:
@@ -373,14 +372,14 @@ class SkillRegistry:
         categories = set()
         for skill in self._skills.values():
             categories.add(skill.category)
-        return sorted(list(categories))
+        return sorted(categories)
 
     def get_skill_tags(self) -> list[str]:
         """Get all available skill tags."""
         tags = set()
         for skill in self._skills.values():
             tags.update(skill.tags)
-        return sorted(list(tags))
+        return sorted(tags)
 
     def get_skills_by_category(self, category: str) -> list[Skill]:
         """Get skills by category."""
@@ -419,35 +418,37 @@ async def initialize_skill_registry(
 
 
 # Convenience functions
-def list_skills() -> list[Skill]:
+async def list_skills() -> list[Skill]:
     """List all available skills."""
-    return get_skill_registry().list_skills()
+    registry = await get_skill_registry()
+    return registry.list_skills()
 
 
-def get_skill(skill_name: str) -> Skill | None:
+async def get_skill(skill_name: str) -> Skill | None:
     """Get a skill by name."""
-    return get_skill_registry().get_skill(skill_name)
+    registry = await get_skill_registry()
+    return registry.get_skill(skill_name)
 
 
 async def activate_skill(skill_name: str) -> list[str]:
     """Activate a skill."""
-    registry = get_skill_registry()
+    registry = await get_skill_registry()
     return await registry.activate_skill(skill_name)
 
 
 async def deactivate_skill(skill_name: str) -> list[str]:
     """Deactivate a skill."""
-    registry = get_skill_registry()
+    registry = await get_skill_registry()
     return await registry.deactivate_skill(skill_name)
 
 
 async def validate_skill(skill_name: str) -> dict[str, Any]:
     """Validate a skill configuration."""
-    registry = get_skill_registry()
+    registry = await get_skill_registry()
     return await registry.validate_skill(skill_name)
 
 
 async def get_skill_dependencies(skill_name: str) -> list[str]:
     """Get skill dependencies."""
-    registry = get_skill_registry()
+    registry = await get_skill_registry()
     return await registry.get_skill_dependencies(skill_name)

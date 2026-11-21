@@ -18,7 +18,16 @@ from app.core.config import get_settings
 from app.db import apply_migrations, close_pool, get_asyncpg_pool
 from app.db.checkpoints import close_checkpointer, get_checkpointer
 
-APP_TABLES = ("sessions", "messages", "tool_calls", "memory_audit_log")
+APP_TABLES = (
+    "sessions",
+    "messages",
+    "tool_calls",
+    "memory_audit_log",
+    "session_branches",
+    "branch_turns",
+    "merge_history",
+)
+_APPLIED = ["0001_init", "0002_session_log_encryption", "0003_branch_schema"]
 CHECKPOINT_TABLES = (
     "checkpoints",
     "checkpoint_blobs",
@@ -259,17 +268,17 @@ async def test_downgrade_base_and_reupgrade_roundtrip(pool: asyncpg.Pool):
 
     try:
         applied = await apply_migrations(rt_url)
-        assert applied == ["0001_init", "0002_session_log_encryption"]
+        assert applied == _APPLIED
         assert await _tables_in_schema(pool, schema) == set(APP_TABLES)
-        assert await current_revision(rt_url) == "0002_session_log_encryption"
+        assert await current_revision(rt_url) == "0003_branch_schema"
 
         reverted = await downgrade("base", rt_url)
-        assert reverted == ["0001_init", "0002_session_log_encryption"]
+        assert reverted == _APPLIED
         assert await _tables_in_schema(pool, schema) == set()
         assert await current_revision(rt_url) is None
 
         reapplied = await apply_migrations(rt_url)
-        assert reapplied == ["0001_init", "0002_session_log_encryption"]
+        assert reapplied == _APPLIED
         assert await _tables_in_schema(pool, schema) == set(APP_TABLES)
     finally:
         await pool.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')

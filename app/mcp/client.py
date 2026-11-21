@@ -90,7 +90,10 @@ class MCPClient:
                     "/call", json={"name": tool_name, "arguments": arguments}
                 )
                 response.raise_for_status()
-                data = await response.json()
+                # httpx Response.json() is synchronous — awaiting it raises
+                # "object dict can't be used in 'await' expression" against a
+                # real server (and made every mock-based test fail).
+                data = response.json()
                 return data.get("content", [])
             except Exception as e:
                 logger.error(f"Failed to call MCP tool {tool_name}: {e}")

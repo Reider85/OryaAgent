@@ -6,15 +6,13 @@ Provides a queue-based system for handling memory operations asynchronously.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from app.core.memory.sqlitestore import get_sqlite_store
-from app.core.observability.spans import emit_span
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +45,8 @@ class MemoryOperation:
         self,
         operation_type: MemoryOperationType,
         session_id: str,
-        data: Dict[str, Any],
-        operation_id: Optional[str] = None,
+        data: dict[str, Any],
+        operation_id: str | None = None,
         max_retries: int = 3,
         retry_delay: float = 1.0,
     ):
@@ -63,11 +61,11 @@ class MemoryOperation:
         self.retry_delay = retry_delay
         self.retry_count = 0
         self.created_at = datetime.utcnow()
-        self.processed_at: Optional[datetime] = None
-        self.error_message: Optional[str] = None
-        self.result: Optional[Any] = None
+        self.processed_at: datetime | None = None
+        self.error_message: str | None = None
+        self.result: Any | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert operation to dictionary."""
         return {
             "operation_id": self.operation_id,
@@ -87,7 +85,7 @@ class MemoryOperation:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> MemoryOperation:
+    def from_dict(cls, data: dict[str, Any]) -> MemoryOperation:
         """Create operation from dictionary."""
         operation = cls(
             operation_type=MemoryOperationType(data["operation_type"]),
@@ -117,7 +115,7 @@ class MemoryOutbox:
         self.max_size = max_size
         self._queue: asyncio.Queue[MemoryOperation] = asyncio.Queue(maxsize=max_size)
         self._processing = False
-        self._drain_task: Optional[asyncio.Task] = None
+        self._drain_task: asyncio.Task | None = None
         self._sqlite_store = None
 
     async def initialize(self) -> None:
@@ -128,7 +126,7 @@ class MemoryOutbox:
         self,
         operation_type: MemoryOperationType,
         session_id: str,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         max_retries: int = 3,
         retry_delay: float = 1.0,
     ) -> str:
@@ -153,7 +151,7 @@ class MemoryOutbox:
             logger.error(f"Outbox queue is full ({self.max_size} operations)")
             raise RuntimeError("Outbox queue is full")
 
-    async def get_operation(self) -> Optional[MemoryOperation]:
+    async def get_operation(self) -> MemoryOperation | None:
         """Get the next operation to process."""
         try:
             return await self._queue.get()
@@ -248,7 +246,7 @@ class MemoryOutbox:
         finally:
             self._processing = False
 
-    async def _process_batch(self, batch: List[MemoryOperation]) -> None:
+    async def _process_batch(self, batch: list[MemoryOperation]) -> None:
         """Process a batch of operations."""
         if not self._sqlite_store:
             await self.initialize()
@@ -307,7 +305,7 @@ class MemoryOutbox:
                 if not await self.retry_operation(operation):
                     await self.mark_operation_failed(operation, str(e))
 
-    async def get_queue_stats(self) -> Dict[str, Any]:
+    async def get_queue_stats(self) -> dict[str, Any]:
         """Get queue statistics."""
         return {
             "queue_size": self._queue.qsize(),

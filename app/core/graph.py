@@ -732,7 +732,7 @@ def build_graph(
     tool_list = list(tools)
     # M-28: convert tool failures into error ToolMessages (langgraph 1.2.x
     # re-raises them by default, which kills the run on a failed action).
-    raw_tool_node = ToolNode(tool_list, handle_tool_errors=tool_error_text)
+    ToolNode(tool_list, handle_tool_errors=tool_error_text)
 
     async def tools_node(
         state: RecoveryState,
@@ -761,7 +761,14 @@ def build_graph(
 
         incidents = _incident_bag.get()
         span_ids = _emit_tool_call_spans(tool_calls, result, started, extra=incidents)
-        return _stamp_tool_messages(result, span_ids=span_ids)
+        stamped = _stamp_tool_messages(result, span_ids=span_ids)
+        # The locked langgraph rejects bare-list node returns
+        # ("Expected dict, got [...]"): the node must return a partial-state
+        # update. Tool results arrive as list[ToolMessage] from the hooks
+        # wrapper (or as a dict-shaped ToolNode result) — normalize both.
+        if isinstance(stamped, dict):
+            return stamped
+        return {"messages": stamped}
 
     bound_model = _bind_tools(model, tool_list)
 

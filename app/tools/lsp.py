@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
-from langchain_core.tools import InjectedToolArg, ToolException, tool
+from langchain_core.tools import tool
 
-from app.core.observability.spans import emit_span
 from app.core.lsp.bus import get_lsp_bus
 from app.core.lsp.refactor_recipes import get_refactor_recipes_for_language
-from app.core.tools._validators import validate_path
+from app.tools._validators import validate_path
 
 logger = logging.getLogger(__name__)
 
@@ -25,11 +22,10 @@ class LSPToolException(Exception):
         self.degraded = degraded
 
 
-@emit_span("lsp.hover")
 @tool
 async def lsp_hover(
     file_path: str, line: int, column: int, workspace: str = "."
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Get hover information for a position in a file.
 
     Args:
@@ -75,11 +71,10 @@ async def lsp_hover(
         raise LSPToolException(f"Hover failed: {str(e)}")
 
 
-@emit_span("lsp.definition")
 @tool
 async def lsp_definition(
     file_path: str, line: int, column: int, workspace: str = "."
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Get definition location for a symbol at the given position.
 
     Args:
@@ -125,7 +120,6 @@ async def lsp_definition(
         raise LSPToolException(f"Definition lookup failed: {str(e)}")
 
 
-@emit_span("lsp.references")
 @tool
 async def lsp_references(
     file_path: str,
@@ -133,7 +127,7 @@ async def lsp_references(
     column: int,
     include_declaration: bool = True,
     workspace: str = ".",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Get all references to a symbol at the given position.
 
     Args:
@@ -183,11 +177,10 @@ async def lsp_references(
         raise LSPToolException(f"References lookup failed: {str(e)}")
 
 
-@emit_span("lsp_symbol_search")
 @tool
 async def lsp_symbol_search(
     query: str, workspace: str = ".", limit: int = 10
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Search for symbols in the workspace.
 
     Args:
@@ -238,11 +231,10 @@ async def lsp_symbol_search(
         raise LSPToolException(f"Symbol search failed: {str(e)}")
 
 
-@emit_span("lsp_rename")
 @tool
 async def lsp_rename(
     file_path: str, line: int, column: int, new_name: str, workspace: str = "."
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Rename a symbol at the given position.
 
     Args:
@@ -293,9 +285,8 @@ async def lsp_rename(
         raise LSPToolException(f"Rename failed: {str(e)}")
 
 
-@emit_span("lsp_diagnostics")
 @tool
-async def lsp_diagnostics(file_path: str, workspace: str = ".") -> Dict[str, Any]:
+async def lsp_diagnostics(file_path: str, workspace: str = ".") -> dict[str, Any]:
     """Get diagnostics for a file.
 
     Args:
@@ -339,11 +330,10 @@ async def lsp_diagnostics(file_path: str, workspace: str = ".") -> Dict[str, Any
         raise LSPToolException(f"Diagnostics failed: {str(e)}")
 
 
-@emit_span("lsp_code_action")
 @tool
 async def lsp_code_action(
     file_path: str, line: int, column: int, workspace: str = "."
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Get available code actions at the given position.
 
     Args:
@@ -382,7 +372,7 @@ async def lsp_code_action(
 
         # Get refactor recipes for this language
         refactor_recipes = get_refactor_recipes_for_language(language)
-        
+
         # Map LSP code actions to refactor actions
         mapped_actions = refactor_recipes.map_lsp_actions(result)
 

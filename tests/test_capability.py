@@ -1,17 +1,13 @@
 """Tests for CapabilityRegistry components."""
 
-import pytest
-from unittest.mock import Mock, patch, MagicMock
-from pathlib import Path
-
 from app.core.capability.registry import (
+    Capability,
+    CapabilityRegistry,
+    CapabilityStatus,
+    CapabilityType,
+    LanguageCapability,
     get_capability_registry,
     initialize_capability_registry,
-    CapabilityRegistry,
-    Capability,
-    LanguageCapability,
-    CapabilityType,
-    CapabilityStatus,
 )
 
 

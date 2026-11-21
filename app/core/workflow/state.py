@@ -4,28 +4,27 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
-
-from app.core.dfc.models import Plan as DFCPlan  # Avoid name collision
+from typing import Any
 
 
 @dataclass
 class Plan:
     """Plan dataclass for Tri-Model Pipeline."""
-    steps: List[str]
-    criteria: List[str]
-    prefetch_hints: List[str]
+
+    steps: list[str]
+    criteria: list[str]
+    prefetch_hints: list[str]
     tier: str  # small|large|tournament
     cacheable_prefix: str = ""
     dynamic_suffix: str = ""
-    session_id: Optional[str] = None
-    created_at: Optional[float] = None
-    
+    session_id: str | None = None
+    created_at: float | None = None
+
     def __post_init__(self):
         if self.created_at is None:
             self.created_at = time.time()
-    
-    def to_dict(self) -> Dict[str, Any]:
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "steps": self.steps,
@@ -37,9 +36,9 @@ class Plan:
             "session_id": self.session_id,
             "created_at": self.created_at,
         }
-    
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Plan":
+    def from_dict(cls, data: dict[str, Any]) -> Plan:
         """Create from dictionary."""
         return cls(
             steps=data.get("steps", []),
@@ -56,14 +55,15 @@ class Plan:
 @dataclass
 class Verdict:
     """Test verdict for Tri-Model Pipeline."""
+
     verdict: str  # pass|fail|replan
     message: str = ""
     confidence: float = 1.0
-    failed_criteria: List[str] = field(default_factory=list)
-    execution_diff: Optional[str] = None
+    failed_criteria: list[str] = field(default_factory=list)
+    execution_diff: str | None = None
     test_duration_ms: float = 0.0
-    
-    def to_dict(self) -> Dict[str, Any]:
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "verdict": self.verdict,
@@ -73,9 +73,9 @@ class Verdict:
             "execution_diff": self.execution_diff,
             "test_duration_ms": self.test_duration_ms,
         }
-    
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Verdict":
+    def from_dict(cls, data: dict[str, Any]) -> Verdict:
         """Create from dictionary."""
         return cls(
             verdict=data.get("verdict", "pass"),
@@ -90,21 +90,22 @@ class Verdict:
 @dataclass
 class TurnState:
     """State for a single turn in Tri-Model Pipeline."""
+
     session_id: str
     turn_id: str
     task: str
-    plan: Optional[Plan] = None
-    execution_result: Optional[Dict[str, Any]] = None
-    verdict: Optional[Verdict] = None
+    plan: Plan | None = None
+    execution_result: dict[str, Any] | None = None
+    verdict: Verdict | None = None
     replan_count: int = 0
     current_step: int = 0
-    tools_used: List[str] = field(default_factory=list)
-    artifacts: Dict[str, Any] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    tools_used: list[str] = field(default_factory=list)
+    artifacts: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
-    
-    def to_dict(self) -> Dict[str, Any]:
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "session_id": self.session_id,
@@ -121,9 +122,9 @@ class TurnState:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
-    
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "TurnState":
+    def from_dict(cls, data: dict[str, Any]) -> TurnState:
         """Create from dictionary."""
         return cls(
             session_id=data["session_id"],
@@ -140,7 +141,7 @@ class TurnState:
             created_at=data.get("created_at", time.time()),
             updated_at=data.get("updated_at", time.time()),
         )
-    
+
     def update(self, **kwargs) -> None:
         """Update state fields."""
         for key, value in kwargs.items():
@@ -152,15 +153,16 @@ class TurnState:
 @dataclass
 class PipelineState:
     """State for the entire Tri-Model Pipeline."""
+
     session_id: str
-    turns: List[TurnState] = field(default_factory=list)
-    current_turn: Optional[TurnState] = None
-    statistics: Dict[str, Any] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    turns: list[TurnState] = field(default_factory=list)
+    current_turn: TurnState | None = None
+    statistics: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
-    
-    def to_dict(self) -> Dict[str, Any]:
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "session_id": self.session_id,
@@ -171,26 +173,30 @@ class PipelineState:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
-    
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "PipelineState":
+    def from_dict(cls, data: dict[str, Any]) -> PipelineState:
         """Create from dictionary."""
         return cls(
             session_id=data["session_id"],
-            turns=[TurnState.from_dict(turn_data) for turn_data in data.get("turns", [])],
-            current_turn=TurnState.from_dict(data["current_turn"]) if data.get("current_turn") else None,
+            turns=[
+                TurnState.from_dict(turn_data) for turn_data in data.get("turns", [])
+            ],
+            current_turn=TurnState.from_dict(data["current_turn"])
+            if data.get("current_turn")
+            else None,
             statistics=data.get("statistics", {}),
             metadata=data.get("metadata", {}),
             created_at=data.get("created_at", time.time()),
             updated_at=data.get("updated_at", time.time()),
         )
-    
+
     def add_turn(self, turn: TurnState) -> None:
         """Add a turn to the pipeline state."""
         self.turns.append(turn)
         self.current_turn = turn
         self.updated_at = time.time()
-    
+
     def update_statistics(self, key: str, value: Any) -> None:
         """Update statistics."""
         self.statistics[key] = value
@@ -200,15 +206,16 @@ class PipelineState:
 @dataclass
 class ExecutionResult:
     """Result of execution step."""
+
     success: bool
     message: str
-    tools_used: List[str]
+    tools_used: list[str]
     output: str
-    artifacts: Dict[str, Any] = field(default_factory=dict)
+    artifacts: dict[str, Any] = field(default_factory=dict)
     duration_ms: float = 0.0
-    error: Optional[str] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
+    error: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "success": self.success,
@@ -219,9 +226,9 @@ class ExecutionResult:
             "duration_ms": self.duration_ms,
             "error": self.error,
         }
-    
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ExecutionResult":
+    def from_dict(cls, data: dict[str, Any]) -> ExecutionResult:
         """Create from dictionary."""
         return cls(
             success=data.get("success", True),
@@ -237,14 +244,15 @@ class ExecutionResult:
 @dataclass
 class TestResult:
     """Result of testing step."""
+
     passed: bool
     message: str
     confidence: float
-    failed_criteria: List[str]
-    execution_diff: Optional[str] = None
+    failed_criteria: list[str]
+    execution_diff: str | None = None
     duration_ms: float = 0.0
-    
-    def to_dict(self) -> Dict[str, Any]:
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "passed": self.passed,
@@ -254,9 +262,9 @@ class TestResult:
             "execution_diff": self.execution_diff,
             "duration_ms": self.duration_ms,
         }
-    
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "TestResult":
+    def from_dict(cls, data: dict[str, Any]) -> TestResult:
         """Create from dictionary."""
         return cls(
             passed=data.get("passed", True),
@@ -271,15 +279,16 @@ class TestResult:
 @dataclass
 class PipelineConfig:
     """Configuration for Tri-Model Pipeline."""
+
     max_replans: int = 2
     concurrent_tester: bool = False  # False in BETA, True in PROD
     max_steps_per_plan: int = 5
     timeout_per_step: float = 30.0  # seconds
     enable_artifacts: bool = True
-    artifact_storage_path: Optional[str] = None
-    
+    artifact_storage_path: str | None = None
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "PipelineConfig":
+    def from_dict(cls, data: dict[str, Any]) -> PipelineConfig:
         """Create from dictionary."""
         return cls(
             max_replans=data.get("max_replans", 2),
@@ -289,8 +298,8 @@ class PipelineConfig:
             enable_artifacts=data.get("enable_artifacts", True),
             artifact_storage_path=data.get("artifact_storage_path"),
         )
-    
-    def to_dict(self) -> Dict[str, Any]:
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "max_replans": self.max_replans,

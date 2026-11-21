@@ -1,13 +1,14 @@
 """Integration tests for MCP infrastructure (B-01 and B-02)."""
 
 import json
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
 import pytest
-import asyncio
-from unittest.mock import AsyncMock, patch
-from httpx import AsyncClient
+from fastapi.testclient import TestClient
 
 from app.mcp.client import MCPClient, MCPClientConfig
-from app.mcp.oriahs_mcp import OriaHSMCPServer, OriaHSConfig
+from app.mcp.oriahs_mcp import OriaHSConfig, OriaHSMCPServer, create_http_app
 from app.tools.oriahs_search import oriahs_search
 
 
@@ -22,7 +23,7 @@ class TestMCPIntegration:
 
         # Mock successful health check
         with patch.object(client._http_client, "get") as mock_get:
-            mock_response = AsyncMock()
+            mock_response = MagicMock()
             mock_response.status_code = 200
             mock_get.return_value = mock_response
 
@@ -31,7 +32,7 @@ class TestMCPIntegration:
 
         # Mock successful tool listing
         with patch.object(client._http_client, "get") as mock_get:
-            mock_response = AsyncMock()
+            mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {
                 "tools": [{"name": "hybrid_search", "description": "Test search tool"}]
@@ -44,7 +45,7 @@ class TestMCPIntegration:
 
         # Mock successful tool call
         with patch.object(client._http_client, "post") as mock_post:
-            mock_response = AsyncMock()
+            mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {
                 "content": [
@@ -77,7 +78,7 @@ class TestMCPIntegration:
 
         # Mock successful health check
         with patch.object(config._http_client, "get") as mock_get:
-            mock_response = AsyncMock()
+            mock_response = MagicMock()
             mock_response.status_code = 200
             mock_get.return_value = mock_response
 
@@ -102,7 +103,7 @@ class TestMCPIntegration:
 
         # Mock successful search
         with patch.object(config._http_client, "post") as mock_post:
-            mock_response = AsyncMock()
+            mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {
                 "results": [
@@ -211,31 +212,48 @@ class TestOriaHSIntegration:
     @pytest.mark.asyncio
     async def test_search_error_scenarios(self):
         """Test various error scenarios in search."""
-        # Test connection error
-        mock_client = AsyncMock()
-        mock_client.health_check.side_effect = Exception("Connection failed")
+        # Isolate the real in-memory cache: earlier tests may have cached a
+        # successful ``query="test"`` under the same (query, top_k, filters)
+        # key, which would turn every error scenario below into a cache hit
+        # ("DID NOT RAISE") depending on file order.
+        isolated_cache = AsyncMock()
+        isolated_cache.get.return_value = None
 
-        with patch("app.tools.oriahs_search.get_mcp_client", return_value=mock_client):
-            with pytest.raises(Exception, match="not available"):
-                await oriahs_search.ainvoke({"query": "test"})
+        with patch("app.tools.oriahs_search.get_cache", return_value=isolated_cache):
+            # Test connection error
+            mock_client = AsyncMock()
+            mock_client.health_check.side_effect = Exception("Connection failed")
 
-        # Test API error
-        mock_client = AsyncMock()
-        mock_client.health_check.return_value = True
-        mock_client.call_tool.side_effect = Exception("API Error")
+            with patch(
+                "app.tools.oriahs_search.get_mcp_client", return_value=mock_client
+            ):
+                # Current contract: connectivity failures surface as
+                # "Semantic search unavailable: ... grep tool instead"
+                # (the grep-fallback hint), not the older "not available".
+                with pytest.raises(Exception, match="Semantic search unavailable"):
+                    await oriahs_search.ainvoke({"query": "test"})
 
-        with patch("app.tools.oriahs_search.get_mcp_client", return_value=mock_client):
-            with pytest.raises(Exception, match="Search failed"):
-                await oriahs_search.ainvoke({"query": "test"})
+            # Test API error
+            mock_client = AsyncMock()
+            mock_client.health_check.return_value = True
+            mock_client.call_tool.side_effect = Exception("API Error")
 
-        # Test timeout
-        mock_client = AsyncMock()
-        mock_client.health_check.return_value = True
-        mock_client.call_tool.side_effect = asyncio.TimeoutError("Request timeout")
+            with patch(
+                "app.tools.oriahs_search.get_mcp_client", return_value=mock_client
+            ):
+                with pytest.raises(Exception, match="Search failed"):
+                    await oriahs_search.ainvoke({"query": "test"})
 
-        with patch("app.tools.oriahs_search.get_mcp_client", return_value=mock_client):
-            with pytest.raises(Exception, match="Search failed"):
-                await oriahs_search.ainvoke({"query": "test"})
+            # Test timeout
+            mock_client = AsyncMock()
+            mock_client.health_check.return_value = True
+            mock_client.call_tool.side_effect = TimeoutError("Request timeout")
+
+            with patch(
+                "app.tools.oriahs_search.get_mcp_client", return_value=mock_client
+            ):
+                with pytest.raises(Exception, match="Search failed"):
+                    await oriahs_search.ainvoke({"query": "test"})
 
 
 class TestConfiguration:
@@ -286,3 +304,89 @@ class TestConfiguration:
         assert config.token == "test-oraihs-token"
         assert config.timeout == 20.0
         assert config.max_retries == 7
+
+
+class TestOriaHSHTTPTransport:
+    """HTTP transport of oriahs-mcp (B-01/B-02 contract).
+
+    The container previously ran the stdio transport while the compose
+    healthchecks, the `api` dependency gate and app/mcp/client.py all speak
+    HTTP — the app profile could never start. These tests pin the REST
+    contract: /health is pure liveness (the OriaHS backend may be absent
+    from the stack), /tools lists the MCP tools, /call unwraps TextContent
+    JSON into the flat dicts oriahs_search parses, and backend failures
+    surface as 502 so the client raises and the tools degrade.
+    """
+
+    def test_health_is_pure_liveness_without_backend(self):
+        """No backend probe: api waits on service_healthy and may legitimately
+        run without the OriaHS service."""
+        app = create_http_app(OriaHSConfig(base_url="http://127.0.0.1:9"))
+        client = TestClient(app)
+
+        response = client.get("/health")
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}
+
+    def test_tools_endpoint_lists_the_mcp_tools(self):
+        app = create_http_app(OriaHSConfig(base_url="http://127.0.0.1:9"))
+        client = TestClient(app)
+
+        response = client.get("/tools")
+
+        assert response.status_code == 200
+        tools = response.json()["tools"]
+        names = {tool["name"] for tool in tools}
+        assert names == {"hybrid_search", "index_file", "index_directory"}
+        assert all(tool["description"] for tool in tools)
+
+    def test_call_unwraps_textcontent_into_flat_dicts(self):
+        config = OriaHSConfig(base_url="http://oriahs.test")
+        app = create_http_app(config)
+
+        with patch.object(config._http_client, "post") as mock_post:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {
+                "results": [
+                    {
+                        "score": 0.95,
+                        "path": "app/main.py",
+                        "content": "def main(): ...",
+                        "type": "python",
+                    }
+                ]
+            }
+            mock_post.return_value = mock_response
+
+            client = TestClient(app)
+            response = client.post(
+                "/call",
+                json={"name": "hybrid_search", "arguments": {"query": "main"}},
+            )
+
+        assert response.status_code == 200
+        content = response.json()["content"]
+        # Flat dict with "score" — the shape oriahs_search parses, not an
+        # MCP {"type": "text", "text": ...} envelope.
+        assert content[0]["score"] == 0.95
+        assert content[0]["path"] == "app/main.py"
+
+    def test_call_backend_failure_returns_502(self):
+        config = OriaHSConfig(base_url="http://oriahs.test")
+        app = create_http_app(config)
+
+        with patch.object(config._http_client, "post") as mock_post:
+            mock_post.side_effect = httpx.ConnectError("backend down")
+
+            client = TestClient(app)
+            response = client.post(
+                "/call",
+                json={"name": "hybrid_search", "arguments": {"query": "x"}},
+            )
+
+        # MCPClient.raise_for_status turns this into an exception → the tools
+        # report "Search failed" / "Indexing failed" instead of hanging.
+        assert response.status_code == 502
+        assert "Search failed" in response.json()["detail"]

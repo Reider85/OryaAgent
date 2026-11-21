@@ -8,12 +8,9 @@ import json
 import logging
 import time
 from collections import OrderedDict
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import redis.asyncio as redis
-from fastapi import Depends
-from pydantic import BaseModel
 
 from app.core.observability.spans import emit_span
 
@@ -30,7 +27,7 @@ class HeatCache:
         self.max_size = max_size
         self.cache: OrderedDict[str, str] = OrderedDict()
 
-    def get(self, key: str) -> Optional[str]:
+    def get(self, key: str) -> str | None:
         """Get value from heat cache."""
         if key in self.cache:
             self.cache.move_to_end(key)
@@ -51,13 +48,13 @@ class HeatCache:
         """Get current size in tokens (simplified)."""
         return sum(len(str(v)) for v in self.cache.values())
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get cache statistics."""
         return {
             "size": self._get_size(),
             "max_size": self.max_size,
-            "hit_count": getattr(self, 'hit_count', 0),
-            "miss_count": getattr(self, 'miss_count', 0),
+            "hit_count": getattr(self, "hit_count", 0),
+            "miss_count": getattr(self, "miss_count", 0),
         }
 
 
@@ -88,11 +85,11 @@ class DFC:
         self.heat = HeatCache(max_size=heat_cache_size)
         self.hot: OrderedDict[str, str] = OrderedDict()
         self.warm: OrderedDict[str, str] = OrderedDict()
-        self.cold: List[CompactSummary] = []
+        self.cold: list[CompactSummary] = []
 
         # Background compactor
         self.compactor = BackgroundCompactor(self)
-        self.compactor_task: Optional[asyncio.Task] = None
+        self.compactor_task: asyncio.Task | None = None
 
     async def initialize(self) -> None:
         """Initialize DFC from Redis."""
@@ -140,7 +137,7 @@ class DFC:
         except Exception as e:
             logger.error(f"Error saving DFC to Redis: {e}")
 
-    def assemble_hot(self, plan: Dict[str, Any]) -> str:
+    def assemble_hot(self, plan: dict[str, Any]) -> str:
         """Assemble HOT context from plan and layers."""
         emit_span(
             span_type="dfc.assemble_hot",
@@ -151,7 +148,7 @@ class DFC:
                 "dfc.cold_size": len(self.cold),
             },
         )
-        
+
         # Start with cacheable prefix (from plan)
         cacheable_prefix = plan.get("cacheable_prefix", "")
 
@@ -190,7 +187,7 @@ class DFC:
             self.warm[oldest_key] = oldest_value
             self.warm.move_to_end(oldest_key)
 
-    def snapshot(self) -> "DFC":
+    def snapshot(self) -> DFC:
         """Create immutable snapshot of DFC state."""
         snapshot = DFC(
             ukb_router=self.ukb_router,
@@ -271,16 +268,9 @@ class BackgroundCompactor:
 
     async def compact_warm_to_cold(self) -> None:
         """Compact oldest items from WARM to COLD."""
-        emit_span(
-            span_type="dfc.compact",
-            name="dfc.compact",
-            attributes={
-                "dfc.warm_size_before": len(self.dfc.warm),
-                "dfc.cold_size_before": len(self.dfc.cold),
-            },
-        )
-        
         # Take oldest 20% of WARM items
+        warm_before = len(self.dfc.warm)
+        cold_before = len(self.dfc.cold)
         items_to_compact = max(1, len(self.dfc.warm) // 5)
         items = list(self.dfc.warm.items())[:items_to_compact]
 
@@ -301,16 +291,25 @@ class BackgroundCompactor:
             if key in self.dfc.warm:
                 self.dfc.warm.pop(key)
 
-        # Update span attributes
-        span.set_attribute("dfc.warm_size_after", len(self.dfc.warm))
-        span.set_attribute("dfc.cold_size_after", len(self.dfc.cold))
-        span.set_attribute("dfc.compacted_items", items_to_compact)
+        # Emit the span after the pass with before/after sizes (emit_span
+        # is a plain emitter, not an object with set_attribute).
+        emit_span(
+            span_type="dfc.compact",
+            name="dfc.compact",
+            attributes={
+                "dfc.warm_size_before": warm_before,
+                "dfc.cold_size_before": cold_before,
+                "dfc.warm_size_after": len(self.dfc.warm),
+                "dfc.cold_size_after": len(self.dfc.cold),
+                "dfc.compacted_items": items_to_compact,
+            },
+        )
 
         logger.info(f"Compacted {items_to_compact} items from WARM to COLD")
 
 
 # Global DFC instance
-_dfc_instance: Optional[DFC] = None
+_dfc_instance: DFC | None = None
 
 
 def get_dfc() -> DFC:

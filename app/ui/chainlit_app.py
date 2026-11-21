@@ -68,6 +68,7 @@ from typing import Any
 
 import chainlit as cl
 import httpx
+from chainlit.config import config as cl_config
 from chainlit.input_widget import Select, TextInput
 
 from app.core.agent import PendingInterrupt, content_text, preview
@@ -82,6 +83,16 @@ from app.ui.settings import (
     save_settings,
 )
 from app.ui.skills import get_skills_ui
+
+# Chainlit auto-activates its own ChainlitDataLayer whenever DATABASE_URL is
+# in the environment (the start scripts export it for migrations + API) and
+# then writes to its `Thread` table — which this schema never creates, so
+# every disconnect logged `relation "Thread" does not exist`. Session
+# persistence is the API's job since M-24 (the UI is a pure httpx client), so
+# a truthy no-op factory disables the auto-detection branch (chainlit's
+# `get_data_layer` checks `config.code.data_layer` *before* DATABASE_URL and
+# a callable returning None leaves the app with no data layer at all).
+cl_config.code.data_layer = lambda: None
 
 logger = logging.getLogger(__name__)
 

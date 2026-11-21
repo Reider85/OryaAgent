@@ -3,8 +3,8 @@
 Test script to verify Next.js UI integration with main application
 """
 
-import sys
 import os
+import sys
 
 # Add the app directory to Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -129,7 +129,7 @@ def test_frontend_files():
 
     # Check package.json content
     package_path = os.path.join(frontend_path, "package.json")
-    with open(package_path, "r") as f:
+    with open(package_path) as f:
         package_content = f.read()
         if "next" in package_content and "react" in package_content:
             print("✓ package.json has required dependencies")

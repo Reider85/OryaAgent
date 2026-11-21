@@ -3,14 +3,15 @@
 import json
 import uuid
 from datetime import datetime
-from enum import Enum
-from typing import Any, Dict, Optional, Union
+from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 
-class MessageType(str, Enum):
+class MessageType(StrEnum):
     """WebSocket message types."""
+
     USER = "user"
     ASSISTANT = "assistant"
     ERROR = "error"
@@ -24,28 +25,29 @@ class MessageType(str, Enum):
 
 class WebSocketMessage(BaseModel):
     """Base WebSocket message model."""
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     type: MessageType
     content: str = ""
     timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
-    session_id: Optional[str] = None
-    role: Optional[str] = None
-    request_id: Optional[str] = None
-    position: Optional[int] = None
-    total_tokens: Optional[int] = None
-    tool_name: Optional[str] = None
-    tool_args: Optional[Dict[str, Any]] = None
-    tool_call_id: Optional[str] = None
-    result: Optional[Any] = None
-    status: Optional[str] = None
-    start_time: Optional[str] = None
-    end_time: Optional[str] = None
-    duration_ms: Optional[int] = None
-    error_message: Optional[str] = None
-    connection_id: Optional[str] = None
-    message: Optional[str] = None
-    status_type: Optional[str] = None
-    details: Optional[Dict[str, Any]] = None
+    session_id: str | None = None
+    role: str | None = None
+    request_id: str | None = None
+    position: int | None = None
+    total_tokens: int | None = None
+    tool_name: str | None = None
+    tool_args: dict[str, Any] | None = None
+    tool_call_id: str | None = None
+    result: Any | None = None
+    status: str | None = None
+    start_time: str | None = None
+    end_time: str | None = None
+    duration_ms: int | None = None
+    error_message: str | None = None
+    connection_id: str | None = None
+    message: str | None = None
+    status_type: str | None = None
+    details: dict[str, Any] | None = None
 
     def to_json(self) -> str:
         """Convert message to JSON string."""
@@ -60,6 +62,7 @@ class WebSocketMessage(BaseModel):
 
 class UserMessage(WebSocketMessage):
     """User message model."""
+
     type: MessageType = MessageType.USER
     content: str
     role: str = "user"
@@ -72,6 +75,7 @@ class UserMessage(WebSocketMessage):
 
 class AssistantMessage(WebSocketMessage):
     """Assistant message model."""
+
     type: MessageType = MessageType.ASSISTANT
     content: str
     role: str = "assistant"
@@ -84,6 +88,7 @@ class AssistantMessage(WebSocketMessage):
 
 class ErrorMessage(WebSocketMessage):
     """Error message model."""
+
     type: MessageType = MessageType.ERROR
     error_message: str
 
@@ -95,15 +100,20 @@ class ErrorMessage(WebSocketMessage):
 
 class ToolCallMessage(WebSocketMessage):
     """Tool call message model."""
+
     type: MessageType = MessageType.TOOL_CALL
     tool_name: str
-    tool_args: Dict[str, Any]
+    tool_args: dict[str, Any]
     tool_call_id: str
     start_time: str
 
     @classmethod
     def create(
-        cls, tool_name: str, tool_args: Dict[str, Any], tool_call_id: str, session_id: str
+        cls,
+        tool_name: str,
+        tool_args: dict[str, Any],
+        tool_call_id: str,
+        session_id: str,
     ) -> "ToolCallMessage":
         """Create a tool call message."""
         return cls(
@@ -117,6 +127,7 @@ class ToolCallMessage(WebSocketMessage):
 
 class ToolResultMessage(WebSocketMessage):
     """Tool result message model."""
+
     type: MessageType = MessageType.TOOL_RESULT
     tool_name: str
     tool_call_id: str
@@ -126,7 +137,12 @@ class ToolResultMessage(WebSocketMessage):
 
     @classmethod
     def create(
-        cls, tool_name: str, tool_call_id: str, result: Any, duration_ms: int, session_id: str
+        cls,
+        tool_name: str,
+        tool_call_id: str,
+        result: Any,
+        duration_ms: int,
+        session_id: str,
     ) -> "ToolResultMessage":
         """Create a tool result message."""
         return cls(
@@ -141,12 +157,15 @@ class ToolResultMessage(WebSocketMessage):
 
 class StreamTokenMessage(WebSocketMessage):
     """Stream token message model."""
+
     type: MessageType = MessageType.STREAM_TOKEN
     position: int
-    total_tokens: Optional[int] = None
+    total_tokens: int | None = None
 
     @classmethod
-    def create(cls, token: str, position: int, session_id: str, total_tokens: int = None) -> "StreamTokenMessage":
+    def create(
+        cls, token: str, position: int, session_id: str, total_tokens: int = None
+    ) -> "StreamTokenMessage":
         """Create a stream token message."""
         return cls(
             content=token,
@@ -158,6 +177,7 @@ class StreamTokenMessage(WebSocketMessage):
 
 class StreamCompleteMessage(WebSocketMessage):
     """Stream complete message model."""
+
     type: MessageType = MessageType.STREAM_COMPLETE
 
     @classmethod
@@ -168,6 +188,7 @@ class StreamCompleteMessage(WebSocketMessage):
 
 class ConnectionMessage(WebSocketMessage):
     """Connection status message model."""
+
     type: MessageType = MessageType.CONNECTION
     connection_id: str
     status_type: str  # "connected", "disconnected", "reconnecting"
@@ -180,12 +201,15 @@ class ConnectionMessage(WebSocketMessage):
 
 class StatusMessage(WebSocketMessage):
     """Status message model."""
+
     type: MessageType = MessageType.STATUS
     status_type: str
-    details: Optional[Dict[str, Any]] = None
+    details: dict[str, Any] | None = None
 
     @classmethod
-    def create(cls, status_type: str, details: Dict[str, Any] = None) -> "StatusMessage":
+    def create(
+        cls, status_type: str, details: dict[str, Any] = None
+    ) -> "StatusMessage":
         """Create a status message."""
         return cls(status_type=status_type, details=details)
 
@@ -206,17 +230,25 @@ def create_error_message(error_message: str, session_id: str = None) -> ErrorMes
     return ErrorMessage.create(error_message, session_id)
 
 
-def create_tool_call_message(tool_name: str, tool_args: Dict[str, Any], tool_call_id: str, session_id: str) -> ToolCallMessage:
+def create_tool_call_message(
+    tool_name: str, tool_args: dict[str, Any], tool_call_id: str, session_id: str
+) -> ToolCallMessage:
     """Create a tool call message."""
     return ToolCallMessage.create(tool_name, tool_args, tool_call_id, session_id)
 
 
-def create_tool_result_message(tool_name: str, tool_call_id: str, result: Any, duration_ms: int, session_id: str) -> ToolResultMessage:
+def create_tool_result_message(
+    tool_name: str, tool_call_id: str, result: Any, duration_ms: int, session_id: str
+) -> ToolResultMessage:
     """Create a tool result message."""
-    return ToolResultMessage.create(tool_name, tool_call_id, result, duration_ms, session_id)
+    return ToolResultMessage.create(
+        tool_name, tool_call_id, result, duration_ms, session_id
+    )
 
 
-def create_stream_token_message(token: str, position: int, session_id: str, total_tokens: int = None) -> StreamTokenMessage:
+def create_stream_token_message(
+    token: str, position: int, session_id: str, total_tokens: int = None
+) -> StreamTokenMessage:
     """Create a stream token message."""
     return StreamTokenMessage.create(token, position, session_id, total_tokens)
 
@@ -226,12 +258,16 @@ def create_stream_complete_message(session_id: str) -> StreamCompleteMessage:
     return StreamCompleteMessage.create(session_id)
 
 
-def create_connection_message(connection_id: str, status_type: str) -> ConnectionMessage:
+def create_connection_message(
+    connection_id: str, status_type: str
+) -> ConnectionMessage:
     """Create a connection message."""
     return ConnectionMessage.create(connection_id, status_type)
 
 
-def create_status_message(status_type: str, details: Dict[str, Any] = None) -> StatusMessage:
+def create_status_message(
+    status_type: str, details: dict[str, Any] = None
+) -> StatusMessage:
     """Create a status message."""
     return StatusMessage.create(status_type, details)
 
@@ -247,7 +283,7 @@ def parse_websocket_message(json_str: str) -> WebSocketMessage:
     try:
         data = json.loads(json_str)
         message_type = data.get("type")
-        
+
         # Create specific message type based on type field
         if message_type == MessageType.USER:
             return UserMessage(**data)
@@ -279,10 +315,13 @@ def parse_websocket_message(json_str: str) -> WebSocketMessage:
 # Message validation
 def validate_message(message: WebSocketMessage) -> bool:
     """Validate a WebSocket message."""
-    if not message.content and message.type not in [MessageType.CONNECTION, MessageType.STREAM_COMPLETE]:
+    if not message.content and message.type not in [
+        MessageType.CONNECTION,
+        MessageType.STREAM_COMPLETE,
+    ]:
         return False
-    
+
     if message.session_id is None and message.type not in [MessageType.STATUS]:
         return False
-    
+
     return True

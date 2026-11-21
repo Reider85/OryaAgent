@@ -3,12 +3,13 @@
   Полная остановка OryaAgent (Windows / PowerShell 5.1+).
 
 .DESCRIPTION
-  1. Останавливает API и UI по PID-файлам (logs/api.pid, logs/ui.pid) —
-     taskkill /T убивает дерево процессов (uvicorn reloader, дочерние chainlit).
+  1. Останавливает API, UI и oriahs-mcp по PID-файлам (logs/api.pid,
+     logs/ui.pid, logs/mcp.pid) — taskkill /T убивает дерево процессов
+     (uvicorn reloader, дочерние chainlit).
   2. docker compose --profile app --profile observability down — снимает
      ВЕСЬ стек: postgres/redis + api/chainlit + langfuse и observability
      (паритет с make stack-down; volume postgres_data сохраняется).
-  3. Подстраховка: слушатели портов 8000/8001 (python/uv/chainlit/node;
+  3. Подстраховка: слушатели портов 8000/8001/8765 (python/uv/chainlit/node;
      docker-слушатели репортятся, но не убиваются).
   4. Удаление stale lock-файлов start.*.lock (pid мёртв) и PID-файлов.
 
@@ -53,7 +54,8 @@ if ($UiPort -le 0) {
 $Logs = Join-Path $Root 'logs'
 $PidFiles = @(
     @{ Name = 'API'; Path = (Join-Path $Logs 'api.pid') },
-    @{ Name = 'UI'; Path = (Join-Path $Logs 'ui.pid') }
+    @{ Name = 'UI'; Path = (Join-Path $Logs 'ui.pid') },
+    @{ Name = 'MCP'; Path = (Join-Path $Logs 'mcp.pid') }
 )
 
 function Write-Step([string]$Message) {
@@ -131,7 +133,7 @@ else {
 # Идёт ПОСЛЕ compose down: контейнерные слушатели уже освобождены,
 # здесь добиваются только локальные процессы.
 $ProcessNameFilter = 'python', 'pythonw', 'uv', 'uvicorn', 'chainlit', 'node'
-foreach ($Port in @($ApiPort, $UiPort)) {
+foreach ($Port in @($ApiPort, $UiPort, 8765)) {
     $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
         Select-Object -ExpandProperty OwningProcess -Unique)
     foreach ($ownerPid in $listeners) {

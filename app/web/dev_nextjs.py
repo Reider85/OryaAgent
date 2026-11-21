@@ -6,7 +6,6 @@ Development script for Next.js Web UI
 import os
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 

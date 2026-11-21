@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import json
-from typing import List
-
 MEMORY_EXTRACTION_PROMPT = """You are a memory extraction assistant. Analyze the conversation and extract structured facts, decisions, and preferences.
 
 Extract items in this JSON format:
@@ -12,7 +9,7 @@ Extract items in this JSON format:
   "items": [
     {
       "type": "fact|decision|preference|todo",
-      "content": "extracted content", 
+      "content": "extracted content",
       "confidence": 0.5-0.95,
       "project": "project_name",
       "supersede_id": null,
@@ -23,7 +20,7 @@ Extract items in this JSON format:
 
 Confidence scoring rules:
 - Explicit user mentions ("remember that", "I want", "I prefer", "let's decide") → confidence 0.95
-- High-confidence inferred items (clear facts, decisions, preferences) → confidence 0.8  
+- High-confidence inferred items (clear facts, decisions, preferences) → confidence 0.8
 - Low-confidence items (unclear context, ambiguous) → confidence 0.5
 - If confidence < 0.7, mark needs_review=true
 - Deduplicate similar content
