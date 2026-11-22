@@ -539,9 +539,13 @@ async def test_on_message_streams_a_turn_over_sse(
 
     assert started and started[0]["tool"] == "read"
     assert ended and ended[0]["from_cache"] is True
-    final = fake_cl.messages[-1]
+    # The degraded warning is sent *after* the stream, so it lands in the
+    # session after the reply — assert on the message that got the tokens.
+    final = next(m for m in fake_cl.messages if m.tokens)
     assert final.tokens == ["Hel", "lo"]
     assert final.sent == 1
+    warning = next(m for m in fake_cl.messages if "degraded mode" in m.content)
+    assert warning.sent == 1
 
 
 async def test_on_message_asks_and_resumes_on_interrupt(

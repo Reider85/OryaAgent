@@ -1,395 +1,195 @@
-"""Skills UI component (B-07).
+"""Skills UI (B-07/B-19): browse + activate skills over Chainlit 2.x.
 
-Provides Chainlit UI for browsing and managing skills.
+Chainlit 2.x has no per-message input widgets — ``Message.add_ui_component``
+does not exist and ``Select``/``Switch``/``TextInput`` only live inside
+``cl.ChatSettings``, which the settings panel already owns. The browser is
+therefore one message updated in place (the sidebar pattern from
+:mod:`app.ui.chainlit_app`) carrying ``cl.Action`` buttons: a Refresh plus
+one Activate/Deactivate toggle per skill.
+
+Handlers are registered at *import* time: ``config.code.action_callbacks``
+is a module-level registry and the ``on_message``/``on_chat_start`` slots
+are single-assignment, so registering them from inside a function would
+clobber the app's main chat handlers. ``/skills`` itself is parsed in
+:func:`app.ui.chainlit_app.on_message` — never from a second ``cl.on_message``.
 """
+
+from __future__ import annotations
 
 import json
 
 import chainlit as cl
 import httpx
-from chainlit.action import Action
-from chainlit.input_widget import Select, Switch, TextInput
 
 from app.core.config import get_settings
-from app.core.skills import get_skill_registry
 
-
-# UIMessage not available in this chainlit version
-class UIMessage(dict):
-    """UI message for skills."""
-
-    def __init__(self, content: str = "", **kwargs):
-        super().__init__(**kwargs)
-        self["content"] = content
-        self["author"] = kwargs.get("author", "Assistant")
+#: ``cl.user_session`` key holding the single browser message (updated in
+#: place so a refresh or a toggle never stacks another window).
+_BROWSER_KEY = "skills_message"
 
 
 class SkillsUI:
     """Skills management UI component."""
 
     def __init__(self):
-        self.registry = get_skill_registry()
         self.settings = get_settings()
 
-    async def show_skills_browser(self):
-        """Show the skills browser interface."""
-        # Create a skills browser message
-        skills_browser = cl.Message(content="", author="Skills")
+    async def show_skills_browser(self) -> None:
+        """Send the skills browser, or rewrite it in place if already open."""
+        skills = await self._get_all_skills()
+        content, actions = self._render(skills)
 
-        # Get all skills
-        all_skills = await self._get_all_skills()
-        categories = await self._get_categories()
+        message = cl.user_session.get(_BROWSER_KEY)
+        if message is None:
+            message = cl.Message(content=content, actions=actions)
+            cl.user_session.set(_BROWSER_KEY, message)  # before await
+            await message.send()
+            return
 
-        # Create UI elements
-        # Category filter
-        category_select = Select(
-            id="category_filter",
-            label="Filter by Category",
-            values=["All"] + categories,
-            initial_value="All",
-        )
+        # The client appends action events by id-less push, so the buttons
+        # being replaced have to be removed explicitly or they stack.
+        await message.remove_actions()
+        message.content = content
+        message.actions = actions
+        await message.update()
 
-        # Active skills toggle
-        active_toggle = Switch(
-            id="active_only", label="Active Skills Only", initial_value=False
-        )
+    async def activate_skill(self, skill_name: str) -> None:
+        """Activate a skill and refresh the browser when it is open."""
+        await self._toggle_skill(skill_name, activate=True)
 
-        # Search input
-        search_input = TextInput(
-            id="search_query",
-            label="Search Skills",
-            placeholder="Search by name, description, or tags...",
-        )
+    async def deactivate_skill(self, skill_name: str) -> None:
+        """Deactivate a skill and refresh the browser when it is open."""
+        await self._toggle_skill(skill_name, activate=False)
 
-        # Add widgets to the step
-        await skills_browser.add_ui_component(category_select)
-        await skills_browser.add_ui_component(active_toggle)
-        await skills_browser.add_ui_component(search_input)
-
-        # Add refresh button as an action
-        refresh_action = Action(
-            name="refresh_skills",
-            label="🔄 Refresh Skills",
-            payload={"action": "refresh"},
-        )
-        await refresh_action.send(skills_browser.id)
-
-        # Add skills list
-        await self._display_skills_list(skills_browser, all_skills)
-
-        # Set up event handlers
-        self._setup_event_handlers()
-
-        # Update the message
-        await skills_browser.update()
-
-    async def _get_all_skills(self) -> list[dict]:
-        """Get all skills from the API."""
+    async def show_skill_info(self, skill_name: str) -> None:
+        """Show detailed information about a skill as its own message."""
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(
-                    f"{self.settings.orya_api_url}/skills/", timeout=10.0
+                    f"{self._api_base()}/skills/{skill_name}",
+                    timeout=10.0,
                 )
+                response.raise_for_status()
+                skill = response.json()
+        except Exception as e:
+            cl.logger.error(f"Error getting skill info: {e}")
+            await cl.Message(content=f"❌ Error getting skill info: {e}").send()
+            return
+
+        await cl.Message(content=self._info_markdown(skill)).send()
+
+    async def _toggle_skill(self, skill_name: str, *, activate: bool) -> None:
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self._api_base()}/skills/activate",
+                    json={"skill_name": skill_name, "activate": activate},
+                    timeout=10.0,
+                )
+                response.raise_for_status()
+                result = response.json()
+        except Exception as e:
+            verb = "activating" if activate else "deactivating"
+            cl.logger.error(f"Error {verb} skill: {e}")
+            await cl.Message(content=f"❌ Error {verb} skill: {e}").send()
+            return
+
+        verb = "activated" if activate else "deactivated"
+        await cl.Message(content=f"✅ {result.get('message', f'Skill {verb}')}").send()
+        # Keep the toggle buttons in sync with the new state (no-op when
+        # the browser was never opened in this session).
+        if cl.user_session.get(_BROWSER_KEY) is not None:
+            await self.show_skills_browser()
+
+    async def _get_all_skills(self) -> list[dict]:
+        """Get all skills from the API (empty list when it is unreachable)."""
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(f"{self._api_base()}/skills/", timeout=10.0)
                 response.raise_for_status()
                 return response.json()
         except Exception as e:
             cl.logger.error(f"Error fetching skills: {e}")
             return []
 
-    async def _get_categories(self) -> list[str]:
-        """Get all skill categories from the API."""
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{self.settings.orya_api_url}/skills/categories", timeout=10.0
-                )
-                response.raise_for_status()
-                return response.json()
-        except Exception as e:
-            cl.logger.error(f"Error fetching categories: {e}")
-            return []
+    def _api_base(self) -> str:
+        """FastAPI base URL (``ORYA_API_URL``, same seam as ``chainlit_app``)."""
+        return str(self.settings.api_url).rstrip("/")
 
-    async def _display_skills_list(self, message: cl.Message, skills: list[dict]):
-        """Display the skills list in the UI."""
+    def _render(self, skills: list[dict]) -> tuple[str, list[cl.Action]]:
+        """Build the browser content and its Refresh + per-skill actions."""
+        lines = ["## Skills Browser", ""]
         if not skills:
-            message.content += "\n\nNo skills found."
-            return
-
-        skills_content = "\n\n## Available Skills\n\n"
-
+            lines.append("No skills found.")
         for skill in skills:
-            # Skill header with skill name for action reference
-            skill_name = skill["name"]
-            skills_content += f"### {skill_name}\n\n"
-            skills_content += f"**Description:** {skill['description']}\n\n"
-            skills_content += (
-                f"**Version:** {skill['version']} | **Author:** {skill['author']}\n\n"
+            lines.extend(self._skill_lines(skill))
+
+        actions: list[cl.Action] = [
+            cl.Action(name="refresh_skills", payload={}, label="🔄 Refresh")
+        ]
+        for skill in skills:
+            name = str(skill.get("name") or "")
+            if not name:
+                continue
+            active = bool(skill.get("is_active", False))
+            text = "Deactivate" if active else "Activate"
+            actions.append(
+                cl.Action(
+                    name="deactivate_skill" if active else "activate_skill",
+                    payload={"skill_name": name},
+                    label=f"{'⏸' if active else '✅'} {text} {name}",
+                )
             )
-            skills_content += f"**Category:** {skill['category']} | **Status:** {'Active' if skill.get('is_active', False) else 'Inactive'}\n\n"
+        return ("\n".join(lines), actions)
 
-            # Tags
-            if skill.get("tags"):
-                skills_content += f"**Tags:** {', '.join(skill['tags'])}\n\n"
+    @staticmethod
+    def _skill_lines(skill: dict) -> list[str]:
+        """Markdown block for one skill (no fake links — buttons are Actions)."""
+        lines = [f"### {skill['name']}", ""]
+        lines.append(f"**Description:** {skill['description']}")
+        lines.append("")
+        lines.append(f"**Version:** {skill['version']} | **Author:** {skill['author']}")
+        lines.append("")
+        status = "Active" if skill.get("is_active", False) else "Inactive"
+        lines.append(f"**Category:** {skill['category']} | **Status:** {status}")
+        lines.append("")
+        if skill.get("tags"):
+            lines.append(f"**Tags:** {', '.join(skill['tags'])}")
+            lines.append("")
+        if skill.get("tools"):
+            lines.append(f"**Tools:** {', '.join(skill['tools'])}")
+            lines.append("")
+        lines.append("---")
+        lines.append("")
+        return lines
 
-            # Tools
-            if skill.get("tools"):
-                skills_content += f"**Tools:** {', '.join(skill['tools'])}\n\n"
-
-            # Actions
-            skills_content += "**Actions:** "
-
-            # Note: Action buttons are handled separately through the Action system
-            action_text = "Deactivate" if skill.get("is_active", False) else "Activate"
-            skills_content += f"[{action_text}] (Click to {action_text.lower()})"
-
-            skills_content += "\n\n---\n\n"
-
-        message.content += skills_content
-
-    def _setup_event_handlers(self):
-        """Set up event handlers for the skills UI."""
-
-        @cl.on_message
-        async def on_message(message: cl.Message):
-            """Handle incoming messages."""
-            if message.content.startswith("/skills"):
-                await self._handle_skills_command(message)
-
-        @cl.on_action
-        async def on_action(action):
-            """Handle action events."""
-            action_name = action.get("name")
-
-            if action_name == "refresh_skills":
-                await self._handle_refresh(action)
-            elif action_name == "activate_skill":
-                skill_name = action.get("payload", {}).get("skill_name")
-                if skill_name:
-                    await self._activate_skill(skill_name, None)
-            elif action_name == "deactivate_skill":
-                skill_name = action.get("payload", {}).get("skill_name")
-                if skill_name:
-                    await self._deactivate_skill(skill_name, None)
-
-    async def _handle_skills_command(self, message: cl.Message):
-        """Handle the /skills command."""
-        parts = message.content.split()
-        if len(parts) == 1:
-            # Just /skills - show browser
-            await self.show_skills_browser()
-        elif len(parts) == 3 and parts[1] == "activate":
-            skill_name = parts[2]
-            await self._activate_skill(skill_name, message)
-        elif len(parts) == 3 and parts[1] == "deactivate":
-            skill_name = parts[2]
-            await self._deactivate_skill(skill_name, message)
-        elif len(parts) == 3 and parts[1] == "info":
-            skill_name = parts[2]
-            await self._show_skill_info(skill_name, message)
-        else:
-            await message.reply(
-                "Usage: /skills [activate|deactivate|info] <skill_name>"
-            )
-
-    async def _activate_skill(self, skill_name: str, message: cl.Message):
-        """Activate a skill."""
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{self.settings.orya_api_url}/skills/activate",
-                    json={"skill_name": skill_name, "activate": True},
-                    timeout=10.0,
-                )
-                response.raise_for_status()
-                result = response.json()
-                await message.reply(f"✅ {result['message']}")
-
-                # Update the skill with action buttons
-                skill_name = result.get("skill_name", skill_name)
-                is_active = result.get("is_active", False)
-                await self._update_skill_with_actions(skill_name, is_active)
-
-        except Exception as e:
-            await message.reply(f"❌ Error activating skill: {e}")
-
-    async def _deactivate_skill(self, skill_name: str, message: cl.Message):
-        """Deactivate a skill."""
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{self.settings.orya_api_url}/skills/activate",
-                    json={"skill_name": skill_name, "activate": False},
-                    timeout=10.0,
-                )
-                response.raise_for_status()
-                result = response.json()
-                await message.reply(f"✅ {result['message']}")
-
-                # Update the skill with action buttons
-                skill_name = result.get("skill_name", skill_name)
-                is_active = result.get("is_active", False)
-                await self._update_skill_with_actions(skill_name, is_active)
-
-        except Exception as e:
-            await message.reply(f"❌ Error deactivating skill: {e}")
-
-    async def _show_skill_info(self, skill_name: str, message: cl.Message):
-        """Show detailed information about a skill."""
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{self.settings.orya_api_url}/skills/{skill_name}", timeout=10.0
-                )
-                response.raise_for_status()
-                skill = response.json()
-
-                info_content = f"\n\n## Skill: {skill['name']}\n\n"
-                info_content += f"**Description:** {skill['description']}\n\n"
-                info_content += f"**Version:** {skill['version']} | **Author:** {skill['author']}\n\n"
-                info_content += f"**Category:** {skill['category']} | **Status:** {'Active' if skill.get('is_active', False) else 'Inactive'}\n\n"
-
-                if skill.get("tags"):
-                    info_content += f"**Tags:** {', '.join(skill['tags'])}\n\n"
-
-                if skill.get("tools"):
-                    info_content += f"**Tools:** {', '.join(skill['tools'])}\n\n"
-
-                if skill.get("hooks"):
-                    info_content += f"**Hooks:** {', '.join(skill['hooks'])}\n\n"
-
-                if skill.get("dependencies"):
-                    info_content += (
-                        f"**Dependencies:** {', '.join(skill['dependencies'])}\n\n"
-                    )
-
-                if skill.get("metadata"):
-                    info_content += f"**Metadata:**\n```json\n{json.dumps(skill['metadata'], indent=2)}\n```\n\n"
-
-                await message.reply(info_content)
-
-        except Exception as e:
-            await message.reply(f"❌ Error getting skill info: {e}")
-
-    async def _handle_category_filter(self, component: UIMessage):
-        """Handle category filter change."""
-        category = component.get("value")
-        active_only = component.get("active_only", False)
-
-        # Fetch filtered skills
-        try:
-            async with httpx.AsyncClient() as client:
-                params = {}
-                if category != "All":
-                    params["category"] = category
-                if active_only:
-                    params["active_only"] = True
-
-                response = await client.get(
-                    f"{self.settings.orya_api_url}/skills/", params=params, timeout=10.0
-                )
-                response.raise_for_status()
-                skills = response.json()
-
-                # Find and update the skills browser message
-                for message in cl.user_session.get("messages", []):
-                    if "Skills Browser" in message.content:
-                        message.content = ""
-                        await self._display_skills_list(message, skills)
-                        await message.update()
-                        break
-
-        except Exception as e:
-            cl.logger.error(f"Error filtering skills: {e}")
-
-    async def _handle_active_toggle(self, component: UIMessage):
-        """Handle active skills toggle."""
-        active_only = component.get("value", False)
-
-        # Fetch filtered skills
-        try:
-            async with httpx.AsyncClient() as client:
-                params = {"active_only": active_only}
-                response = await client.get(
-                    f"{self.settings.orya_api_url}/skills/", params=params, timeout=10.0
-                )
-                response.raise_for_status()
-                skills = response.json()
-
-                # Find and update the skills browser message
-                for message in cl.user_session.get("messages", []):
-                    if "Skills Browser" in message.content:
-                        message.content = ""
-                        await self._display_skills_list(message, skills)
-                        await message.update()
-                        break
-
-        except Exception as e:
-            cl.logger.error(f"Error filtering skills: {e}")
-
-    async def _handle_search(self, component: UIMessage):
-        """Handle search query."""
-        query = component.get("value", "")
-
-        if not query:
-            return
-
-        # Search for skills
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{self.settings.orya_api_url}/skills/search",
-                    params={"query": query},
-                    timeout=10.0,
-                )
-                response.raise_for_status()
-                skills = response.json()
-
-                # Find and update the skills browser message
-                for message in cl.user_session.get("messages", []):
-                    if "Skills Browser" in message.content:
-                        message.content = ""
-                        await self._display_skills_list(message, skills)
-                        await message.update()
-                        break
-
-        except Exception as e:
-            cl.logger.error(f"Error searching skills: {e}")
-
-    async def _handle_refresh(self, action):
-        """Handle refresh button click."""
-        await self.show_skills_browser()
-
-    async def _create_skill_action_buttons(self, skill_name: str, is_active: bool):
-        """Create action buttons for a skill."""
-        # Create action buttons
-        action_buttons = []
-
-        # Activate/Deactivate button
-        action_text = "Deactivate" if is_active else "Activate"
-        action_name = "deactivate_skill" if is_active else "activate_skill"
-        action_label = f"🔄 {action_text}"
-
-        action = Action(
-            name=action_name, label=action_label, payload={"skill_name": skill_name}
-        )
-        action_buttons.append(action)
-
-        return action_buttons
-
-    async def _update_skill_with_actions(self, skill_name: str, is_active: bool):
-        """Update a skill message with action buttons."""
-        # Find the skills browser message
-        for message in cl.user_session.get("messages", []):
-            if "Skills Browser" in message.content:
-                # Create action buttons
-                action_buttons = await self._create_skill_action_buttons(
-                    skill_name, is_active
-                )
-
-                # Send action buttons
-                for action in action_buttons:
-                    await action.send(message.id)
-                break
+    @staticmethod
+    def _info_markdown(skill: dict) -> str:
+        """Markdown body for ``/skills info <name>``."""
+        lines = [f"## Skill: {skill['name']}", ""]
+        lines.append(f"**Description:** {skill['description']}")
+        lines.append("")
+        lines.append(f"**Version:** {skill['version']} | **Author:** {skill['author']}")
+        lines.append("")
+        status = "Active" if skill.get("is_active", False) else "Inactive"
+        lines.append(f"**Category:** {skill['category']} | **Status:** {status}")
+        lines.append("")
+        if skill.get("tags"):
+            lines.append(f"**Tags:** {', '.join(skill['tags'])}")
+            lines.append("")
+        if skill.get("hooks"):
+            lines.append(f"**Hooks:** {', '.join(skill['hooks'])}")
+            lines.append("")
+        if skill.get("dependencies"):
+            lines.append(f"**Dependencies:** {', '.join(skill['dependencies'])}")
+            lines.append("")
+        if skill.get("metadata"):
+            lines.append("**Metadata:**")
+            lines.append("```json")
+            lines.append(json.dumps(skill["metadata"], indent=2))
+            lines.append("```")
+            lines.append("")
+        return "\n".join(lines)
 
 
 # Global skills UI instance
@@ -404,29 +204,26 @@ def get_skills_ui() -> SkillsUI:
     return _skills_ui
 
 
-# Chainlit event handlers
-@cl.on_chat_start
-async def on_chat_start():
-    """Initialize the chat session."""
-    # Add a help message about skills
-    help_message = cl.Message(
-        content="""
-        🎯 **Skills Management**
+# --- Chainlit action callbacks (registered at import time) -------------------
 
-        Use `/skills` to browse available skills and manage them.
 
-        **Commands:**
-        - `/skills` - Show skills browser
-        - `/skills activate <skill_name>` - Activate a skill
-        - `/skills deactivate <skill_name>` - Deactivate a skill
-        - `/skills info <skill_name>` - Show detailed skill information
+@cl.action_callback("refresh_skills")
+async def _on_refresh_skills(action: cl.Action) -> None:
+    """Browser button: re-fetch the list and rewrite the browser in place."""
+    await get_skills_ui().show_skills_browser()
 
-        **Browser Features:**
-        - Filter by category
-        - Show active skills only
-        - Search by name, description, or tags
-        - Refresh skills list
-        """,
-        author="System",
-    )
-    await help_message.send()
+
+@cl.action_callback("activate_skill")
+async def _on_activate_skill(action: cl.Action) -> None:
+    """Browser button: activate the skill carried in the action payload."""
+    skill_name = (action.payload or {}).get("skill_name")
+    if skill_name:
+        await get_skills_ui().activate_skill(str(skill_name))
+
+
+@cl.action_callback("deactivate_skill")
+async def _on_deactivate_skill(action: cl.Action) -> None:
+    """Browser button: deactivate the skill carried in the action payload."""
+    skill_name = (action.payload or {}).get("skill_name")
+    if skill_name:
+        await get_skills_ui().deactivate_skill(str(skill_name))

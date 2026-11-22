@@ -827,10 +827,8 @@ async def on_chat_start() -> None:
     settings = load_settings()
     await _show_sidebar()
     await _show_settings_panel(settings)
-
-    # Initialize skills UI
-    skills_ui = get_skills_ui()
-    await skills_ui.show_skills_browser()
+    # Skills browser (B-07/B-19) is opt-in: it opens on ``/skills``, not
+    # at every chat start (Chainlit 2.x has no per-message widgets).
 
 
 async def _show_sidebar() -> None:
@@ -1191,21 +1189,18 @@ async def on_message(message: cl.Message) -> None:
 
 
 async def _handle_skills(text: str) -> None:
-    """Handle skills management commands."""
+    """Handle skills management commands (B-07/B-19), never a chat turn."""
     skills_ui = get_skills_ui()
 
     if text == "/skills":
         # Show skills browser
         await skills_ui.show_skills_browser()
     elif text.startswith("/skills activate "):
-        skill_name = text[len("/skills activate ") :].strip()
-        await skills_ui._activate_skill(skill_name, cl.Message(content=""))
+        await skills_ui.activate_skill(text[len("/skills activate ") :].strip())
     elif text.startswith("/skills deactivate "):
-        skill_name = text[len("/skills deactivate ") :].strip()
-        await skills_ui._deactivate_skill(skill_name, cl.Message(content=""))
+        await skills_ui.deactivate_skill(text[len("/skills deactivate ") :].strip())
     elif text.startswith("/skills info "):
-        skill_name = text[len("/skills info ") :].strip()
-        await skills_ui._show_skill_info(skill_name, cl.Message(content=""))
+        await skills_ui.show_skill_info(text[len("/skills info ") :].strip())
     else:
         await cl.Message(
             content="Usage: /skills [activate|deactivate|info] <skill_name>"
