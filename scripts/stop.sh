@@ -6,12 +6,16 @@
 #      (logs/api.pid, logs/ui.pid, logs/mcp.pid): на Windows — taskkill /T
 #      (дерево процессов, покрывает uvicorn reloader и дочерние процессы
 #      chainlit), на POSIX — TERM с дожигом KILL.
-#   2. docker compose --profile app --profile observability down — снимает
-#      ВЕСЬ стек: postgres/redis + api/chainlit + langfuse и observability
-#      (паритет с make stack-down; volume postgres_data сохраняется).
-#   3. Подстраховка: слушатели портов 8000/8001/8765 — python/uv/chainlit/node;
-#      docker-слушатели репортятся, но не убиваются.
-#   4. Удаление stale lock-файлов start.*.lock (pid мёртв) и PID-файлов.
+#   2. docker compose down — останавливает ВСЕ активные docker-compose проекты,
+#      которые используют целевые порты (8000/8001/8765), включая проекты
+#      из других директорий. Обрабатывает кросс-проектные конфликты портов.
+#   3. Дополнительная очистка Docker-контейнеров, которые всё ещё держат
+#      целевые порты после compose down.
+#   4. Подстраховка: слушатели портов 8000/8001/8765 — python/uv/chainlit/node.
+#      Docker-слушатели автоматически останавливаются через docker stop.
+#   5. Удаление stale lock-файлов start.*.lock (pid мёртв) и PID-файлов.
+#   6. Финальная проверка: убедиться, что все целевые порты действительно
+#      свободны.
 #
 # Каталог logs/ и logs/runtime.env (память портов) остаются.
 #
@@ -143,6 +147,11 @@ done
 # Без --profile down снимает только postgres/redis и оставляет api/chainlit/
 # langfuse висеть на 8000/8001/3000 — поэтому профили указываем явно
 # (паритет с make stack-down).
+#
+# A-10 enhancement: Stop ALL docker-compose projects that might be using
+# ports 8000/8001/8765, not just the current project. This handles the case
+# where multiple projects (e.g., llm-security-scanner + oriaai) are running
+# simultaneously and one project's containers are holding the ports.
 if [ "$SKIP_DOCKER" = 1 ]; then
     skip_msg "docker compose пропущен (--skip-docker)"
 elif ! command -v docker >/dev/null 2>&1; then
@@ -150,17 +159,86 @@ elif ! command -v docker >/dev/null 2>&1; then
 elif ! docker info >/dev/null 2>&1; then
     skip_msg "Docker daemon недоступен — контейнеры не останавливались"
 else
-    step "docker compose --profile app --profile observability down"
-    if docker compose --profile app --profile observability down; then
-        done_msg "весь стек остановлен (postgres/redis + app + observability, volume postgres_data сохранён)"
-    else
-        echo "!!  docker compose down завершился с кодом $?" >&2
+    # Get list of all docker-compose projects that are running
+    step "Поиск активных docker-compose проектов..."
+    docker_projects=""
+    if compose_ls_output=$(docker compose ls --format json 2>/dev/null); then
+        # Parse JSON and extract project names and config files
+        docker_projects=$(echo "$compose_ls_output" | python3 -c "
+import json
+import sys
+try:
+    data = json.load(sys.stdin)
+    for project in data:
+        name = project.get('Name', '')
+        config_files = project.get('ConfigFiles', [])
+        if config_files:
+            config_file = config_files[0]
+            project_dir = os.path.dirname(config_file)
+            print(f'{name}|{project_dir}|{config_file}')
+except Exception as e:
+    print(f'Error parsing JSON: {e}', file=sys.stderr)
+    sys.exit(1)
+" 2>/dev/null || true)
     fi
+    
+    # Stop each project that might be using our ports
+    if [ -n "$docker_projects" ]; then
+        while IFS='|' read -r project_name project_dir config_file; do
+            [ -z "$project_name" ] && continue
+            
+            # Check if this project's containers are using any of our target ports
+            project_uses_ports=0
+            if project_containers=$(docker compose --file "$config_file" ps --format json 2>/dev/null); then
+                # Check if any container is using our ports
+                if echo "$project_containers" | grep -q "$API_PORT\|$UI_PORT\|8765"; then
+                    project_uses_ports=1
+                fi
+            fi
+            
+            # Stop this project if it's using our ports or if it's the current project
+            is_current_project=0
+            if [ "$project_dir" = "$ROOT" ]; then
+                is_current_project=1
+            fi
+            
+            if [ "$is_current_project" = 1 ] || [ "$project_uses_ports" = 1 ]; then
+                step "Остановка проекта $project_name ($project_dir)"
+                cd "$project_dir" || continue
+                if docker compose --profile app --profile observability down; then
+                    done_msg "Проект $project_name остановлен"
+                else
+                    echo "!!  Проект $project_name: docker compose down завершился с кодом $?" >&2
+                fi
+                cd "$ROOT" || continue
+            else
+                skip_msg "Проект $project_name не использует целевые порты — пропущен"
+            fi
+        done <<< "$docker_projects"
+    fi
+    
+    # Additional cleanup: stop any containers that are still holding our ports
+    step "Дополнительная очистка контейнеров на целевых портах..."
+    for port in "$API_PORT" "$UI_PORT" 8765; do
+        containers_on_port=$(docker ps --filter "publish=$port" --format "{{.ID}} {{.Names}} {{.Ports}}" 2>/dev/null || true)
+        if [ -n "$containers_on_port" ]; then
+            while read -r container_id container_name container_ports; do
+                [ -z "$container_id" ] && continue
+                step "Остановка контейнера $container_name (ID: $container_id) на порту $port"
+                docker stop "$container_id" 2>/dev/null || true
+                docker rm "$container_id" 2>/dev/null || true
+                done_msg "Контейнер $container_name остановлен и удален"
+            done <<< "$containers_on_port"
+        fi
+    done
 fi
 
 # --- 3. Подстраховка: порты ---------------------------------------------------
 # Идёт ПОСЛЕ compose down: контейнерные слушатели уже освобождены,
 # здесь добиваются только локальные процессы.
+# 
+# A-10 enhancement: Now also handle Docker processes that might still be
+# holding ports after the compose down (e.g., from other projects).
 for port in "$API_PORT" "$UI_PORT" 8765; do
     for owner_pid in $(port_pids "$port"); do
         case "$owner_pid" in
@@ -169,7 +247,18 @@ for port in "$API_PORT" "$UI_PORT" 8765; do
         name="$(proc_name "$owner_pid")"
         case "$name" in
             *docker* | vmmem | wslrelay)
-                skip_msg "порт $port всё ещё занят Docker (${name:-?}, pid=$owner_pid) — контейнер не остановился, см. docker compose ps"
+                skip_msg "порт $port всё ещё занят Docker (${name:-?}, pid=$owner_pid)"
+                skip_msg "  Попытка остановить через Docker..."
+                
+                # Try to find and stop the container that's using this port
+                container_id=$(docker ps --filter "publish=$port" --format "{{.ID}}" 2>/dev/null | head -1 || true)
+                if [ -n "$container_id" ]; then
+                    container_name=$(docker ps --filter "publish=$port" --format "{{.Names}}" 2>/dev/null | head -1 || true)
+                    step "Остановка контейнера $container_name (ID: $container_id) на порту $port"
+                    docker stop "$container_id" 2>/dev/null || true
+                    docker rm "$container_id" 2>/dev/null || true
+                    done_msg "Контейнер $container_name остановлен"
+                fi
                 continue
                 ;;
             python* | uv | uvicorn | chainlit | node) ;;
@@ -197,5 +286,26 @@ for lock_file in "$LOGS/start.sh.lock" "$LOGS/start.ps1.lock"; do
     skip_msg "удалён stale lock $(basename "$lock_file")"
 done
 
+# --- 5. Финальная проверка портов --------------------------------------------
+# Убедиться, что целевые порты действительно свободны
+step "Финальная проверка портов..."
+ports_free=1
+for port in "$API_PORT" "$UI_PORT" 8765; do
+    if port_pids "$port" | grep -q '[0-9]'; then
+        echo "!!  Порт $port всё ещё занят" >&2
+        for owner_pid in $(port_pids "$port"); do
+            name="$(proc_name "$owner_pid")"
+            echo "    - ${name:-?} (PID: $owner_pid)" >&2
+        done
+        ports_free=0
+    else
+        done_msg "Порт $port свободен"
+    fi
+done
+
 echo
-echo "OryaAgent остановлен"
+if [ "$ports_free" = 1 ]; then
+    echo "OryaAgent остановлен — все целевые порты свободны"
+else
+    echo "OryaAgent остановлен — некоторые порты всё ещё заняты (см. выше)" >&2
+fi
