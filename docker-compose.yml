@@ -255,7 +255,7 @@ services:
 
   langfuse:
     profiles: ["observability"]
-    image: langfuse/langfuse:4.80.0
+    image: langfuse/langfuse:4.83.0
     restart: unless-stopped
     depends_on:
       postgres:
