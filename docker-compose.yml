@@ -69,7 +69,7 @@ x-langfuse-env: &langfuse-env
 
 services:
   postgres:
-    image: postgres:16
+    image: postgres:19
     restart: unless-stopped
     environment:
       POSTGRES_DB: orya_sessions
@@ -200,7 +200,7 @@ services:
   # does, on every `up` (safe to re-run).
   db-init:
     profiles: ["observability"]
-    image: postgres:16
+    image: postgres:19
     restart: "no"
     depends_on:
       postgres:
