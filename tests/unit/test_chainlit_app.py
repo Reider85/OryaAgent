@@ -200,12 +200,13 @@ def test_settings_payload_ships_panel_overrides() -> None:
 
     payload = ui.settings_payload(settings)
 
+    # working_dir is deliberately excluded: the session row is the source
+    # of truth, so a stale UI default cannot hijack the open project.
     assert payload == {
         "model": "gpt-4o",
         "provider": "openai",
         "permission_mode": "permissive",
         "allow_list": ["read /tmp/*", "write *.py"],
-        "working_dir": "C:/projects/OryaAgent",
     }
 
 
@@ -536,6 +537,7 @@ async def test_on_message_streams_a_turn_over_sse(
     body = json.loads(request.content)
     assert body["content"] == "hello"
     assert {"model", "permission_mode", "allow_list"} <= set(body)
+    assert "working_dir" not in body  # session row owns the project
 
     assert started and started[0]["tool"] == "read"
     assert ended and ended[0]["from_cache"] is True
@@ -593,7 +595,9 @@ async def test_on_message_asks_and_resumes_on_interrupt(
     resume = requests[1]
     assert resume.url.path == "/sessions/sess-1/resume"
     assert b"stream=true" in resume.url.query
-    assert json.loads(resume.content)["decision"] == "allow"
+    resume_body = json.loads(resume.content)
+    assert resume_body["decision"] == "allow"
+    assert "working_dir" not in resume_body
     # both passes rendered into the same reply
     final = fake_cl.messages[-1]
     assert final.tokens == ["Running ", "done"]
@@ -1620,10 +1624,11 @@ async def test_settings_confirm_with_untouched_field_keeps_opened_project(
     )
 
     assert ui.load_settings().working_dir == str(project)
-    # the dialog is re-sent showing the value that was actually kept
+    # the dialog is re-sent showing the value that was actually kept, while
+    # the baseline stays at what the client showed (so the race stays fixed)
     by_id = {w.id: w for w in fake_cl.panels[-1].inputs}
     assert by_id["Working directory"].initial == str(project)
-    assert fake_cl.user_session.get("panel_working_dir") == str(project)
+    assert fake_cl.user_session.get("panel_working_dir") == ""
 
 
 async def test_settings_confirm_with_edited_field_applies_the_new_path(
@@ -1726,3 +1731,145 @@ async def test_switch_session_adopts_the_sessions_project(
     assert fake_cl.user_session.get("panel_working_dir") == str(project)
     sidebar = fake_cl.user_session.get("sidebar_message")
     assert f"`{project}`" in sidebar.content
+
+
+# --- session row owns the project (no stale UI override, no open-project race) --
+
+
+async def test_open_project_keeps_stale_form_baseline(
+    fake_cl: _FakeCl, patch_client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A server-initiated re-render must not re-baseline an open dialog.
+
+    ``ChatSettings.send()`` updates an uncontrolled TextInput, so an already
+    open dialog can keep showing the previous project. The baseline must
+    keep pointing at that client-side value, otherwise the next Confirm
+    looks like a deliberate edit and wipes the newly opened project.
+    """
+    _patch_registry(monkeypatch)
+    fake_cl.user_session.set("thread_id", "sess-1")
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    ui.save_settings(ui.UISettings(working_dir=str(first)))
+    fake_cl.user_session.set("panel_working_dir", str(first))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200, json={"items": [], "total": 0, "page": 1, "size": 10}
+            )
+        return httpx.Response(
+            200, json={"working_dir": json.loads(request.content)["working_dir"]}
+        )
+
+    requests = patch_client(handler)
+
+    await ui._apply_project(str(second))
+
+    assert ui.load_settings().working_dir == str(second)
+    assert fake_cl.user_session.get("panel_working_dir") == str(first)  # preserved
+    # the panel itself still shows the freshly opened project
+    by_id = {w.id: w for w in fake_cl.panels[-1].inputs}
+    assert by_id["Working directory"].initial == str(second)
+
+    # stale Confirm carrying the pre-open value must not wipe the new project
+    await ui.on_settings_update({"Working directory": str(first)})
+
+    assert ui.load_settings().working_dir == str(second)
+    patches = [r for r in requests if r.method == "PATCH"]
+    assert json.loads(patches[-1].content) == {"working_dir": str(second)}
+
+
+async def test_settings_confirm_changes_working_dir_patches_the_session(
+    fake_cl: _FakeCl, patch_client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An edited Working directory is applied via PATCH, not a turn override."""
+    _patch_registry(monkeypatch)
+    fake_cl.user_session.set("thread_id", "sess-1")
+    old, new = tmp_path / "old", tmp_path / "new"
+    old.mkdir()
+    new.mkdir()
+    ui.save_settings(ui.UISettings(working_dir=str(old)))
+    fake_cl.user_session.set("panel_working_dir", str(old))
+
+    requests = patch_client(
+        lambda request: httpx.Response(200, json={"working_dir": str(new)})
+    )
+
+    await ui.on_settings_update({"Working directory": str(new)})
+
+    assert ui.load_settings().working_dir == str(new)
+    assert json.loads(requests[0].content) == {"working_dir": str(new)}
+    assert fake_cl.user_session.get("panel_working_dir") == str(new)
+
+
+async def test_settings_confirm_clear_patches_null(
+    fake_cl: _FakeCl, patch_client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Clearing the field closes the session project (PATCH working_dir=null)."""
+    _patch_registry(monkeypatch)
+    fake_cl.user_session.set("thread_id", "sess-1")
+    project = tmp_path / "project"
+    project.mkdir()
+    ui.save_settings(ui.UISettings(working_dir=str(project)))
+    fake_cl.user_session.set("panel_working_dir", str(project))
+
+    requests = patch_client(
+        lambda request: httpx.Response(200, json={"working_dir": None})
+    )
+
+    await ui.on_settings_update({"Working directory": ""})
+
+    assert ui.load_settings().working_dir is None
+    assert json.loads(requests[0].content) == {"working_dir": None}
+
+
+async def test_settings_confirm_bad_path_keeps_the_open_project(
+    fake_cl: _FakeCl, patch_client, tmp_path: Path
+) -> None:
+    """HTTP 400 from PATCH rolls the local default back."""
+    fake_cl.user_session.set("thread_id", "sess-1")
+    project = tmp_path / "project"
+    project.mkdir()
+    ui.save_settings(ui.UISettings(working_dir=str(project)))
+    fake_cl.user_session.set("panel_working_dir", str(project))
+
+    patch_client(lambda request: httpx.Response(400, json={"detail": "does not exist"}))
+
+    await ui.on_settings_update({"Working directory": str(tmp_path / "gone")})
+
+    assert ui.load_settings().working_dir == str(project)
+    assert any("Cannot open" in m.content for m in fake_cl.messages)
+
+
+async def test_switch_to_session_without_project_clears_the_default(
+    fake_cl: _FakeCl, patch_client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A project-less session must not inherit the previous session's folder."""
+    _patch_registry(monkeypatch)
+    project = tmp_path / "previous"
+    project.mkdir()
+    ui.save_settings(ui.UISettings(working_dir=str(project)))
+    fake_cl.user_session.set("panel_working_dir", str(project))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/sessions/sess-3":
+            return httpx.Response(
+                200,
+                json={
+                    "session_id": "sess-3",
+                    "working_dir": None,
+                    "messages": [],
+                },
+            )
+        return httpx.Response(
+            200, json={"items": [], "total": 0, "page": 1, "size": 10}
+        )
+
+    patch_client(handler)
+
+    await ui.on_switch_session(SimpleNamespace(payload={"thread_id": "sess-3"}))
+
+    assert ui.load_settings().working_dir is None
+    assert fake_cl.user_session.get("panel_working_dir") == str(project)  # client view

@@ -144,13 +144,19 @@ def make_client() -> httpx.AsyncClient:
 
 
 def settings_payload(settings: UISettings) -> dict[str, Any]:
-    """Settings-panel state sent with every turn/resume (M-24 overrides)."""
+    """Settings-panel state sent with every turn/resume (M-24 overrides).
+
+    ``working_dir`` is deliberately excluded: the server-side session row is
+    the source of truth for the open project, and shipping the global UI
+    default here would let a stale default overwrite (and re-persist over)
+    a project opened for this session. Project changes go through
+    ``PATCH /sessions/{id}`` (folder browser / settings Confirm instead).
+    """
     return {
         "model": settings.model,
         "provider": settings.provider,
         "permission_mode": settings.permission_mode,
         "allow_list": list(settings.allow_list),
-        "working_dir": settings.working_dir,
     }
 
 
@@ -753,11 +759,16 @@ async def _apply_project(path: str) -> None:
     settings = load_settings()
     settings.working_dir = resolved
     save_settings(settings)
-    # Re-render both panels: the settings dialog must show the opened
-    # project (otherwise its stale Working directory field would wipe it
-    # on the next Confirm) and the sidebar's Project line must not keep
-    # showing the old one.
+    # Re-render both panels so the dialog and the sidebar show the opened
+    # project. The server-initiated ChatSettings.send() goes to an
+    # uncontrolled TextInput — an already-open dialog can still display the
+    # *previous* value. Keep the baseline pointing at that client-side value
+    # so the next Confirm is recognised as stale (and cannot wipe the new
+    # project), while a first render (no baseline yet) adopts the new one.
+    baseline = cl.user_session.get("panel_working_dir")
     await _show_settings_panel(settings)
+    if baseline is not None:
+        cl.user_session.set("panel_working_dir", baseline)
     await _show_sidebar()
     logger.info("project opened: %s (thread_id=%s)", resolved, thread_id)
     await _update_browser(f"✅ Project opened: `{resolved}`")
@@ -910,6 +921,40 @@ def _merge_working_dir(
     return incoming
 
 
+async def _persist_working_dir(working_dir: str | None) -> bool:
+    """PATCH the current session's project; return False on HTTP 400 only.
+
+    Network/database failures are transient — the value stays a valid UI
+    default and is saved locally. An invalid path typed in the dialog is
+    rejected by the API and must not be persisted at all.
+    """
+    thread_id = cl.user_session.get("thread_id")
+    if not thread_id:
+        return True  # no session yet (unit tests / pre-chat Confirm)
+    try:
+        async with make_client() as client:
+            response = await client.patch(
+                f"/sessions/{thread_id}", json={"working_dir": working_dir}
+            )
+    except httpx.HTTPError as exc:
+        logger.warning("project patch not persisted (thread_id=%s): %s", thread_id, exc)
+        return True
+    if response.status_code == 400:
+        try:
+            detail = str(response.json().get("detail") or response.text)
+        except ValueError:
+            detail = response.text
+        await cl.Message(content=f"Cannot open `{working_dir}`: {detail}").send()
+        return False
+    if response.status_code != 200:
+        logger.warning(
+            "project patch: unexpected status %s (thread_id=%s)",
+            response.status_code,
+            thread_id,
+        )
+    return True
+
+
 def _settings_from_payload(settings_data: dict) -> UISettings:
     """Build a transient ``UISettings`` from a settings-panel payload.
 
@@ -1010,6 +1055,7 @@ async def on_settings_update(settings_data: dict) -> None:
     """
     settings = load_settings()
     previous_provider = settings.provider
+    previous_working_dir = settings.working_dir
     payload = _settings_from_payload(settings_data)
     settings.provider = payload.provider
     settings.model = payload.model
@@ -1026,6 +1072,10 @@ async def on_settings_update(settings_data: dict) -> None:
         payload.working_dir,
         cl.user_session.get("panel_working_dir"),
     )
+    if settings.working_dir != previous_working_dir:
+        if not await _persist_working_dir(settings.working_dir):
+            # API rejected the path — keep the project that was already open.
+            settings.working_dir = previous_working_dir
     save_settings(settings)
     logger.info(
         "Settings updated: provider=%s model=%s mode=%s working_dir=%s",
@@ -1038,14 +1088,14 @@ async def on_settings_update(settings_data: dict) -> None:
     if provider_changed or settings.working_dir != payload.working_dir:
         # Re-send the panel: either the Model combobox must re-list only the
         # new provider's models, or the guard kept a project the stale field
-        # tried to wipe — the dialog must display the value actually saved
-        # (this also re-baselines panel_working_dir to it).
+        # tried to wipe — the dialog must display the value actually saved.
         await _show_settings_panel(settings)
-    else:
-        # The dialog keeps showing what the user submitted — that becomes the
-        # baseline for the next Confirm's stale-field comparison, so a later
-        # intentional clear is still recognised as an edit.
-        cl.user_session.set("panel_working_dir", payload.working_dir or "")
+    # The baseline tracks what the *client* last showed/submitted, not what
+    # the server saved behind its back: a re-render (ChatSettings.send) goes
+    # to an uncontrolled TextInput, so an already-open dialog can still show
+    # the previous value. Re-baselining it here would let the stale field
+    # win on the next Confirm (the open-project race).
+    cl.user_session.set("panel_working_dir", payload.working_dir or "")
     workspace_note = (
         f"\nProject: `{settings.working_dir}`" if settings.working_dir else ""
     )
@@ -1136,19 +1186,21 @@ async def on_switch_session(action: cl.Action) -> None:
         return
 
     cl.user_session.set("thread_id", str(thread_id))
-    # Adopt the session's open project as the UI default: every turn ships
-    # settings.working_dir as an override, so a stale default from another
-    # session would hijack this one — and a new session seeded from the
-    # stale default would work in the wrong folder. A session without a
-    # project keeps the default (it becomes that session's project on the
-    # next turn anyway).
+    # Adopt the session's open project as the UI default so a new session
+    # seeded from it opens the same folder. A session without a project
+    # clears the default — otherwise its stale project would leak into the
+    # next turn (turns no longer ship an override, so the session row is the
+    # source of truth for the current one).
     stored = str((cl.user_session.get("session_row") or {}).get("working_dir") or "")
-    if stored:
-        settings = load_settings()
-        if settings.working_dir != stored:
-            settings.working_dir = stored
-            save_settings(settings)
-            await _show_settings_panel(settings)
+    settings = load_settings()
+    adopted = stored or None
+    if settings.working_dir != adopted:
+        settings.working_dir = adopted
+        save_settings(settings)
+        baseline = cl.user_session.get("panel_working_dir")
+        await _show_settings_panel(settings)
+        if baseline is not None:
+            cl.user_session.set("panel_working_dir", baseline)
     logger.info("Switched to session: thread_id=%s", thread_id)
     await cl.Message(content=f"Switched to session: {str(thread_id)[:8]}").send()
     await _show_sidebar()
