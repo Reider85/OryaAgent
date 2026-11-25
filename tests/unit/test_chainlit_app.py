@@ -1478,6 +1478,10 @@ async def test_open_project_open_persists_and_saves_default(
     project.mkdir()
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":  # _apply_project re-renders the sidebar
+            return httpx.Response(
+                200, json={"items": [], "total": 0, "page": 1, "size": 10}
+            )
         assert request.url.path == "/sessions/sess-1"
         assert request.method == "PATCH"
         return httpx.Response(
@@ -1546,6 +1550,10 @@ async def test_open_command_with_a_path_opens_directly(
     project.mkdir()
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":  # sidebar re-render after the open
+            return httpx.Response(
+                200, json={"items": [], "total": 0, "page": 1, "size": 10}
+            )
         assert request.url.path == "/sessions/sess-1"
         return httpx.Response(200, json={"working_dir": str(project.resolve())})
 
@@ -1587,3 +1595,134 @@ async def test_create_session_ships_the_saved_working_dir(
 
     assert thread_id == "sess-9" and not degraded
     assert json.loads(requests[0].content) == {"working_dir": str(tmp_path)}
+
+
+# --- «open project» survives the settings panel (stale-field guard) ------------
+
+
+async def test_settings_confirm_with_untouched_field_keeps_opened_project(
+    fake_cl: _FakeCl, tmp_path: Path
+) -> None:
+    """A Confirm carrying the last-rendered Working directory is not an edit.
+
+    The panel was rendered while no project was open (baseline ``""``), then
+    the folder browser opened one — a later Confirm with the stale empty
+    field must not wipe it, or every new session seeded from the settings
+    would fall back to the server cwd.
+    """
+    project = tmp_path / "opened"
+    project.mkdir()
+    fake_cl.user_session.set("panel_working_dir", "")  # panel rendered pre-open
+    ui.save_settings(ui.UISettings(working_dir=str(project)))
+
+    await ui.on_settings_update(
+        {"Model": "glm-4.5-flash", "Permission Mode": "strict", "Working directory": ""}
+    )
+
+    assert ui.load_settings().working_dir == str(project)
+    # the dialog is re-sent showing the value that was actually kept
+    by_id = {w.id: w for w in fake_cl.panels[-1].inputs}
+    assert by_id["Working directory"].initial == str(project)
+    assert fake_cl.user_session.get("panel_working_dir") == str(project)
+
+
+async def test_settings_confirm_with_edited_field_applies_the_new_path(
+    fake_cl: _FakeCl, tmp_path: Path
+) -> None:
+    """A Confirm whose Working directory differs from the render is an edit."""
+    fake_cl.user_session.set("panel_working_dir", "")
+    new_dir = tmp_path / "typed"
+    new_dir.mkdir()
+    ui.save_settings(ui.UISettings(working_dir=str(tmp_path / "old")))
+
+    await ui.on_settings_update(
+        {
+            "Model": "glm-4.5-flash",
+            "Permission Mode": "strict",
+            "Working directory": str(new_dir),
+        }
+    )
+
+    assert ui.load_settings().working_dir == str(new_dir)
+
+
+async def test_settings_confirm_clears_when_field_was_rendered_with_the_value(
+    fake_cl: _FakeCl, tmp_path: Path
+) -> None:
+    """Clearing a field that displayed the project is a real edit."""
+    fake_cl.user_session.set("panel_working_dir", str(tmp_path))
+    ui.save_settings(ui.UISettings(working_dir=str(tmp_path)))
+
+    await ui.on_settings_update(
+        {"Model": "glm-4.5-flash", "Permission Mode": "strict", "Working directory": ""}
+    )
+
+    assert ui.load_settings().working_dir is None
+
+
+async def test_apply_project_resends_panel_and_sidebar(
+    fake_cl: _FakeCl, patch_client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Opening a project re-renders the settings panel and the sidebar.
+
+    Otherwise the settings dialog keeps the pre-open Working directory
+    (which would wipe the project on the next Confirm) and the sidebar
+    keeps showing the old Project line.
+    """
+    _patch_registry(monkeypatch)
+    project = tmp_path / "proj"
+    project.mkdir()
+    patch_client(
+        lambda request: httpx.Response(
+            200, json={"items": [], "total": 0, "page": 1, "size": 10}
+        )
+    )
+
+    await ui._apply_project(str(project))
+
+    # no thread_id in this test → resolved stays the literal path
+    assert ui.load_settings().working_dir == str(project)
+    assert fake_cl.user_session.get("panel_working_dir") == str(project)
+    by_id = {w.id: w for w in fake_cl.panels[-1].inputs}
+    assert by_id["Working directory"].initial == str(project)
+    sidebar = fake_cl.user_session.get("sidebar_message")
+    assert f"`{project}`" in sidebar.content
+
+
+async def test_switch_session_adopts_the_sessions_project(
+    fake_cl: _FakeCl, patch_client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Switching adopts the session's project as the UI default.
+
+    Every turn ships ``settings.working_dir`` as an override, so a stale
+    default from another session would hijack this one — and a new session
+    seeded from it would work in the wrong folder.
+    """
+    _patch_registry(monkeypatch)
+    project = tmp_path / "session-project"
+    project.mkdir()
+    ui.save_settings(ui.UISettings(working_dir=str(tmp_path / "other")))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/sessions/sess-2":
+            return httpx.Response(
+                200,
+                json={
+                    "session_id": "sess-2",
+                    "working_dir": str(project),
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+            )
+        return httpx.Response(
+            200, json={"items": [], "total": 0, "page": 1, "size": 10}
+        )
+
+    patch_client(handler)
+
+    await ui.on_switch_session(SimpleNamespace(payload={"thread_id": "sess-2"}))
+
+    assert ui.load_settings().working_dir == str(project)
+    assert fake_cl.user_session.get("thread_id") == "sess-2"
+    assert fake_cl.user_session.get("panel_working_dir") == str(project)
+    sidebar = fake_cl.user_session.get("sidebar_message")
+    assert f"`{project}`" in sidebar.content
