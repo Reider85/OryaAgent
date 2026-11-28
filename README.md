@@ -1024,6 +1024,18 @@ anthropic SDK gets its vendored `httpx2` fork), stamps `tcp.pool_hit` /
 | `MCP_AUTH_TOKEN` | Bearer token for the facade (optional) |
 | `MCP_TIMEOUT` / `MCP_MAX_RETRIES` | Facade timeout and retry budget |
 
+### oriahs_search contract (P-01)
+
+| Var | Effect |
+| --- | --- |
+| `ORYA_ORIAHS_SEARCH_ENABLED` / `ORIAHS_SEARCH_ENABLED` | Tool kill-switch (default true; disabled degrades to the grep hint) |
+| `ORYA_ORIAHS_SEARCH_TOP_K_DEFAULT` / `ORIAHS_SEARCH_DEFAULT_TOP_K` | Default result count (20) |
+| `ORYA_ORIAHS_SEARCH_TOP_K_MAX` / `ORIAHS_SEARCH_MAX_RESULTS` | Maximum result count (100) |
+| `ORYA_ORIAHS_SEARCH_CACHE_TTL_S` / `ORIAHS_SEARCH_CACHE_TTL` | Cache TTL in seconds (3600) |
+| `ORYA_ORIAHS_SEARCH_RERANK` | Cross-encoder reranking (default true) |
+| `ORYA_ORIAHS_SEARCH_FUSION` | Hybrid fusion: `rrf` or `weighted` (default `rrf`) |
+| `ORYA_ORIAHS_SEARCH_EXPLAIN` | Request backend score explanations (default false) |
+
 The sibling `C:\projects\OriaHS` is a **REST-only** service: readiness is
 `GET /health/ready`, search returns `hits` and requires `tenant_id`, and
 indexing requires `tenant_id`/`external_ref`/`title`/`content`. OryaAgent

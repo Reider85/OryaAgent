@@ -105,14 +105,30 @@ class OriaHSMCPServer:
                             },
                             "top_k": {
                                 "type": "integer",
-                                "default": 10,
+                                "default": 20,
                                 "minimum": 1,
-                                "maximum": 50,
+                                "maximum": 100,
                                 "description": "Maximum number of results to return",
                             },
                             "filters": {
                                 "type": "object",
                                 "description": "Optional filters for search (file type, date range, etc.)",
+                            },
+                            "rerank": {
+                                "type": "boolean",
+                                "default": True,
+                                "description": "Apply cross-encoder reranking",
+                            },
+                            "fusion": {
+                                "type": "string",
+                                "default": "rrf",
+                                "enum": ["rrf", "weighted"],
+                                "description": "Hybrid fusion strategy",
+                            },
+                            "explain": {
+                                "type": "boolean",
+                                "default": False,
+                                "description": "Request backend score explanations",
                             },
                         },
                         "required": ["query"],
@@ -178,18 +194,33 @@ class OriaHSMCPServer:
 
     async def _call_hybrid_search(self, arguments: dict[str, Any]) -> CallToolResult:
         """Execute semantic search through the fresh OriaHS REST contract."""
+        settings = get_settings()
         query = arguments.get("query", "")
-        top_k = arguments.get("top_k", 10)
+        top_k = arguments.get("top_k", settings.oriahs_search_top_k_default)
         filters = arguments.get("filters", {})
+        rerank = arguments.get("rerank", settings.oriahs_search_rerank)
+        fusion = arguments.get("fusion", settings.oriahs_search_fusion)
+        explain = arguments.get("explain", settings.oriahs_search_explain)
 
         if not query:
             raise ValueError("Query is required")
 
-        if top_k < 1 or top_k > 50:
-            raise ValueError("top_k must be between 1 and 50")
+        if top_k < 1 or top_k > settings.oriahs_search_top_k_max:
+            raise ValueError(
+                f"top_k must be between 1 and {settings.oriahs_search_top_k_max}"
+            )
+        if fusion not in ("rrf", "weighted"):
+            raise ValueError("fusion must be 'rrf' or 'weighted'")
 
         try:
-            results = await self.client.search(query, top_k=top_k, filters=filters)
+            results = await self.client.search(
+                query,
+                top_k=top_k,
+                filters=filters,
+                rerank=rerank,
+                fusion=fusion,
+                explain=explain,
+            )
         except httpx.HTTPStatusError as e:
             error_msg = f"OriaHS API error: {e.response.status_code}"
             if e.response.text:

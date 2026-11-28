@@ -1,8 +1,8 @@
-# B-02: oriahs_search Tool Implementation
+# B-02 / P-01: oriahs_search Tool Implementation
 
 ## Overview
 
-B-02 implements semantic codebase search through MCP (Model Context Protocol) integration. The `oriahs_search` tool provides hybrid search capabilities combining lexical and semantic matching through the OriaHS backend.
+B-02 introduced semantic codebase search through MCP (Model Context Protocol); P-01 aligns its contract with the PROD spec: `oriahs_search(query, top_k=20, filters=None, rerank=True, fusion="rrf", explain=False) -> str`, `file:line` result locations and config-driven knobs.
 
 ## Features
 
@@ -39,7 +39,7 @@ B-02 implements semantic codebase search through MCP (Model Context Protocol) in
 
 - `OriaHSMCPServer`: MCP server wrapping OriaHS API
 - `OriaHSConfig`: Configuration for OriaHS backend
-- Tool: `hybrid_search` with query, top_k, and filters parameters
+- Tool: `hybrid_search` with query, top_k (default 20, max 100), filters, rerank, fusion and explain parameters
 - Health check endpoint for monitoring
 
 ### 3. oriahs_search Tool (`app/tools/oriahs_search.py`)
@@ -97,11 +97,20 @@ ORIAHS_TIMEOUT=10.0
 ORYA_ORIAHS_TENANT_ID=11111111-1111-1111-1111-111111111111
 ORYA_ORIAHS_ENABLED=true
 
-# Fallback behavior
-ORIAHS_SEARCH_FALLBACK_ENABLED=true
-ORIAHS_SEARCH_FALLBACK_TO_GREP=true
-ORIAHS_SEARCH_CACHE_TTL=3600
+# P-01 search contract (all resolve through Settings)
+ORYA_ORIAHS_SEARCH_ENABLED=true
+ORYA_ORIAHS_SEARCH_TOP_K_DEFAULT=20
+ORYA_ORIAHS_SEARCH_TOP_K_MAX=100
+ORYA_ORIAHS_SEARCH_CACHE_TTL_S=3600
+ORYA_ORIAHS_SEARCH_RERANK=true
+ORYA_ORIAHS_SEARCH_FUSION=rrf
+ORYA_ORIAHS_SEARCH_EXPLAIN=false
 ```
+
+Legacy spellings (`ORIAHS_SEARCH_DEFAULT_TOP_K`, `ORIAHS_SEARCH_MAX_RESULTS`,
+`ORIAHS_SEARCH_CACHE_TTL`) remain working as aliases. The tool is registered
+in the live `get_tools()` registry (last position) and is read-only in the
+default permission policy.
 
 P-00 note: the sibling OriaHS (`C:\projects\OriaHS`) exposes REST only.
 Its readiness endpoint is `GET /health/ready` (there is no bare `/health`),

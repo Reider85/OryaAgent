@@ -173,6 +173,13 @@ class OriaHSClient:
         attributes = hit.get("attributes") or {}
         if not isinstance(attributes, dict):
             attributes = {}
+        raw_line = (
+            attributes.get("line") or attributes.get("start_line") or hit.get("line")
+        )
+        try:
+            line = int(raw_line) if raw_line is not None else None
+        except (TypeError, ValueError):
+            line = None
         return {
             "rank": rank,
             "score": hit.get("score", 0.0),
@@ -181,6 +188,7 @@ class OriaHSClient:
             or hit.get("path")
             or hit.get("title")
             or "unknown",
+            "line": line,
             "content": hit.get("snippet") or hit.get("content") or "",
             "type": attributes.get("type")
             or attributes.get("language")
@@ -192,18 +200,27 @@ class OriaHSClient:
     async def search(
         self,
         query: str,
-        top_k: int = 10,
+        top_k: int | None = None,
         filters: dict[str, Any] | None = None,
+        rerank: bool | None = None,
+        fusion: str | None = None,
+        explain: bool | None = None,
     ) -> list[dict[str, Any]]:
         """Hybrid search against ``POST /search`` using the fresh schema."""
+        settings = get_settings()
+        effective_top_k = (
+            settings.oriahs_search_top_k_default if top_k is None else top_k
+        )
+        if fusion is not None and fusion not in ("rrf", "weighted"):
+            raise ValueError("fusion must be 'rrf' or 'weighted'")
         payload: dict[str, Any] = {
             "query": query,
             "tenant_id": self.tenant_id,
-            "top_k": min(max(1, top_k), 100),
+            "top_k": min(max(1, effective_top_k), settings.oriahs_search_top_k_max),
             "filters": filters or {},
-            "fusion": "rrf",
-            "rerank": True,
-            "explain": False,
+            "fusion": (settings.oriahs_search_fusion if fusion is None else fusion),
+            "rerank": (settings.oriahs_search_rerank if rerank is None else rerank),
+            "explain": (settings.oriahs_search_explain if explain is None else explain),
             "timeout_ms": 5000,
         }
         body = await self._post("/search", payload)

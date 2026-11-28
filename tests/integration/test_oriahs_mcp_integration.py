@@ -168,7 +168,7 @@ class TestOriaHSIntegration:
             result = await oriahs_search.ainvoke({"query": "hello world", "top_k": 5})
 
             # Verify result contains expected content
-            assert "Score: 0.950" in result
+            assert "score 0.950" in result
             assert "app/main.py" in result
             assert "app/utils.py" in result
             assert "function" in result
@@ -176,7 +176,15 @@ class TestOriaHSIntegration:
             # Verify MCP client was called correctly
             mock_client.health_check.assert_called_once()
             mock_client.call_tool.assert_called_once_with(
-                "hybrid_search", {"query": "hello world", "top_k": 5, "filters": {}}
+                "hybrid_search",
+                {
+                    "query": "hello world",
+                    "top_k": 5,
+                    "filters": {},
+                    "rerank": True,
+                    "fusion": "rrf",
+                    "explain": False,
+                },
             )
 
     @pytest.mark.asyncio
@@ -342,6 +350,18 @@ class TestOriaHSHTTPTransport:
         names = {tool["name"] for tool in tools}
         assert names == {"hybrid_search", "index_file", "index_directory"}
         assert all(tool["description"] for tool in tools)
+        hybrid = next(t for t in tools if t["name"] == "hybrid_search")
+        schema = hybrid["inputSchema"]
+        assert schema["properties"]["top_k"]["default"] == 20
+        assert schema["properties"]["top_k"]["maximum"] == 100
+        assert set(schema["properties"]) == {
+            "query",
+            "top_k",
+            "filters",
+            "rerank",
+            "fusion",
+            "explain",
+        }
 
     def test_call_unwraps_textcontent_into_flat_dicts(self):
         config = OriaHSConfig(base_url="http://oriahs.test")
@@ -444,6 +464,10 @@ class TestP00FreshOriaHSContract:
 
         assert captured["path"] == "/search"
         assert captured["body"]["tenant_id"] == "tenant-1"
+        assert captured["body"]["top_k"] == 20
+        assert captured["body"]["rerank"] is True
+        assert captured["body"]["fusion"] == "rrf"
+        assert captured["body"]["explain"] is False
         assert "mode" not in captured["body"]
         assert len(result.content) == 1
         payload = json.loads(result.content[0].text)
@@ -466,3 +490,56 @@ class TestP00FreshOriaHSContract:
             await config.close()
 
         assert seen == ["/health/ready"]
+
+    @pytest.mark.asyncio
+    async def test_mcp_hybrid_search_forwards_p01_knobs(self):
+        from mcp.types import CallToolRequest
+
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(200, json={"hits": []})
+
+        server, config = await self._server(handler)
+        try:
+            await server.call_tool(
+                CallToolRequest(
+                    params={
+                        "name": "hybrid_search",
+                        "arguments": {
+                            "query": "x",
+                            "top_k": 3,
+                            "rerank": False,
+                            "fusion": "weighted",
+                            "explain": True,
+                        },
+                    }
+                )
+            )
+        finally:
+            await config.close()
+
+        assert captured["body"]["top_k"] == 3
+        assert captured["body"]["rerank"] is False
+        assert captured["body"]["fusion"] == "weighted"
+        assert captured["body"]["explain"] is True
+
+    @pytest.mark.asyncio
+    async def test_mcp_hybrid_search_rejects_invalid_arguments(self):
+        from mcp.types import CallToolRequest
+
+        server, config = await self._server(lambda request: httpx.Response(200))
+        try:
+            for arguments in (
+                {"query": "x", "top_k": 0},
+                {"query": "x", "fusion": "x"},
+            ):
+                result = await server.call_tool(
+                    CallToolRequest(
+                        params={"name": "hybrid_search", "arguments": arguments}
+                    )
+                )
+                assert result.isError is True
+        finally:
+            await config.close()

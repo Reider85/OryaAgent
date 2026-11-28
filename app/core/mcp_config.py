@@ -1,4 +1,4 @@
-"""MCP client configuration for P-00 (B-02 oriahs_search tool).
+"""MCP client configuration for P-00/P-01 (oriahs_search tool).
 
 ``get_settings()`` is the single source of truth; the historical
 ``MCP_*`` / ``ORIAHS_*`` names remain working as validation aliases on
@@ -45,17 +45,17 @@ def get_oriahs_config() -> dict[str, Any]:
 
 
 def get_fallback_config() -> dict[str, Any]:
-    """Search fallback/cache knobs (import-time env reads kept for B-02)."""
-    import os
-
+    """Search knobs (P-01) derived from Settings — no second source of truth."""
+    settings = get_settings()
     return {
-        "enabled": os.getenv("ORIAHS_SEARCH_FALLBACK_ENABLED", "true").lower()
-        == "true",
-        "fallback_to_grep": os.getenv("ORIAHS_SEARCH_FALLBACK_TO_GREP", "true").lower()
-        == "true",
-        "max_cache_ttl": int(os.getenv("ORIAHS_SEARCH_CACHE_TTL", "3600")),
-        "max_results": int(os.getenv("ORIAHS_SEARCH_MAX_RESULTS", "50")),
-        "default_top_k": int(os.getenv("ORIAHS_SEARCH_DEFAULT_TOP_K", "10")),
+        "enabled": settings.oriahs_search_enabled,
+        "fallback_to_grep": True,
+        "max_cache_ttl": settings.oriahs_search_cache_ttl_s,
+        "max_results": settings.oriahs_search_top_k_max,
+        "default_top_k": settings.oriahs_search_top_k_default,
+        "rerank": settings.oriahs_search_rerank,
+        "fusion": settings.oriahs_search_fusion,
+        "explain": settings.oriahs_search_explain,
     }
 
 

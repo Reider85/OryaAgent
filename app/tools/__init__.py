@@ -13,7 +13,17 @@ from app.tools.edit import edit
 from app.tools.glob import glob
 from app.tools.grep import grep
 from app.tools.oriahs import oriahs_health
+from app.tools.oriahs_search import oriahs_search
 from app.tools.read import read
 from app.tools.write import write
 
-__all__ = ["bash", "edit", "glob", "grep", "oriahs_health", "read", "write"]
+__all__ = [
+    "bash",
+    "edit",
+    "glob",
+    "grep",
+    "oriahs_health",
+    "oriahs_search",
+    "read",
+    "write",
+]

@@ -1,11 +1,36 @@
-"""Unit tests for oriahs_search tool (B-02)."""
+"""Unit tests for oriahs_search tool (P-01)."""
 
+import os
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.core.config import clear_settings_cache
+from app.core.oriahs_client import ORIAHS_FALLBACK_MESSAGE
 from app.mcp.client import MCPClient, MCPClientConfig
 from app.tools.oriahs_search import _format_search_results, oriahs_search
+
+_LEGACY_ENV = (
+    "ORIAHS_URL",
+    "ORIAHS_TIMEOUT_S",
+    "ORIAHS_SEARCH_DEFAULT_TOP_K",
+    "ORIAHS_SEARCH_MAX_RESULTS",
+    "ORIAHS_SEARCH_CACHE_TTL",
+    "MCP_SERVER_URL",
+)
+
+
+@pytest.fixture(autouse=True)
+def isolated_oriahs_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Sandbox settings: repo .env / host env must not leak into P-01 tests."""
+    for name in list(os.environ):
+        if name.startswith("ORYA_") or name in _LEGACY_ENV:
+            monkeypatch.delenv(name, raising=False)
+    monkeypatch.chdir(tmp_path)
+    clear_settings_cache()
+    yield
+    clear_settings_cache()
 
 
 class TestOriaHS:
@@ -35,7 +60,7 @@ class TestOriaHS:
         with patch("app.tools.oriahs_search.get_mcp_client", return_value=mock_client):
             result = await oriahs_search.ainvoke({"query": "main function"})
 
-            assert "Score: 0.950" in result
+            assert "score 0.950" in result
             assert "app/main.py" in result
             assert "app/core/utils.py" in result
             assert "function" in result
@@ -43,7 +68,15 @@ class TestOriaHS:
             # Verify MCP client was called correctly
             mock_client.health_check.assert_called_once()
             mock_client.call_tool.assert_called_once_with(
-                "hybrid_search", {"query": "main function", "top_k": 10, "filters": {}}
+                "hybrid_search",
+                {
+                    "query": "main function",
+                    "top_k": 20,
+                    "filters": {},
+                    "rerank": True,
+                    "fusion": "rrf",
+                    "explain": False,
+                },
             )
 
     @pytest.mark.asyncio
@@ -65,7 +98,15 @@ class TestOriaHS:
 
             # Verify top_k was passed correctly
             mock_client.call_tool.assert_called_once_with(
-                "hybrid_search", {"query": "test", "top_k": 5, "filters": {}}
+                "hybrid_search",
+                {
+                    "query": "test",
+                    "top_k": 5,
+                    "filters": {},
+                    "rerank": True,
+                    "fusion": "rrf",
+                    "explain": False,
+                },
             )
 
     @pytest.mark.asyncio
@@ -82,7 +123,15 @@ class TestOriaHS:
 
             # Verify filters were passed correctly
             mock_client.call_tool.assert_called_once_with(
-                "hybrid_search", {"query": "test", "top_k": 10, "filters": filters}
+                "hybrid_search",
+                {
+                    "query": "test",
+                    "top_k": 20,
+                    "filters": filters,
+                    "rerank": True,
+                    "fusion": "rrf",
+                    "explain": False,
+                },
             )
 
     @pytest.mark.asyncio
@@ -133,11 +182,11 @@ class TestOriaHS:
     @pytest.mark.asyncio
     async def test_invalid_top_k(self):
         """Test error handling for invalid top_k values."""
-        with pytest.raises(Exception, match="top_k must be between 1 and 50"):
+        with pytest.raises(Exception, match="top_k must be between 1 and 100"):
             await oriahs_search.ainvoke({"query": "test", "top_k": 0})
 
-        with pytest.raises(Exception, match="top_k must be between 1 and 50"):
-            await oriahs_search.ainvoke({"query": "test", "top_k": 51})
+        with pytest.raises(Exception, match="top_k must be between 1 and 100"):
+            await oriahs_search.ainvoke({"query": "test", "top_k": 101})
 
     @pytest.mark.asyncio
     async def test_result_parsing_json_strings(self):
@@ -152,7 +201,7 @@ class TestOriaHS:
         with patch("app.tools.oriahs_search.get_mcp_client", return_value=mock_client):
             result = await oriahs_search.ainvoke({"query": "test"})
 
-            assert "Score: 0.950" in result
+            assert "score 0.950" in result
             assert "app/main.py" in result
             assert "app/utils.py" in result
 
@@ -176,9 +225,9 @@ class TestOriaHS:
             result = await oriahs_search.ainvoke({"query": "test"})
 
             # Should still work with valid results, ignoring invalid ones
-            assert "Score: 0.950" in result
+            assert "score 0.950" in result
             assert "app/main.py" in result
-            assert "Score: 0.870" in result
+            assert "score 0.870" in result
             assert "app/utils.py" in result
 
 
@@ -202,9 +251,7 @@ class TestFormatSearchResults:
         ]
         result = _format_search_results(results)
 
-        assert "[1] Score: 0.950" in result
-        assert "app/main.py" in result
-        assert "function" in result
+        assert "1. app/main.py (score 0.950, type function)" in result
         assert "def main(): pass" in result
 
     def test_multiple_results(self):
@@ -225,10 +272,8 @@ class TestFormatSearchResults:
         ]
         result = _format_search_results(results)
 
-        assert "[1] Score: 0.950" in result
-        assert "[2] Score: 0.870" in result
-        assert "app/main.py" in result
-        assert "app/utils.py" in result
+        assert "1. app/main.py (score 0.950, type function)" in result
+        assert "2. app/utils.py (score 0.870, type function)" in result
 
     def test_content_truncation(self):
         """Test that long content is truncated."""
@@ -311,3 +356,81 @@ class TestMCPClient:
 
             with pytest.raises(Exception, match="API Error"):
                 await client.call_tool("test_tool", {"param": "value"})
+
+
+class TestP01Contract:
+    """P-01 contract: forwarded knobs, file:line output, kill-switch."""
+
+    @pytest.mark.asyncio
+    async def test_custom_contract_params_are_forwarded(self):
+        mock_client = AsyncMock()
+        mock_client.health_check.return_value = True
+        mock_client.call_tool.return_value = []
+
+        with patch("app.tools.oriahs_search.get_mcp_client", return_value=mock_client):
+            await oriahs_search.ainvoke(
+                {
+                    "query": "test",
+                    "top_k": 7,
+                    "rerank": False,
+                    "fusion": "weighted",
+                    "explain": True,
+                }
+            )
+
+        args = mock_client.call_tool.call_args.args[1]
+        assert args == {
+            "query": "test",
+            "top_k": 7,
+            "filters": {},
+            "rerank": False,
+            "fusion": "weighted",
+            "explain": True,
+        }
+
+    @pytest.mark.asyncio
+    async def test_invalid_fusion_is_rejected(self):
+        with pytest.raises(Exception, match="fusion must be 'rrf' or 'weighted'"):
+            await oriahs_search.ainvoke({"query": "test", "fusion": "bm25"})
+
+    @pytest.mark.asyncio
+    async def test_kill_switch_degrades_without_mcp_call(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("ORYA_ORIAHS_SEARCH_ENABLED", "false")
+        clear_settings_cache()
+        mock_client = AsyncMock()
+
+        with patch("app.tools.oriahs_search.get_mcp_client", return_value=mock_client):
+            result = await oriahs_search.ainvoke({"query": "test"})
+
+        assert result == ORIAHS_FALLBACK_MESSAGE
+        mock_client.health_check.assert_not_awaited()
+        mock_client.call_tool.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cache_ttl_comes_from_settings(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ORYA_ORIAHS_SEARCH_CACHE_TTL_S", "17")
+        clear_settings_cache()
+        mock_client = AsyncMock()
+        mock_client.health_check.return_value = True
+        mock_client.call_tool.return_value = [
+            {"score": 0.9, "path": "a.py", "line": 3, "content": "x", "type": "py"}
+        ]
+        mock_cache = AsyncMock()
+        mock_cache.get.return_value = None
+
+        with (
+            patch("app.tools.oriahs_search.get_mcp_client", return_value=mock_client),
+            patch("app.tools.oriahs_search.get_cache", return_value=mock_cache),
+        ):
+            result = await oriahs_search.ainvoke({"query": "test"})
+
+        assert "a.py:3" in result
+        assert mock_cache.set.call_args.kwargs["ttl"] == 17
+
+    def test_format_includes_file_and_line(self):
+        result = _format_search_results(
+            [{"score": 0.9, "path": "a.py", "line": 12, "content": "x", "type": "py"}]
+        )
+        assert result.startswith("1. a.py:12 (score 0.900, type py)")

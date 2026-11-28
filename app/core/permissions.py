@@ -184,6 +184,12 @@ DEFAULT_ALLOW_RULES = (
     Rule(tool="read", pattern=r".*", action="allow"),
     Rule(tool="glob", pattern=r".*", action="allow"),
     Rule(tool="grep", pattern=r".*", action="allow"),
+    Rule(
+        tool="oriahs_search",
+        pattern=r".*",
+        action="allow",
+        description="read-only semantic codebase search (P-01)",
+    ),
 )
 
 

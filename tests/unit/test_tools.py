@@ -385,6 +385,7 @@ def test_get_tools_returns_read_write_edit_bash_grep_glob():
         "grep",
         "glob",
         "oriahs_health",
+        "oriahs_search",
     ]
 
 
@@ -411,6 +412,7 @@ def test_build_graph_binds_tools_when_supported():
         "grep",
         "glob",
         "oriahs_health",
+        "oriahs_search",
     ]
 
 

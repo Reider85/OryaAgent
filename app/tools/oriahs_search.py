@@ -1,19 +1,21 @@
-"""Tool: oriahs_search - semantic codebase search through MCP (B-02).
+"""Tool: oriahs_search - semantic codebase search through MCP (P-01).
 
-Contract: oriahs_search(query, top_k=10, filters=None) -> str
+Contract: oriahs_search(query, top_k=20, filters=None, rerank=True,
+fusion="rrf", explain=False) -> str
 
 Behaviour:
 * Semantic search using OriaHS hybrid retrieval (sparse + dense vectors)
-* MCP integration through oriahs-mcp server
-* Injection detection on search results
-* Caching for repeated queries
-* Error handling for MCP server unavailability
+* MCP integration through the oriahs-mcp server (P-00 seam)
+* Injection detection and untrusted-content framing on search results
+* Caching for repeated queries, with a config-driven TTL
+* Silent degradation to ``ORIAHS_FALLBACK_MESSAGE`` — never an error in the UI
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import Annotated, Any
 
@@ -21,6 +23,7 @@ from langchain_core.tools import InjectedToolArg, ToolException, tool
 from langgraph.prebuilt import ToolRuntime
 
 from app.core.cache import build_cache_key, from_cache_result, get_cache
+from app.core.config import get_settings
 from app.core.mcp_config import get_mcp_config
 from app.core.observability.metrics import (
     MCPMetricsContext,
@@ -45,19 +48,28 @@ from app.mcp.client import get_mcp_client
 
 logger = logging.getLogger(__name__)
 
+_FUSION_PATTERN = re.compile(r"^(rrf|weighted)$")
+
 
 def _format_search_results(results: list[dict[str, Any]]) -> str:
-    """Format OriaHS search results for LLM consumption."""
+    """Format OriaHS search results as a markdown list for LLM consumption."""
     if not results:
         return "No results found."
 
     formatted = []
     for i, result in enumerate(results, 1):
+        path = str(result.get("path", "unknown"))
+        line = result.get("line")
+        location = f"{path}:{line}" if line else path
+        try:
+            score = float(result.get("score", 0))
+        except (TypeError, ValueError):
+            score = 0.0
+        content = str(result.get("content", "")).replace("\n", " ")
+        snippet = content[:500] + ("..." if len(content) > 500 else "")
         formatted.append(
-            f"[{i}] Score: {result.get('score', 0):.3f}\n"
-            f"Path: {result.get('path', 'unknown')}\n"
-            f"Type: {result.get('type', 'unknown')}\n"
-            f"Content: {result.get('content', '')[:500]}...\n"
+            f"{i}. {location} (score {score:.3f}, type {result.get('type', 'unknown')})\n"
+            f"   {snippet}"
         )
     return "\n".join(formatted)
 
@@ -66,11 +78,16 @@ def _format_search_results(results: list[dict[str, Any]]) -> str:
 async def oriahs_search(
     query: Annotated[str, "Natural language search query for semantic codebase search"],
     top_k: Annotated[
-        int, "Maximum number of results to return (default: 10, max: 50)"
-    ] = 10,
+        int, "Maximum number of results to return (default: 20, max: 100)"
+    ] = None,
     filters: Annotated[
         dict, "Optional filters for search (e.g., file type, date range)"
     ] = None,
+    rerank: Annotated[bool, "Apply cross-encoder reranking (default: true)"] = None,
+    fusion: Annotated[
+        str, "Hybrid fusion strategy: rrf or weighted (default: rrf)"
+    ] = None,
+    explain: Annotated[bool, "Request score explanations (default: false)"] = None,
     runtime: Annotated[
         ToolRuntime | None,
         InjectedToolArg,
@@ -80,37 +97,74 @@ async def oriahs_search(
     """Search the codebase semantically using OriaHS through MCP.
 
     Performs hybrid search combining lexical and semantic matching.
-    Returns relevant code snippets with scores and metadata.
+    Returns relevant code snippets with scores and file:line locations.
     """
+    settings = get_settings()
     mcp_config = get_mcp_config()
+    effective_top_k = settings.oriahs_search_top_k_default if top_k is None else top_k
+    effective_rerank = settings.oriahs_search_rerank if rerank is None else rerank
+    effective_fusion = settings.oriahs_search_fusion if fusion is None else fusion
+    effective_explain = settings.oriahs_search_explain if explain is None else explain
+    max_results = settings.oriahs_search_top_k_max
 
     # Validate inputs
     if not query.strip():
         increment_semantic_search("error", "mcp")
         emit_semantic_search_span(
             query=query,
-            top_k=top_k,
+            top_k=effective_top_k,
             results_count=0,
             status="error",
             error="Query cannot be empty",
         )
         raise ToolException("Query cannot be empty")
 
-    if top_k < 1 or top_k > 50:
+    if effective_top_k < 1 or effective_top_k > max_results:
         increment_semantic_search("error", "mcp")
         emit_semantic_search_span(
             query=query,
-            top_k=top_k,
+            top_k=effective_top_k,
             results_count=0,
             status="error",
-            error="top_k must be between 1 and 50",
+            error=f"top_k must be between 1 and {max_results}",
         )
-        raise ToolException("top_k must be between 1 and 50")
+        raise ToolException(f"top_k must be between 1 and {max_results}")
 
-    # Build cache key
+    if not _FUSION_PATTERN.match(effective_fusion):
+        increment_semantic_search("error", "mcp")
+        emit_semantic_search_span(
+            query=query,
+            top_k=effective_top_k,
+            results_count=0,
+            status="error",
+            error="fusion must be 'rrf' or 'weighted'",
+        )
+        raise ToolException("fusion must be 'rrf' or 'weighted'")
+
+    # P-01 kill-switch: a disabled search degrades exactly like an absent
+    # backend — no error is surfaced to the user stream.
+    if not settings.oriahs_search_enabled:
+        increment_semantic_search("degraded", "kill_switch")
+        emit_semantic_search_span(
+            query=query,
+            top_k=effective_top_k,
+            results_count=0,
+            status="degraded",
+            source="kill_switch",
+        )
+        return ORIAHS_FALLBACK_MESSAGE
+
+    # Build cache key from the effective (config-resolved) arguments.
     cache_key = build_cache_key(
         "oriahs_search",
-        {"query": query, "top_k": top_k, "filters": filters},
+        {
+            "query": query,
+            "top_k": effective_top_k,
+            "filters": filters,
+            "rerank": effective_rerank,
+            "fusion": effective_fusion,
+            "explain": effective_explain,
+        },
         None,  # No file-based caching for search results
     )
 
@@ -129,7 +183,7 @@ async def oriahs_search(
         )
         emit_semantic_search_span(
             query=query,
-            top_k=top_k,
+            top_k=effective_top_k,
             results_count=len(result.split("\n")) if result else 0,
             status="success",
             source="cache",
@@ -144,7 +198,7 @@ async def oriahs_search(
 
     # Use metrics context for automatic metric collection
     with SemanticSearchMetricsContext(
-        query, top_k, mcp_config.server_url
+        query, effective_top_k, mcp_config.server_url
     ) as metrics_context:
         try:
             # Get MCP client
@@ -169,7 +223,14 @@ async def oriahs_search(
             ) as mcp_context:
                 results = await mcp_client.call_tool(
                     "hybrid_search",
-                    {"query": query, "top_k": top_k, "filters": filters or {}},
+                    {
+                        "query": query,
+                        "top_k": effective_top_k,
+                        "filters": filters or {},
+                        "rerank": effective_rerank,
+                        "fusion": effective_fusion,
+                        "explain": effective_explain,
+                    },
                 )
                 mcp_context.status = "success"
 
@@ -211,7 +272,11 @@ async def oriahs_search(
             )
 
             # Cache results
-            await cache.set(cache_key, sanitized_results, ttl=3600)  # 1 hour TTL
+            await cache.set(
+                cache_key,
+                sanitized_results,
+                ttl=settings.oriahs_search_cache_ttl_s,
+            )
 
             # Update metrics with final status
             metrics_context.status = "success"
@@ -219,7 +284,7 @@ async def oriahs_search(
             # Emit spans
             emit_semantic_search_span(
                 query=query,
-                top_k=top_k,
+                top_k=effective_top_k,
                 results_count=len(parsed_results),
                 status="success",
                 has_injection=has_injection,
@@ -252,15 +317,3 @@ async def oriahs_search(
             else:
                 increment_mcp_connection_error(mcp_config.server_url, "operation_error")
                 raise ToolException(f"Search failed: {str(e)}")
-
-
-# Alternative fallback function for when MCP is completely unavailable
-def _fallback_lexical_search(query: str, top_k: int = 10) -> str:
-    """Fallback to lexical search using grep when MCP is unavailable."""
-    # This would integrate with the existing grep tool
-    # For now, return a helpful message
-    return (
-        f"Semantic search is currently unavailable. "
-        f"Please use the grep tool for lexical search: "
-        f'grep("{query}", max_matches={top_k})'
-    )

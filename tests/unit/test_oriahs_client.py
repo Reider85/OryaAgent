@@ -124,12 +124,17 @@ async def test_search_uses_fresh_schema_and_maps_hits():
     assert body["query"] == "main"
     assert body["top_k"] == 5
     assert body["filters"] == {"language": "py"}
+    assert body["fusion"] == "rrf"
+    assert body["rerank"] is True
+    assert body["explain"] is False
+    assert body["timeout_ms"] == 5000
     assert "mode" not in body
     assert len(results) == 1
     assert results[0] == {
         "rank": 1,
         "score": 0.91,
         "path": "app/main.py",
+        "line": None,
         "content": "def main(): pass",
         "type": "python",
         "doc_id": "abc",
@@ -218,6 +223,55 @@ async def test_from_settings_uses_unified_source(
         assert client.tenant_id == "tenant-from-env"
     finally:
         await client.close()
+
+
+async def test_search_maps_line_and_forwards_p01_knobs(isolated_config):
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "hits": [
+                    {
+                        "doc_id": "d-2",
+                        "score": 0.8,
+                        "attributes": {
+                            "path": "a.py",
+                            "line": 42,
+                            "type": "python",
+                        },
+                        "snippet": "def f(): pass",
+                    }
+                ]
+            },
+        )
+
+    http, client = _client(handler)
+    async with http:
+        results = await client.search(
+            "f",
+            top_k=4,
+            filters={"language": "py"},
+            rerank=False,
+            fusion="weighted",
+            explain=True,
+        )
+
+    assert captured["body"]["top_k"] == 4
+    assert captured["body"]["rerank"] is False
+    assert captured["body"]["fusion"] == "weighted"
+    assert captured["body"]["explain"] is True
+    assert results[0]["line"] == 42
+    assert results[0]["path"] == "a.py"
+
+
+async def test_search_rejects_unknown_fusion(isolated_config):
+    http, client = _client(lambda request: httpx.Response(200, json={"hits": []}))
+    async with http:
+        with pytest.raises(ValueError, match="fusion must be"):
+            await client.search("x", fusion="bm25")
 
 
 async def test_fallback_message_is_exact():

@@ -681,6 +681,48 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("ORYA_ORIAHS_ENABLED", "ORIAHS_ENABLED"),
     )
     oriahs_fallback_message: str = "service unavailable, use grep"
+    # PROD: oriahs_search contract knobs (P-01) — single source of truth for
+    # the tool, the MCP facade schema and the backend request. Legacy
+    # ORIAHS_SEARCH_* names remain working as validation aliases.
+    oriahs_search_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "ORYA_ORIAHS_SEARCH_ENABLED", "ORIAHS_SEARCH_ENABLED"
+        ),
+    )
+    oriahs_search_top_k_default: int = Field(
+        default=20,
+        ge=1,
+        validation_alias=AliasChoices(
+            "ORYA_ORIAHS_SEARCH_TOP_K_DEFAULT", "ORIAHS_SEARCH_DEFAULT_TOP_K"
+        ),
+    )
+    oriahs_search_top_k_max: int = Field(
+        default=100,
+        ge=1,
+        validation_alias=AliasChoices(
+            "ORYA_ORIAHS_SEARCH_TOP_K_MAX", "ORIAHS_SEARCH_MAX_RESULTS"
+        ),
+    )
+    oriahs_search_cache_ttl_s: int = Field(
+        default=3600,
+        ge=0,
+        validation_alias=AliasChoices(
+            "ORYA_ORIAHS_SEARCH_CACHE_TTL_S", "ORIAHS_SEARCH_CACHE_TTL"
+        ),
+    )
+    oriahs_search_rerank: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("ORYA_ORIAHS_SEARCH_RERANK"),
+    )
+    oriahs_search_fusion: str = Field(
+        default="rrf",
+        validation_alias=AliasChoices("ORYA_ORIAHS_SEARCH_FUSION"),
+    )
+    oriahs_search_explain: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("ORYA_ORIAHS_SEARCH_EXPLAIN"),
+    )
     # PROD: oriahs-mcp facade client (P-00) — env names are the historical ones.
     mcp_server_url: str = Field(
         default="http://localhost:8765",

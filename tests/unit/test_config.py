@@ -108,6 +108,26 @@ def test_defaults():
     assert s.nextjs_port == 3000
 
 
+def test_oriahs_search_p01_defaults_and_aliases(monkeypatch: pytest.MonkeyPatch):
+    s = get_settings()
+    assert s.oriahs_search_enabled is True
+    assert s.oriahs_search_top_k_default == 20
+    assert s.oriahs_search_top_k_max == 100
+    assert s.oriahs_search_cache_ttl_s == 3600
+    assert s.oriahs_search_rerank is True
+    assert s.oriahs_search_fusion == "rrf"
+    assert s.oriahs_search_explain is False
+
+    monkeypatch.setenv("ORYA_ORIAHS_SEARCH_TOP_K_DEFAULT", "7")
+    monkeypatch.setenv("ORIAHS_SEARCH_MAX_RESULTS", "60")
+    monkeypatch.setenv("ORYA_ORIAHS_SEARCH_FUSION", "weighted")
+    clear_settings_cache()
+    s = get_settings()
+    assert s.oriahs_search_top_k_default == 7
+    assert s.oriahs_search_top_k_max == 60
+    assert s.oriahs_search_fusion == "weighted"
+
+
 def test_get_settings_is_singleton():
     assert get_settings() is get_settings()
 

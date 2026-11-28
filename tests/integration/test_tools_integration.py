@@ -41,7 +41,8 @@ grep_module = importlib.import_module("app.tools.grep")
 lsp_module = importlib.import_module("app.tools.lsp")
 
 # Canonical registry (AGENTS.md architectural invariant #3): the six MVP
-# tools keep their order; P-00 appends ``oriahs_health`` at the end.
+# tools keep their order; P-00 appends ``oriahs_health`` and P-01 appends
+# ``oriahs_search`` at the end.
 EXPECTED_NAMES = [
     "read",
     "write",
@@ -50,6 +51,7 @@ EXPECTED_NAMES = [
     "grep",
     "glob",
     "oriahs_health",
+    "oriahs_search",
 ]
 
 EXPECTED_REQUIRED_ARGS = {
@@ -60,6 +62,7 @@ EXPECTED_REQUIRED_ARGS = {
     "grep": {"pattern"},
     "glob": {"pattern"},
     "oriahs_health": set(),
+    "oriahs_search": {"query"},
 }
 
 

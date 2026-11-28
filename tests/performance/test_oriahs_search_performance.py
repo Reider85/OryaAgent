@@ -80,13 +80,13 @@ class TestOriaHSPerformance:
 
             # Verify all results are valid
             for result in results:
-                assert "Score: 0.950" in result
+                assert "score 0.950" in result
                 assert "app/test.py" in result
 
     @pytest.mark.asyncio
     async def test_large_result_set_performance(self):
         """Test performance with large result sets."""
-        # Generate a large result set within the tool's top_k <= 50 limit
+        # Generate a large result set within the tool's top_k <= 100 limit
         large_results = []
         for i in range(50):
             large_results.append(
@@ -111,8 +111,8 @@ class TestOriaHSPerformance:
             assert latency < 1.0, f"Large result set took {latency:.2f}s, target <1s"
 
             # Verify all results are included
-            assert "[1] Score: 0.950" in result
-            assert "[50] Score: 0.460" in result
+            assert "1. app/file_0.py (score 0.950, type function)" in result
+            assert "50. app/file_49.py (score 0.460, type function)" in result
             assert "app/file_49.py" in result
 
     @pytest.mark.asyncio
