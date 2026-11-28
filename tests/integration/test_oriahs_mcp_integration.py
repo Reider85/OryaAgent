@@ -76,14 +76,17 @@ class TestMCPIntegration:
         config = OriaHSConfig(base_url="http://test.com")
         server = OriaHSMCPServer(config)
 
-        # Mock successful health check
+        # Mock successful readiness probe (fresh OriaHS: GET /health/ready)
         with patch.object(config._http_client, "get") as mock_get:
             mock_response = MagicMock()
             mock_response.status_code = 200
+            mock_response.content = b'{"status": "ready", "checks": {}}'
+            mock_response.json.return_value = {"status": "ready", "checks": {}}
             mock_get.return_value = mock_response
 
             health_ok = await server.health_check()
             assert health_ok is True
+            mock_get.assert_called_once_with("/health/ready")
 
         # Mock failed health check
         with patch.object(config._http_client, "get") as mock_get:
@@ -227,11 +230,10 @@ class TestOriaHSIntegration:
             with patch(
                 "app.tools.oriahs_search.get_mcp_client", return_value=mock_client
             ):
-                # Current contract: connectivity failures surface as
-                # "Semantic search unavailable: ... grep tool instead"
-                # (the grep-fallback hint), not the older "not available".
-                with pytest.raises(Exception, match="Semantic search unavailable"):
-                    await oriahs_search.ainvoke({"query": "test"})
+                # P-00: connectivity failures degrade to the exact fallback
+                # string instead of raising into the UI.
+                result = await oriahs_search.ainvoke({"query": "test"})
+                assert result == "service unavailable, use grep"
 
             # Test API error
             mock_client = AsyncMock()
@@ -390,3 +392,77 @@ class TestOriaHSHTTPTransport:
         # report "Search failed" / "Indexing failed" instead of hanging.
         assert response.status_code == 502
         assert "Search failed" in response.json()["detail"]
+
+
+class TestP00FreshOriaHSContract:
+    """End-to-end wire contract against the fresh REST-only OriaHS (P-00)."""
+
+    @staticmethod
+    async def _server(
+        handler, tenant_id: str = "tenant-1"
+    ) -> tuple[OriaHSMCPServer, OriaHSConfig]:
+        config = OriaHSConfig(base_url="http://oriahs.test", tenant_id=tenant_id)
+        await config._http_client.aclose()
+        config._http_client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), base_url="http://oriahs.test"
+        )
+        return OriaHSMCPServer(config), config
+
+    @pytest.mark.asyncio
+    async def test_search_maps_fresh_hits_through_mcp(self):
+        from mcp.types import CallToolRequest
+
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["path"] = request.url.path
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    "hits": [
+                        {
+                            "doc_id": "d-1",
+                            "score": 0.88,
+                            "title": "app/main.py",
+                            "snippet": "def main(): pass",
+                            "attributes": {"path": "app/main.py", "type": "python"},
+                        }
+                    ]
+                },
+            )
+
+        server, config = await self._server(handler)
+        try:
+            result = await server.call_tool(
+                CallToolRequest(
+                    params={"name": "hybrid_search", "arguments": {"query": "main"}}
+                )
+            )
+        finally:
+            await config.close()
+
+        assert captured["path"] == "/search"
+        assert captured["body"]["tenant_id"] == "tenant-1"
+        assert "mode" not in captured["body"]
+        assert len(result.content) == 1
+        payload = json.loads(result.content[0].text)
+        assert payload["path"] == "app/main.py"
+        assert payload["content"] == "def main(): pass"
+        assert payload["type"] == "python"
+
+    @pytest.mark.asyncio
+    async def test_health_uses_ready_endpoint(self):
+        seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request.url.path)
+            return httpx.Response(200, json={"status": "ready", "checks": {}})
+
+        server, config = await self._server(handler)
+        try:
+            assert await server.health_check() is True
+        finally:
+            await config.close()
+
+        assert seen == ["/health/ready"]

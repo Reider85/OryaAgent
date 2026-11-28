@@ -77,7 +77,10 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     logs availability — no workers, nothing to shut down.
     ``pool_health_worker`` (A-20) probes the pooled LLM connections every
     ``LLM_POOL_HEALTH_INTERVAL`` seconds (0 disables it; tests pin 0) and
-    shutdown closes every pooled client.
+    shutdown closes every pooled client. P-00 applies the effective MCP
+    client config once at startup, runs a best-effort OriaHS readiness probe
+    (a degraded backend only logs a warning) and closes both the facade and
+    backend clients on shutdown.
     """
     from app.core.auth.rate_limit import close_rate_limiter, init_rate_limiter
     from app.core.cache import close_cache, init_cache
@@ -103,10 +106,13 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         close_local_runner_health,
         init_local_runner_health,
     )
+    from app.core.mcp_config import get_mcp_config
     from app.core.memory.compactor import compaction_worker
     from app.core.observability.langfuse import init_exporter, shutdown_exporter
     from app.core.observability.sdk import init_observability_sdk
+    from app.core.oriahs_client import close_oriahs_client, get_oriahs_client
     from app.db.session_log import projection_worker
+    from app.mcp.client import close_mcp_client, set_mcp_config
 
     install_file_logger("api.log", level=_configured_level())
     route_uvicorn_logs_to_root()
@@ -114,6 +120,12 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await init_cache()
     await init_rate_limiter()
     await init_cost_store()
+    await close_mcp_client()
+    set_mcp_config(get_mcp_config())
+    if get_settings().oriahs_enabled:
+        oriahs_health = await get_oriahs_client().health()
+        if not oriahs_health.ok:
+            logger.warning("OriaHS bootstrap probe degraded: %s", oriahs_health.error)
     init_exporter()
     init_observability_sdk()
     init_github_actions_monitor()
@@ -150,6 +162,8 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await close_github_actions_monitor()
         await close_hybrid_runner_router()
         await close_local_runner_health()
+        await close_oriahs_client()
+        await close_mcp_client()
         await asyncio.to_thread(shutdown_exporter)
         await close_cache()
 

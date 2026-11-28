@@ -654,14 +654,49 @@ class Settings(BaseSettings):
             "langfuse_host + both keys are set (auto-on when configured)"
         ),
     )
-    # PROD: OriaHS
-    oriahs_url: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("ORIAHS_URL", "ORYA_ORIAHS_URL"),
+    # PROD: OriaHS (P-00) — the single source for both the direct client and
+    # the oriahs-mcp wrapper. Env aliases keep the older names working.
+    oriahs_url: str = Field(
+        default="http://localhost:8000",
+        validation_alias=AliasChoices(
+            "ORIAHS_URL", "ORYA_ORIAHS_URL", "ORIAHS_BASE_URL"
+        ),
     )
     oriahs_timeout_s: float = Field(
         default=30.0,
-        validation_alias=AliasChoices("ORIAHS_TIMEOUT_S", "ORYA_ORIAHS_TIMEOUT_S"),
+        validation_alias=AliasChoices(
+            "ORIAHS_TIMEOUT_S", "ORYA_ORIAHS_TIMEOUT_S", "ORIAHS_TIMEOUT"
+        ),
+    )
+    oriahs_token: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("ORIAHS_TOKEN", "ORYA_ORIAHS_TOKEN"),
+    )
+    oriahs_tenant_id: str = Field(
+        default="11111111-1111-1111-1111-111111111111",
+        validation_alias=AliasChoices("ORYA_ORIAHS_TENANT_ID", "ORIAHS_TENANT_ID"),
+    )
+    oriahs_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("ORYA_ORIAHS_ENABLED", "ORIAHS_ENABLED"),
+    )
+    oriahs_fallback_message: str = "service unavailable, use grep"
+    # PROD: oriahs-mcp facade client (P-00) — env names are the historical ones.
+    mcp_server_url: str = Field(
+        default="http://localhost:8765",
+        validation_alias=AliasChoices("MCP_SERVER_URL", "ORYA_MCP_SERVER_URL"),
+    )
+    mcp_auth_token: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("MCP_AUTH_TOKEN", "ORYA_MCP_AUTH_TOKEN"),
+    )
+    mcp_timeout_s: float = Field(
+        default=10.0,
+        validation_alias=AliasChoices("MCP_TIMEOUT", "ORYA_MCP_TIMEOUT_S"),
+    )
+    mcp_max_retries: int = Field(
+        default=3,
+        validation_alias=AliasChoices("MCP_MAX_RETRIES", "ORYA_MCP_MAX_RETRIES"),
     )
     # BETA: UI ports (M-15: chainlit on 8001 — 8000 is the API server)
     chainlit_port: int = Field(

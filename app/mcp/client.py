@@ -117,8 +117,9 @@ def get_mcp_client() -> MCPClient:
 
     if _mcp_client_instance is None:
         if _mcp_config is None:
-            # Load from environment or use defaults
-            _mcp_config = MCPClientConfig()
+            from app.core.mcp_config import get_mcp_config
+
+            _mcp_config = get_mcp_config()
 
         _mcp_client_instance = MCPClient(_mcp_config)
 
@@ -126,14 +127,10 @@ def get_mcp_client() -> MCPClient:
 
 
 def set_mcp_config(config: MCPClientConfig) -> None:
-    """Set MCP client configuration."""
-    global _mcp_config, _mcp_client_instance
+    """Set MCP client configuration (call ``await close_mcp_client()`` first)."""
+    global _mcp_config
 
     _mcp_config = config
-    # Close existing client if any
-    if _mcp_client_instance is not None:
-        asyncio.create_task(_mcp_client_instance.close())
-        _mcp_client_instance = None
 
 
 async def close_mcp_client() -> None:

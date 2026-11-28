@@ -87,26 +87,26 @@ class TestOriaHS:
 
     @pytest.mark.asyncio
     async def test_mcp_server_unavailable(self):
-        """Test graceful degradation when MCP server is unavailable."""
+        """P-00: an unreachable MCP server returns the exact fallback string."""
         mock_client = AsyncMock()
         mock_client.health_check.return_value = False
 
         with patch("app.tools.oriahs_search.get_mcp_client", return_value=mock_client):
-            with pytest.raises(Exception, match="not available"):
-                await oriahs_search.ainvoke({"query": "test"})
+            result = await oriahs_search.ainvoke({"query": "test"})
+
+        assert result == "service unavailable, use grep"
 
     @pytest.mark.asyncio
     async def test_mcp_server_error(self):
-        """Test error handling when MCP server returns an error."""
+        """P-00: transport failures degrade to the same fallback string."""
         mock_client = AsyncMock()
         mock_client.health_check.return_value = True
         mock_client.call_tool.side_effect = Exception("Connection failed")
 
         with patch("app.tools.oriahs_search.get_mcp_client", return_value=mock_client):
-            with pytest.raises(
-                Exception, match="Semantic search unavailable: Connection failed"
-            ):
-                await oriahs_search.ainvoke({"query": "test"})
+            result = await oriahs_search.ainvoke({"query": "test"})
+
+        assert result == "service unavailable, use grep"
 
     @pytest.mark.asyncio
     async def test_cache_hit(self):

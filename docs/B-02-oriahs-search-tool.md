@@ -90,17 +90,26 @@ MCP_AUTH_TOKEN=your_auth_token_here
 MCP_TIMEOUT=10.0
 MCP_MAX_RETRIES=3
 
-# OriaHS backend configuration
+# OriaHS backend configuration (P-00: aliases resolve into Settings)
 ORIAHS_BASE_URL=http://localhost:8000
 ORIAHS_TOKEN=your_oriahs_token_here
 ORIAHS_TIMEOUT=10.0
-ORIAHS_MAX_RETRIES=3
+ORYA_ORIAHS_TENANT_ID=11111111-1111-1111-1111-111111111111
+ORYA_ORIAHS_ENABLED=true
 
 # Fallback behavior
 ORIAHS_SEARCH_FALLBACK_ENABLED=true
 ORIAHS_SEARCH_FALLBACK_TO_GREP=true
 ORIAHS_SEARCH_CACHE_TTL=3600
 ```
+
+P-00 note: the sibling OriaHS (`C:\projects\OriaHS`) exposes REST only.
+Its readiness endpoint is `GET /health/ready` (there is no bare `/health`),
+`POST /search` requires `tenant_id` and returns `hits`, and `POST /index`
+requires `tenant_id`, `external_ref`, `title` and `content`. The shared
+`app/core/oriahs_client.py` translates that contract; an unreachable
+backend degrades to `service unavailable, use grep` and is surfaced by
+`GET /health/ready` on OryaAgent.
 
 ## API Reference
 

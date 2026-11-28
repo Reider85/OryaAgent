@@ -68,6 +68,7 @@ def create_triggers() -> dict[str, Callable[[TurnContext], bool]]:
         # Search tools - visible for cross-project search or when no specific language
         "oriahs_search": lambda ctx: ctx.cross_project_search or ctx.language is None,
         "oriahs_index": lambda ctx: ctx.cross_project_search or ctx.language is None,
+        "oriahs_health": lambda ctx: True,
         # UKB tool - always visible (default retrieval)
         "ukb.lookup": lambda ctx: True,
         # Basic tools - always visible
@@ -119,6 +120,7 @@ def get_tool_capabilities() -> dict[str, list[str]]:
         "lsp.code_action": ["code", "language-specific"],
         "oriahs_search": ["search", "semantic"],
         "oriahs_index": ["search", "semantic"],
+        "oriahs_health": ["system", "health"],
         "memory.search": ["memory", "past"],
         "ukb.lookup": ["retrieval", "unified"],
         "retrieval_orchestrate": ["retrieval", "orchestrated"],

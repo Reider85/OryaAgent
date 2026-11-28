@@ -3,6 +3,7 @@
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 from httpx import AsyncClient, ConnectError, HTTPStatusError, TimeoutException
 
 from app.core.config import get_settings
@@ -11,6 +12,8 @@ from app.core.local_runner_health import get_system_health_overview
 from app.core.observability.langfuse import get_export_stats
 from app.core.observability.sdk import get_observability
 from app.core.observability.spans import get_span_buffer
+from app.core.oriahs_client import ORIAHS_FALLBACK_MESSAGE, get_oriahs_client
+from app.mcp.client import get_mcp_client
 
 router = APIRouter(tags=["health"])
 
@@ -19,6 +22,45 @@ router = APIRouter(tags=["health"])
 async def health_check() -> dict[str, str]:
     """Health check endpoint for M-00 bootstrap verification."""
     return {"status": "ok", "message": "OryaAgent API is running"}
+
+
+@router.get("/health/ready")
+async def health_ready() -> Any:
+    """Readiness including the OriaHS backend and oriahs-mcp facade (P-00).
+
+    A down backend is a structured ``degraded`` response with HTTP 503 —
+    never an unhandled exception. Full DB/Redis readiness stays in A-04's
+    other probes; here the OriaHS path is the P-00 contract.
+    """
+    settings = get_settings()
+    checks: dict[str, Any] = {}
+    ready = True
+
+    if not settings.oriahs_enabled:
+        checks["oriahs"] = {"ok": True, "status": "disabled"}
+    else:
+        backend = await get_oriahs_client().health()
+        checks["oriahs"] = {
+            "ok": backend.ok,
+            "status": backend.status,
+            "latency_ms": backend.latency_ms,
+            "error": backend.error,
+            "checks": backend.checks,
+        }
+        ready = ready and backend.ok
+
+    facade_ok = await get_mcp_client().health_check()
+    checks["oriahs_mcp"] = {"ok": facade_ok}
+    ready = ready and facade_ok
+
+    body = {
+        "status": "ready" if ready else "degraded",
+        "checks": checks,
+        "fallback": None if ready else ORIAHS_FALLBACK_MESSAGE,
+    }
+    if not ready:
+        return JSONResponse(status_code=503, content=body)
+    return body
 
 
 @router.get("/health/observability")

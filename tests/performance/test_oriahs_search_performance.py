@@ -86,9 +86,9 @@ class TestOriaHSPerformance:
     @pytest.mark.asyncio
     async def test_large_result_set_performance(self):
         """Test performance with large result sets."""
-        # Generate large result set
+        # Generate a large result set within the tool's top_k <= 50 limit
         large_results = []
-        for i in range(100):  # 100 results
+        for i in range(50):
             large_results.append(
                 {
                     "score": 0.95 - (i * 0.01),
@@ -104,7 +104,7 @@ class TestOriaHSPerformance:
 
         with patch("app.tools.oriahs_search.get_mcp_client", return_value=mock_client):
             start_time = time.time()
-            result = await oriahs_search.ainvoke({"query": "large test", "top_k": 100})
+            result = await oriahs_search.ainvoke({"query": "large test", "top_k": 50})
             latency = time.time() - start_time
 
             # Large result sets should still be reasonable
@@ -112,8 +112,8 @@ class TestOriaHSPerformance:
 
             # Verify all results are included
             assert "[1] Score: 0.950" in result
-            assert "[100] Score: 0.050" in result
-            assert "app/file_99.py" in result
+            assert "[50] Score: 0.460" in result
+            assert "app/file_49.py" in result
 
     @pytest.mark.asyncio
     async def test_health_check_overhead(self):
@@ -150,8 +150,8 @@ class TestOriaHSPerformance:
 
         with patch("app.tools.oriahs_search.get_mcp_client", return_value=mock_client):
             start_time = time.time()
-            with pytest.raises(Exception, match="not available"):
-                await oriahs_search.ainvoke({"query": "error test"})
+            result = await oriahs_search.ainvoke({"query": "error test"})
+            assert result == "service unavailable, use grep"
             latency = time.time() - start_time
 
             # Error handling should be fast
@@ -162,7 +162,7 @@ class TestOriaHSPerformance:
         """Test that memory usage remains stable across multiple searches."""
         import os
 
-        import psutil
+        psutil = pytest.importorskip("psutil")
 
         process = psutil.Process(os.getpid())
         initial_memory = process.memory_info().rss

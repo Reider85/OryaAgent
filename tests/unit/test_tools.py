@@ -377,7 +377,15 @@ async def test_write_eagerly_invalidates_cached_read_entries(tmp_path: Path):
 def test_get_tools_returns_read_write_edit_bash_grep_glob():
     tools = get_tools("session-1")
 
-    assert [t.name for t in tools] == ["read", "write", "edit", "bash", "grep", "glob"]
+    assert [t.name for t in tools] == [
+        "read",
+        "write",
+        "edit",
+        "bash",
+        "grep",
+        "glob",
+        "oriahs_health",
+    ]
 
 
 def test_build_graph_binds_tools_when_supported():
@@ -402,6 +410,7 @@ def test_build_graph_binds_tools_when_supported():
         "bash",
         "grep",
         "glob",
+        "oriahs_health",
     ]
 
 

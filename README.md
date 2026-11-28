@@ -1009,7 +1009,27 @@ anthropic SDK gets its vendored `httpx2` fork), stamps `tcp.pool_hit` /
 | `ORYA_OTEL_EXPORTER_OTLP_ENDPOINT` | Generic OTLP endpoint |
 | `ORYA_LANGSMITH_API_KEY` | LangSmith (planned) |
 | `ORYA_SAMPLER_PROXY_URL` | Sampler-proxy address (A-17) |
-| `ORYA_ORIAHS_URL` / `ORYA_ORIAHS_TIMEOUT_S` | OriaHS MCP retrieval server (BETA) |
+| `ORYA_ORIAHS_URL` / `ORYA_ORIAHS_TIMEOUT_S` | OriaHS backend URL/timeout (P-00; aliases `ORIAHS_URL`, `ORIAHS_BASE_URL`, `ORIAHS_TIMEOUT`) |
+
+### OriaHS connection (P-00)
+
+| Var | Effect |
+| --- | --- |
+| `ORIAHS_BASE_URL` / `ORIAHS_URL` / `ORYA_ORIAHS_URL` | Backend base URL (default `http://localhost:8000`) |
+| `ORIAHS_TIMEOUT` / `ORYA_ORIAHS_TIMEOUT_S` | Backend request timeout (default 30 s) |
+| `ORIAHS_TOKEN` | Bearer token for the OriaHS backend (optional) |
+| `ORYA_ORIAHS_TENANT_ID` | Tenant UUID sent with `/search` and `/index` (must exist in OriaHS) |
+| `ORYA_ORIAHS_ENABLED` | Kill-switch for the readiness probe (default true) |
+| `MCP_SERVER_URL` | `oriahs-mcp` facade URL (default `http://localhost:8765`) |
+| `MCP_AUTH_TOKEN` | Bearer token for the facade (optional) |
+| `MCP_TIMEOUT` / `MCP_MAX_RETRIES` | Facade timeout and retry budget |
+
+The sibling `C:\projects\OriaHS` is a **REST-only** service: readiness is
+`GET /health/ready`, search returns `hits` and requires `tenant_id`, and
+indexing requires `tenant_id`/`external_ref`/`title`/`content`. OryaAgent
+owns the MCP wrapper (`app/mcp/oriahs_mcp.py`) and the shared client
+(`app/core/oriahs_client.py`). Unavailability degrades to
+`service unavailable, use grep` and is reported by `GET /health/ready`.
 
 ### Context & UI
 

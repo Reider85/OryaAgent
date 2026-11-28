@@ -34,6 +34,7 @@ from app.core.observability.spans import (
     emit_mcp_span,
     emit_semantic_search_span,
 )
+from app.core.oriahs_client import ORIAHS_FALLBACK_MESSAGE
 from app.core.security import (
     check_injection,
     injection_warning,
@@ -240,16 +241,14 @@ async def oriahs_search(
             # Update metrics with error
             metrics_context.status = "error"
 
-            # Fall back to lexical search if MCP fails
+            # P-00: an unreachable backend is a normal degraded answer, never
+            # an error surfaced to the user stream.
             if "not available" in str(e).lower() or "connection" in str(e).lower():
-                logger.warning("MCP server unavailable, semantic search failed")
+                logger.warning("MCP server unavailable, semantic search degraded")
                 increment_mcp_connection_error(
                     mcp_config.server_url, "server_unavailable"
                 )
-                raise ToolException(
-                    f"Semantic search unavailable: {str(e)}. "
-                    "Please try a lexical search with grep tool instead."
-                )
+                return ORIAHS_FALLBACK_MESSAGE
             else:
                 increment_mcp_connection_error(mcp_config.server_url, "operation_error")
                 raise ToolException(f"Search failed: {str(e)}")

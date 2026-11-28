@@ -41,6 +41,7 @@ from app.tools.lsp import (
     lsp_rename,
     lsp_symbol_search,
 )
+from app.tools.oriahs import oriahs_health
 from app.tools.oriahs_index import oriahs_index
 from app.tools.oriahs_search import oriahs_search
 from app.tools.read import read
@@ -75,6 +76,7 @@ def get_tools(session_id: str | None = None) -> list[BaseTool]:
         lsp_code_action,
         ukb_lookup,
         retrieval_orchestrate,
+        oriahs_health,
     ]
 
     # Apply CapabilityRegistry filtering if session_id is provided

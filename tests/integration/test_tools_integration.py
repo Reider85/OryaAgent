@@ -40,11 +40,8 @@ glob_module = importlib.import_module("app.tools.glob")
 grep_module = importlib.import_module("app.tools.grep")
 lsp_module = importlib.import_module("app.tools.lsp")
 
-# B-29/B-30 canonical registry (AGENTS.md architectural invariant #3 —
-# ``app/core/tools/__init__.py::get_tools`` returns exactly these six in
-# this order; the B-26-era list additionally carried oriahs_search + the
-# lsp_* tools, which the capability-registry refactor retired from the
-# global registry).
+# Canonical registry (AGENTS.md architectural invariant #3): the six MVP
+# tools keep their order; P-00 appends ``oriahs_health`` at the end.
 EXPECTED_NAMES = [
     "read",
     "write",
@@ -52,6 +49,7 @@ EXPECTED_NAMES = [
     "bash",
     "grep",
     "glob",
+    "oriahs_health",
 ]
 
 EXPECTED_REQUIRED_ARGS = {
@@ -61,6 +59,7 @@ EXPECTED_REQUIRED_ARGS = {
     "bash": {"command"},
     "grep": {"pattern"},
     "glob": {"pattern"},
+    "oriahs_health": set(),
 }
 
 
@@ -220,7 +219,7 @@ async def test_graph_runs_full_cycle_over_registered_tools(
 
 
 def test_real_llm_seam_binds_full_registry_offline():
-    """``get_llm()`` construction is network-free; bind carries all 6 tools."""
+    """``get_llm()`` construction is network-free; bind carries every tool."""
     model = get_llm("deepseek", "deepseek-chat", api_key="sk-offline-test")
     tools = get_tools()
 

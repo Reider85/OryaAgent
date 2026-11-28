@@ -1,6 +1,7 @@
-"""MCP server: oriahs-mcp (B-01) - OriaHS semantic search MCP server.
+"""MCP server: oriahs-mcp (B-01, P-00) - OriaHS semantic search MCP server.
 
-Wraps OriaHS API as an MCP server providing semantic codebase search capabilities.
+Wraps the fresh OriaHS REST API (which has no MCP server of its own) through
+the shared ``app.core.oriahs_client.OriaHSClient`` contract.
 
 Two transports (B-02 wires the HTTP one):
 
@@ -19,7 +20,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -35,6 +35,9 @@ from mcp.types import (
 )
 from pydantic import BaseModel
 
+from app.core.config import get_settings
+from app.core.oriahs_client import OriaHSClient
+
 logger = logging.getLogger(__name__)
 
 
@@ -47,11 +50,13 @@ class OriaHSConfig:
         token: str | None = None,
         timeout: float = 10.0,
         max_retries: int = 3,
+        tenant_id: str = "11111111-1111-1111-1111-111111111111",
     ):
         self.base_url = base_url.rstrip("/")
         self.token = token
         self.timeout = timeout
         self.max_retries = max_retries
+        self.tenant_id = tenant_id
 
         # HTTP client for OriaHS API
         self._http_client = httpx.AsyncClient(
@@ -70,6 +75,14 @@ class OriaHSMCPServer:
 
     def __init__(self, config: OriaHSConfig):
         self.config = config
+        self.client = OriaHSClient(
+            base_url=config.base_url,
+            timeout_s=config.timeout,
+            tenant_id=config.tenant_id,
+            token=config.token,
+            max_retries=config.max_retries,
+            http_client=config._http_client,
+        )
         self.server = Server("oriahs-mcp")
 
         # Register tools
@@ -164,7 +177,7 @@ class OriaHSMCPServer:
             )
 
     async def _call_hybrid_search(self, arguments: dict[str, Any]) -> CallToolResult:
-        """Execute semantic search through OriaHS."""
+        """Execute semantic search through the fresh OriaHS REST contract."""
         query = arguments.get("query", "")
         top_k = arguments.get("top_k", 10)
         filters = arguments.get("filters", {})
@@ -175,104 +188,51 @@ class OriaHSMCPServer:
         if top_k < 1 or top_k > 50:
             raise ValueError("top_k must be between 1 and 50")
 
-        # Prepare search request
-        search_request = {
-            "query": query,
-            "top_k": top_k,
-            "mode": "hybrid",  # Sparse + dense retrieval
-            "filters": filters,
-        }
-
-        # Execute search
         try:
-            response = await self.config._http_client.post(
-                "/search", json=search_request
-            )
-            response.raise_for_status()
-            results = response.json().get("results", [])
-
-            # Format results for MCP
-            formatted_results = []
-            for i, result in enumerate(results, 1):
-                formatted_results.append(
-                    TextContent(
-                        type="text",
-                        text=json.dumps(
-                            {
-                                "rank": i,
-                                "score": result.get("score", 0.0),
-                                "path": result.get("path", ""),
-                                "content": result.get("content", ""),
-                                "type": result.get("type", "unknown"),
-                            },
-                            ensure_ascii=False,
-                        ),
-                    )
-                )
-
-            return CallToolResult(content=formatted_results)
-
+            results = await self.client.search(query, top_k=top_k, filters=filters)
         except httpx.HTTPStatusError as e:
             error_msg = f"OriaHS API error: {e.response.status_code}"
             if e.response.text:
                 error_msg += f" - {e.response.text}"
-            raise ValueError(error_msg)
+            raise ValueError(error_msg) from e
         except Exception as e:
-            raise ValueError(f"Search failed: {str(e)}")
+            raise ValueError(f"Search failed: {str(e)}") from e
+
+        return CallToolResult(
+            content=[
+                TextContent(
+                    type="text",
+                    text=json.dumps(result, ensure_ascii=False),
+                )
+                for result in results
+            ]
+        )
 
     async def _call_index_file(self, arguments: dict[str, Any]) -> CallToolResult:
-        """Execute file indexing through OriaHS."""
+        """Index one file using the required OriaHS ``IndexRequest`` fields."""
         file_path = arguments.get("file_path", "")
 
         if not file_path:
             raise ValueError("File path is required")
 
         try:
-            # Convert to absolute path and validate
-            abs_path = Path(file_path).resolve()
-            if not abs_path.exists():
-                raise ValueError(f"File does not exist: {file_path}")
-
-            if not abs_path.is_file():
-                raise ValueError(f"Path is not a file: {file_path}")
-
-            # Prepare indexing request
-            index_request = {
-                "file_path": str(abs_path),
-                "operation": "index",
-            }
-
-            # Execute indexing
-            response = await self.config._http_client.post("/index", json=index_request)
-            response.raise_for_status()
-            result = response.json()
-
-            # Format result for MCP
-            formatted_result = TextContent(
-                type="text",
-                text=json.dumps(
-                    {
-                        "path": str(abs_path),
-                        "status": "success",
-                        "message": result.get("message", "File indexed successfully"),
-                        "indexed_at": result.get("indexed_at"),
-                    },
-                    ensure_ascii=False,
-                ),
-            )
-
-            return CallToolResult(content=[formatted_result])
-
+            result = await self.client.index_file(file_path)
         except httpx.HTTPStatusError as e:
             error_msg = f"OriaHS API error: {e.response.status_code}"
             if e.response.text:
                 error_msg += f" - {e.response.text}"
-            raise ValueError(error_msg)
+            raise ValueError(error_msg) from e
         except Exception as e:
-            raise ValueError(f"File indexing failed: {str(e)}")
+            raise ValueError(f"File indexing failed: {str(e)}") from e
+
+        return CallToolResult(
+            content=[
+                TextContent(type="text", text=json.dumps(result, ensure_ascii=False))
+            ]
+        )
 
     async def _call_index_directory(self, arguments: dict[str, Any]) -> CallToolResult:
-        """Execute directory indexing through OriaHS."""
+        """Index a directory file-by-file through the OriaHS ``/index`` API."""
         directory_path = arguments.get("directory_path", "")
         recursive = arguments.get("recursive", False)
 
@@ -280,63 +240,24 @@ class OriaHSMCPServer:
             raise ValueError("Directory path is required")
 
         try:
-            # Convert to absolute path and validate
-            abs_path = Path(directory_path).resolve()
-            if not abs_path.exists():
-                raise ValueError(f"Directory does not exist: {directory_path}")
-
-            if not abs_path.is_dir():
-                raise ValueError(f"Path is not a directory: {directory_path}")
-
-            # Prepare indexing request
-            index_request = {
-                "directory_path": str(abs_path),
-                "recursive": recursive,
-                "operation": "index",
-            }
-
-            # Execute indexing
-            response = await self.config._http_client.post("/index", json=index_request)
-            response.raise_for_status()
-            result = response.json()
-
-            # Format result for MCP
-            formatted_result = TextContent(
-                type="text",
-                text=json.dumps(
-                    {
-                        "directory": str(abs_path),
-                        "status": "success",
-                        "recursive": recursive,
-                        "message": result.get(
-                            "message", "Directory indexed successfully"
-                        ),
-                        "indexed_files": result.get("indexed_files", 0),
-                        "indexed_at": result.get("indexed_at"),
-                    },
-                    ensure_ascii=False,
-                ),
-            )
-
-            return CallToolResult(content=[formatted_result])
-
+            result = await self.client.index_directory(directory_path, recursive)
         except httpx.HTTPStatusError as e:
             error_msg = f"OriaHS API error: {e.response.status_code}"
             if e.response.text:
                 error_msg += f" - {e.response.text}"
-            raise ValueError(error_msg)
+            raise ValueError(error_msg) from e
         except Exception as e:
-            raise ValueError(f"Directory indexing failed: {str(e)}")
+            raise ValueError(f"Directory indexing failed: {str(e)}") from e
+
+        return CallToolResult(
+            content=[
+                TextContent(type="text", text=json.dumps(result, ensure_ascii=False))
+            ]
+        )
 
     async def health_check(self) -> bool:
-        """Check if OriaHS backend is healthy."""
-        try:
-            response = await self.config._http_client.get("/health")
-            response.raise_for_status()
-            return True
-        except Exception as e:
-            logger.warning(f"OriaHS health check failed: {e}")
-            return False
+        """Probe the real OriaHS readiness endpoint (503 counts as unhealthy)."""
+        return (await self.client.health()).ok
 
 
 async def run_server(config: OriaHSConfig):
@@ -376,6 +297,19 @@ def create_http_app(config: OriaHSConfig) -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/health/ready")
+    async def ready() -> dict[str, Any]:
+        result = await server.client.health()
+        if not result.ok:
+            raise HTTPException(
+                status_code=503, detail=result.error or "OriaHS unavailable"
+            )
+        return {
+            "status": result.status,
+            "checks": result.checks,
+            "latency_ms": result.latency_ms,
+        }
+
     @app.get("/tools")
     async def list_tools_http() -> dict[str, Any]:
         result = await server.list_tools()
@@ -413,13 +347,19 @@ def create_http_app(config: OriaHSConfig) -> FastAPI:
 
 
 def _build_config() -> OriaHSConfig:
-    """OriaHSConfig from the environment (same vars as before)."""
-    import os
-
+    """Build the backend config from the single effective Settings source."""
+    settings = get_settings()
+    token = (
+        settings.oriahs_token.get_secret_value()
+        if settings.oriahs_token is not None
+        else None
+    )
     return OriaHSConfig(
-        base_url=os.getenv("ORIAHS_BASE_URL", "http://localhost:8000"),
-        token=os.getenv("ORIAHS_TOKEN"),
-        timeout=float(os.getenv("ORIAHS_TIMEOUT", "10.0")),
+        base_url=settings.oriahs_url,
+        token=token,
+        timeout=settings.oriahs_timeout_s,
+        max_retries=settings.mcp_max_retries,
+        tenant_id=settings.oriahs_tenant_id,
     )
 
 
